@@ -121,21 +121,42 @@ fn post(address: SocketAddr, tls: &TlsFixture, route: &str, body: Value) -> (u16
   let tcp = TcpStream::connect(address).unwrap();
   let mut stream = StreamOwned::new(connection, tcp);
   let body = serde_json::to_vec(&body).unwrap();
-  write!(
-    stream,
+  let mut request = format!(
     "POST {route} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
     body.len()
   )
-  .unwrap();
-  stream.write_all(&body).unwrap();
-  stream.flush().unwrap();
+  .into_bytes();
+  request.extend_from_slice(&body);
+  stream.write_all(&request).unwrap();
+  if let Err(error) = stream.flush() {
+    // Some TLS/socket implementations report the peer's orderly HTTP close as
+    // a failed flush even though the complete request was accepted and the
+    // response is available to read. Preserve every other transport failure.
+    if !matches!(
+      error.kind(),
+      std::io::ErrorKind::BrokenPipe
+        | std::io::ErrorKind::ConnectionAborted
+        | std::io::ErrorKind::ConnectionReset
+    ) {
+      panic!("loopback request flush failed: {error}");
+    }
+  }
   let mut response = Vec::new();
   let mut buffer = [0u8; 4096];
   loop {
     match stream.read(&mut buffer) {
       Ok(0) => break,
       Ok(read) => response.extend_from_slice(&buffer[..read]),
-      Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
+      Err(error)
+        if matches!(
+          error.kind(),
+          std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+        ) && !response.is_empty() =>
+      {
+        break;
+      }
       Err(error) => panic!("loopback response failed: {error}"),
     }
   }

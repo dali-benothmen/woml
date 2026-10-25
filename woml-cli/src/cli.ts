@@ -3876,7 +3876,7 @@ async function refreshEditorTypesUnprofiled(
     );
     await writeFile(
       outputPath,
-      generateWomlEditorDeclarations(modules),
+      generateWomlEditorDeclarations(modules, { scriptGlobals: true }),
       'utf8'
     );
   } catch (error) {
@@ -5711,7 +5711,7 @@ async function runTypesCommand(
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(
       outputPath,
-      generateWomlEditorDeclarations(modules),
+      generateWomlEditorDeclarations(modules, { scriptGlobals: true }),
       'utf8'
     );
     io.stdout(`WOML editor types written to ${outputPath}.\n`);

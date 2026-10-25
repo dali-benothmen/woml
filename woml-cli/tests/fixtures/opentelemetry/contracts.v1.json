@@ -102,8 +102,8 @@
   },
   "performanceBudgets": {
     "baseline": {
-      "cliBytes": 1149272,
-      "cliMeasurement": "feature/remote-execution-targets@2ec52d258d0feb2e68ea0e62cef31387703f1f5c+fast-uri@3.1.9-clean-install",
+      "cliBytes": 1188910,
+      "cliMeasurement": "feature/combined-developer-experience@CDX8-workflow-json-clean-install",
       "coldActivationMedianMs": 551.08,
       "shortRunMedianMs": 66.95
     },
