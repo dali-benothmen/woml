@@ -197,6 +197,12 @@ fn handle_connection(
   authority: Arc<Mutex<RemoteSessionAuthorityV1>>,
   transport: Option<Arc<RemoteDispatchTransportV1>>,
 ) -> Result<(), &'static str> {
+  // The listener is nonblocking for shutdown polling. Accepted sockets can
+  // inherit that mode on macOS and Windows, but this worker uses blocking TLS
+  // reads with a bounded timeout. Set the mode explicitly on every platform.
+  stream
+    .set_nonblocking(false)
+    .map_err(|error| connection_io_error("set_blocking", error))?;
   stream
     .set_read_timeout(Some(Duration::from_secs(
       REMOTE_COORDINATOR_IO_TIMEOUT_SECONDS,
