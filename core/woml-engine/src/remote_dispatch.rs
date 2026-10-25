@@ -263,6 +263,13 @@ pub fn derive_remote_dispatch_id(
 }
 
 impl DurableEventStore {
+  pub fn remote_dispatch_record(
+    &self,
+    dispatch_id: &str,
+  ) -> Result<RemoteDispatchRecordV1, RemoteDispatchError> {
+    load_dispatch(&self.connection, dispatch_id)?.ok_or(RemoteDispatchError::NotFound)
+  }
+
   pub fn inspect_remote_dispatch(
     &self,
     dispatch_id: &str,

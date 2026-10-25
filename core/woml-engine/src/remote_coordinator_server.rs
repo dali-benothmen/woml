@@ -1,7 +1,9 @@
-//! Minimal bounded mTLS HTTP adapter for the RET3 session authority.
+//! Bounded mTLS HTTP adapter for worker sessions and durable remote dispatch.
 //!
-//! The listener exposes session establishment and idle long-polling only. It
-//! intentionally has no route capable of creating or executing a dispatch.
+//! The default constructor remains session-only for compatibility. The
+//! dispatching constructor binds the same authenticated session authority to
+//! a durable transport; the adapter can carry worker facts but cannot schedule
+//! workflow nodes or settle runs itself.
 
 use std::{
   collections::VecDeque,
@@ -28,8 +30,9 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-  decode_worker_hello, decode_worker_poll, decode_worker_shutdown, RemoteCoordinatorError,
-  RemoteSessionAuthorityV1, WORKER_PROTOCOL_MAX_MESSAGE_BYTES,
+  decode_worker_dispatch_fact, decode_worker_hello, decode_worker_poll, decode_worker_shutdown,
+  decode_worker_terminal, RemoteCoordinatorError, RemoteDispatchTransportV1,
+  RemoteSessionAuthorityV1, RemoteTransportError, WORKER_PROTOCOL_MAX_MESSAGE_BYTES,
 };
 
 pub const REMOTE_COORDINATOR_MAX_CONNECTIONS: usize = 64;
@@ -64,6 +67,22 @@ impl RemoteCoordinatorServerV1 {
     authority: RemoteSessionAuthorityV1,
     options: RemoteCoordinatorTlsOptionsV1,
   ) -> Result<Self, RemoteCoordinatorServerError> {
+    Self::start_inner(authority, None, options)
+  }
+
+  pub fn start_dispatching(
+    authority: RemoteSessionAuthorityV1,
+    transport: RemoteDispatchTransportV1,
+    options: RemoteCoordinatorTlsOptionsV1,
+  ) -> Result<Self, RemoteCoordinatorServerError> {
+    Self::start_inner(authority, Some(transport), options)
+  }
+
+  fn start_inner(
+    authority: RemoteSessionAuthorityV1,
+    transport: Option<RemoteDispatchTransportV1>,
+    options: RemoteCoordinatorTlsOptionsV1,
+  ) -> Result<Self, RemoteCoordinatorServerError> {
     let tls = Arc::new(server_configuration(&options)?);
     let listener = TcpListener::bind(options.bind_address)
       .map_err(|_| RemoteCoordinatorServerError::Unavailable)?;
@@ -76,6 +95,7 @@ impl RemoteCoordinatorServerV1 {
     let shutdown = Arc::new(AtomicBool::new(false));
     let server_shutdown = Arc::clone(&shutdown);
     let authority = Arc::new(Mutex::new(authority));
+    let transport = transport.map(Arc::new);
     let active = Arc::new(AtomicUsize::new(0));
     let connection_rate = Arc::new(Mutex::new(VecDeque::new()));
     let thread = thread::Builder::new()
@@ -112,12 +132,13 @@ impl RemoteCoordinatorServerV1 {
               }
               let tls = Arc::clone(&tls);
               let authority = Arc::clone(&authority);
+              let transport = transport.clone();
               let active = Arc::clone(&active);
               let _ = thread::Builder::new()
                 .name("woml-remote-session".to_string())
                 .spawn(move || {
                   let _guard = ActiveConnection(active);
-                  let _ = handle_connection(stream, tls, authority);
+                  let _ = handle_connection(stream, tls, authority, transport);
                 });
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -169,6 +190,7 @@ fn handle_connection(
   stream: TcpStream,
   tls: Arc<ServerConfig>,
   authority: Arc<Mutex<RemoteSessionAuthorityV1>>,
+  transport: Option<Arc<RemoteDispatchTransportV1>>,
 ) -> Result<(), ()> {
   stream
     .set_read_timeout(Some(Duration::from_secs(
@@ -210,12 +232,77 @@ fn handle_connection(
     decode_worker_poll(&request.body)
       .map_err(|_| RemoteCoordinatorError::ReplayOrConflict)
       .and_then(|poll| {
-        authority
+        let mut authority = authority
           .lock()
-          .map_err(|_| RemoteCoordinatorError::Unavailable)?
-          .poll(poll, &certificate_digest, now)
+          .map_err(|_| RemoteCoordinatorError::Unavailable)?;
+        let mut response = authority.poll(poll.clone(), &certificate_digest, now)?;
+        if response.status == "idle" {
+          if let Some(transport) = &transport {
+            authority.reserve_dispatch(&poll.session_id, &poll.target)?;
+            match transport.offer_next(&poll.worker_id, &poll.session_id, &poll.target, now) {
+              Ok(Some(offer)) => {
+                response.status = "offered";
+                response.dispatch =
+                  Some(RemoteDispatchTransportV1::offer_json(offer).map_err(map_transport_error)?);
+              }
+              Ok(None) => {
+                authority.release_dispatch(&poll.session_id)?;
+              }
+              Err(error) => {
+                let _ = authority.release_dispatch(&poll.session_id);
+                return Err(map_transport_error(error));
+              }
+            }
+          }
+        }
+        Ok(response)
       })
       .and_then(|response| json_bytes(&response))
+  } else if request.method == "POST" && request.path == "/woml/v1/workers/accepted" {
+    dispatch_fact(
+      &request.body,
+      "accepted",
+      &certificate_digest,
+      now,
+      &authority,
+      transport.as_deref(),
+      |transport, fact| transport.accept(fact),
+    )
+  } else if request.method == "POST" && request.path == "/woml/v1/workers/started" {
+    dispatch_fact(
+      &request.body,
+      "started",
+      &certificate_digest,
+      now,
+      &authority,
+      transport.as_deref(),
+      |transport, fact| transport.start(fact),
+    )
+  } else if request.method == "POST" && request.path == "/woml/v1/workers/terminal" {
+    decode_worker_terminal(&request.body)
+      .map_err(|_| RemoteCoordinatorError::ReplayOrConflict)
+      .and_then(|terminal| {
+        let mut authority = authority
+          .lock()
+          .map_err(|_| RemoteCoordinatorError::Unavailable)?;
+        authority.authorize_dispatch_fact(
+          &terminal.worker_id,
+          &terminal.session_id,
+          &terminal.target,
+          &terminal.message_id,
+          terminal.sent_at,
+          &certificate_digest,
+          now,
+        )?;
+        let session_id = terminal.session_id.clone();
+        let receipt = transport
+          .as_deref()
+          .ok_or(RemoteCoordinatorError::Unavailable)?
+          .terminal(terminal)
+          .map_err(map_transport_error)?;
+        authority.release_dispatch(&session_id)?;
+        json_bytes(&receipt)
+      })
   } else if request.method == "POST" && request.path == "/woml/v1/workers/shutdown" {
     decode_worker_shutdown(&request.body)
       .map_err(|_| RemoteCoordinatorError::ReplayOrConflict)
@@ -246,6 +333,55 @@ fn handle_connection(
     }
   }
   Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_fact<F>(
+  body: &[u8],
+  expected_type: &str,
+  certificate_digest: &str,
+  now: chrono::DateTime<Utc>,
+  authority: &Arc<Mutex<RemoteSessionAuthorityV1>>,
+  transport: Option<&RemoteDispatchTransportV1>,
+  transition: F,
+) -> Result<Vec<u8>, RemoteCoordinatorError>
+where
+  F: FnOnce(
+    &RemoteDispatchTransportV1,
+    &crate::WorkerDispatchFactV1,
+  ) -> Result<(), RemoteTransportError>,
+{
+  let fact = decode_worker_dispatch_fact(body, expected_type)
+    .map_err(|_| RemoteCoordinatorError::ReplayOrConflict)?;
+  authority
+    .lock()
+    .map_err(|_| RemoteCoordinatorError::Unavailable)?
+    .authorize_dispatch_fact(
+      &fact.worker_id,
+      &fact.session_id,
+      &fact.target,
+      &fact.message_id,
+      fact.sent_at,
+      certificate_digest,
+      now,
+    )?;
+  transition(transport.ok_or(RemoteCoordinatorError::Unavailable)?, &fact)
+    .map_err(map_transport_error)?;
+  json_bytes(&serde_json::json!({
+    "profile": "woml.remote-dispatch-ack/v1",
+    "dispatchId": fact.dispatch_id,
+    "status": expected_type
+  }))
+}
+
+fn map_transport_error(error: RemoteTransportError) -> RemoteCoordinatorError {
+  match error {
+    RemoteTransportError::Capacity => RemoteCoordinatorError::Capacity,
+    RemoteTransportError::Unavailable => RemoteCoordinatorError::Unavailable,
+    RemoteTransportError::Invalid | RemoteTransportError::Dispatch(_) => {
+      RemoteCoordinatorError::ReplayOrConflict
+    }
+  }
 }
 
 struct HttpRequest {

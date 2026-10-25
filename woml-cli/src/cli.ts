@@ -5716,7 +5716,7 @@ async function runTypesCommand(
     );
     io.stdout(`WOML editor types written to ${outputPath}.\n`);
     io.stdout(
-      `Modules: ${modules.length}; globals: services only. Pass context, attempt, and secrets explicitly.\n`
+      `Modules: ${modules.length}; script globals: services, context, attempt, and symbolic secrets.\n`
     );
     return 0;
   } catch (error) {
@@ -5756,6 +5756,7 @@ async function runInitCommand(
       io.stdout(`Initialized WOML project in ${result.directory}.\n`);
       io.stdout(`Manifest  ${result.manifestPath}\n`);
       io.stdout(`Workflow  ${result.workflowPath}\n`);
+      io.stdout(`Guide     ${result.authoringGuidePath}\n`);
       io.stdout('Next      woml check --project woml.project.json\n');
     }
     return 0;

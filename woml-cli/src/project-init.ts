@@ -9,6 +9,7 @@ export interface InitializedWomlProjectV1 {
   readonly directory: string;
   readonly manifestPath: string;
   readonly workflowPath: string;
+  readonly authoringGuidePath: string;
 }
 
 export class WomlProjectInitializationError extends Error {
@@ -44,9 +45,13 @@ export async function initializeWomlProject(
   const manifestPath = resolve(root, 'woml.project.json');
   const workflowsDirectory = resolve(root, 'workflows');
   const workflowPath = resolve(workflowsDirectory, 'hello.woml');
+  const authoringGuidePath = resolve(root, 'AGENTS.md');
   const collisions = (
     await Promise.all(
-      [manifestPath, workflowPath].map(async path => ({ path, exists: await exists(path) }))
+      [manifestPath, workflowPath, authoringGuidePath].map(async path => ({
+        path,
+        exists: await exists(path),
+      }))
     )
   ).filter(item => item.exists);
   if (collisions.length > 0) {
@@ -63,9 +68,10 @@ export async function initializeWomlProject(
   const created: string[] = [];
   try {
     await mkdir(workflowsDirectory, { recursive: true, mode: 0o755 });
-    const [manifestTemplate, workflowTemplate] = await Promise.all([
+    const [manifestTemplate, workflowTemplate, authoringGuideTemplate] = await Promise.all([
       readFile(resolve(TEMPLATE_ROOT, 'woml.project.json'), 'utf8'),
       readFile(resolve(TEMPLATE_ROOT, 'workflows/hello.woml'), 'utf8'),
+      readFile(resolve(TEMPLATE_ROOT, 'AGENTS.md'), 'utf8'),
     ]);
     await writeFile(
       manifestPath,
@@ -79,6 +85,12 @@ export async function initializeWomlProject(
       flag: 'wx',
     });
     created.push(workflowPath);
+    await writeFile(authoringGuidePath, authoringGuideTemplate, {
+      encoding: 'utf8',
+      mode: 0o644,
+      flag: 'wx',
+    });
+    created.push(authoringGuidePath);
   } catch (error) {
     await Promise.all(created.map(path => unlink(path).catch(() => {})));
     if (!workflowsExisted) await rmdir(workflowsDirectory).catch(() => {});
@@ -102,6 +114,7 @@ export async function initializeWomlProject(
     directory: root,
     manifestPath,
     workflowPath,
+    authoringGuidePath,
   };
 }
 

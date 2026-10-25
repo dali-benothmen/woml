@@ -24,7 +24,8 @@ pub const REMOTE_MESSAGE_CLOCK_SKEW_SECONDS: i64 = 300;
 pub const REMOTE_MAX_SESSIONS: usize = 1024;
 pub const REMOTE_MAX_REPLAY_IDS: usize = 100_000;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TrustedWorkerIdentityV1 {
   pub worker_id: String,
   pub certificate_digest: String,
@@ -104,6 +105,7 @@ pub struct RemoteSessionAuthorityV1 {
   replay_ids: HashMap<String, DateTime<Utc>>,
   draining_targets: BTreeSet<String>,
   draining_workers: BTreeSet<String>,
+  dispatch_enabled: bool,
 }
 
 impl RemoteSessionAuthorityV1 {
@@ -111,6 +113,23 @@ impl RemoteSessionAuthorityV1 {
     registry: PreparedTargetRegistryV1,
     trust: impl IntoIterator<Item = TrustedWorkerIdentityV1>,
     supported_capabilities: impl IntoIterator<Item = (String, u32)>,
+  ) -> Result<Self, RemoteCoordinatorError> {
+    Self::build(registry, trust, supported_capabilities, false)
+  }
+
+  pub fn new_dispatching(
+    registry: PreparedTargetRegistryV1,
+    trust: impl IntoIterator<Item = TrustedWorkerIdentityV1>,
+    supported_capabilities: impl IntoIterator<Item = (String, u32)>,
+  ) -> Result<Self, RemoteCoordinatorError> {
+    Self::build(registry, trust, supported_capabilities, true)
+  }
+
+  fn build(
+    registry: PreparedTargetRegistryV1,
+    trust: impl IntoIterator<Item = TrustedWorkerIdentityV1>,
+    supported_capabilities: impl IntoIterator<Item = (String, u32)>,
+    dispatch_enabled: bool,
   ) -> Result<Self, RemoteCoordinatorError> {
     let mut trusted = HashMap::new();
     for identity in trust {
@@ -129,6 +148,7 @@ impl RemoteSessionAuthorityV1 {
       replay_ids: HashMap::new(),
       draining_targets: BTreeSet::new(),
       draining_workers: BTreeSet::new(),
+      dispatch_enabled,
     })
   }
 
@@ -207,7 +227,7 @@ impl RemoteSessionAuthorityV1 {
       worker_id: hello.worker_id,
       targets: hello.targets,
       expires_at,
-      dispatch_enabled: false,
+      dispatch_enabled: self.dispatch_enabled,
     })
   }
 
@@ -269,6 +289,39 @@ impl RemoteSessionAuthorityV1 {
     }
     self.accept_message(&message.message_id, message.sent_at, now)?;
     self.sessions.remove(&message.session_id);
+    Ok(())
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn authorize_dispatch_fact(
+    &mut self,
+    worker_id: &str,
+    session_id: &str,
+    target: &str,
+    message_id: &str,
+    sent_at: DateTime<Utc>,
+    authenticated_certificate_digest: &str,
+    now: DateTime<Utc>,
+  ) -> Result<(), RemoteCoordinatorError> {
+    self.expire(now);
+    let session = self
+      .sessions
+      .get(session_id)
+      .ok_or(RemoteCoordinatorError::Unavailable)?;
+    if session.worker_id != worker_id
+      || session.certificate_digest != authenticated_certificate_digest
+      || !session.targets.contains(target)
+      || sent_at < session.last_message_at
+    {
+      return Err(RemoteCoordinatorError::Unauthorized);
+    }
+    self.accept_message(message_id, sent_at, now)?;
+    let session = self
+      .sessions
+      .get_mut(session_id)
+      .ok_or(RemoteCoordinatorError::Unavailable)?;
+    session.last_message_at = sent_at;
+    session.expires_at = now + Duration::seconds(REMOTE_SESSION_LIFETIME_SECONDS);
     Ok(())
   }
 

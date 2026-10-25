@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::{poll_fn, Future};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
@@ -780,6 +780,21 @@ impl RuntimeExecutionOptions {
     self.operational_output_store = None;
     self.artifact_policy = None;
     self
+  }
+
+  /// Binds worker-side capability calls to a durable authority owned by the
+  /// worker journal database. Remote attempt runtimes use this narrow accessor
+  /// so they share the exact same policy, idempotency, and cancellation path as
+  /// local script execution without gaining workflow scheduling authority.
+  pub fn prepare_remote_worker_capabilities(
+    self,
+    database_path: &Path,
+  ) -> Result<Self, RuntimeExecutionError> {
+    attach_durable_capability_authority(self, database_path)
+  }
+
+  pub fn remote_worker_capability_authority(&self) -> Option<Arc<DurableCapabilityAuthority>> {
+    self.capability_authority.clone()
   }
 
   /// Enables the managed process capability for this runtime only after the

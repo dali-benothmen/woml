@@ -1,9 +1,14 @@
-import { randomUUID } from 'node:crypto';
-import { lstat, readFile, realpath } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { lstat, mkdir, readFile, realpath } from 'node:fs/promises';
 import { request } from 'node:https';
 import { dirname, isAbsolute, resolve } from 'node:path';
 
-import { loadProcessPolicy } from './process-policy';
+import { loadProcessPolicy, type ProcessRuntimeAuthorityV1 } from './process-policy';
+import {
+  executeRemoteAttemptWithRust,
+  prepareRemoteAttemptWithRust,
+  startRemoteAttemptWithRust,
+} from './rust-executor';
 
 const MAX_CONFIGURATION_BYTES = 256 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -31,6 +36,8 @@ export interface PreparedWorkerConfigurationV1 {
   readonly privateKeyPath: string;
   readonly caPath: string;
   readonly processPolicyPath: string;
+  readonly processAuthority: ProcessRuntimeAuthorityV1;
+  readonly journalPath: string;
 }
 
 export interface WorkerCheckV1 {
@@ -41,7 +48,28 @@ export interface WorkerCheckV1 {
   readonly targets: readonly string[];
   readonly capacity: number;
   readonly transport: 'mtls';
-  readonly dispatchEnabled: false;
+  readonly dispatchEnabled: true;
+}
+
+export interface RemoteWorkerTerminalV1 {
+  readonly profile: 'woml.worker-terminal/v1';
+  readonly dispatchId: string;
+  readonly invocationId: string;
+  readonly state: 'succeeded' | 'failed' | 'cancelled';
+  readonly outcome: unknown;
+  readonly completedAt: string;
+  readonly terminalDigest: string;
+}
+
+export interface RemoteWorkerDispatchV1 {
+  readonly profile: 'woml.remote-dispatch-offer/v1';
+  readonly offerId: string;
+  readonly dispatch: Record<string, unknown> & {
+    readonly dispatchId: string;
+    readonly target: string;
+  };
+  readonly coordinatorAuthority: Record<string, unknown>;
+  readonly expiresAt: string;
 }
 
 export class RemoteWorkerError extends Error {
@@ -130,8 +158,9 @@ export async function prepareWorkerConfiguration(path: string): Promise<Prepared
   const configuration = parseConfiguration(await readFile(canonicalPath, 'utf8'));
   const root = dirname(canonicalPath);
   const processPolicyPath = await safeFile(root, configuration.processPolicy, false);
+  let processAuthority: ProcessRuntimeAuthorityV1;
   try {
-    await loadProcessPolicy(processPolicyPath, 'background');
+    processAuthority = await loadProcessPolicy(processPolicyPath, 'background');
   } catch {
     throw new RemoteWorkerError('WOML_TARGET_INCOMPATIBLE', 'Worker process authority is unavailable or incompatible.');
   }
@@ -141,6 +170,8 @@ export async function prepareWorkerConfiguration(path: string): Promise<Prepared
     privateKeyPath: await safeFile(root, configuration.tls.privateKeyRef, true),
     caPath: await safeFile(root, configuration.tls.caRef, false),
     processPolicyPath,
+    processAuthority,
+    journalPath: resolve(root, '.woml', 'worker-journal.sqlite'),
   };
 }
 
@@ -152,7 +183,7 @@ export async function checkWorkerConfiguration(path: string): Promise<WorkerChec
     coordinator: prepared.configuration.coordinatorUrl,
     targets: prepared.configuration.targetIds,
     capacity: prepared.configuration.capacity,
-    transport: 'mtls', dispatchEnabled: false,
+    transport: 'mtls', dispatchEnabled: true,
   };
 }
 
@@ -207,11 +238,14 @@ export async function startWorker(
     targets: config.targetIds, capacity: config.capacity,
     capabilities: [
       { id: 'runtime.script', version: 1 },
-      { id: 'services.artifacts', version: 1 },
       { id: 'services.process', version: 2 },
     ],
   });
-  if (session.profile !== 'woml.worker-session/v1' || typeof session.sessionId !== 'string' || session.dispatchEnabled !== false) fail('Coordinator returned an incompatible worker session.');
+  if (
+    session.profile !== 'woml.worker-session/v1' ||
+    typeof session.sessionId !== 'string' ||
+    typeof session.dispatchEnabled !== 'boolean'
+  ) fail('Coordinator returned an incompatible worker session.');
   onReady?.(session);
   let stopping = false;
   const shutdown = waitForShutdown().then(() => { stopping = true; });
@@ -224,7 +258,58 @@ export async function startWorker(
       workerId: config.workerId, sessionId: session.sessionId,
       sentAt: new Date().toISOString(), target, dispatchId: 'none',
     });
-    if ((result.status !== 'idle' && result.status !== 'draining') || result.dispatch !== null) fail('The packaged worker received an unsupported executable dispatch.');
+    if (result.status === 'offered') {
+      if (session.dispatchEnabled !== true)
+        fail('The coordinator offered work to a worker without an executable dispatch runtime.');
+      const offer = parseDispatchOffer(result.dispatch, target);
+      let terminal: RemoteWorkerTerminalV1;
+      const execution = await preparePackagedDispatch(offer, session.sessionId, prepared);
+      if (execution.preparation.status === 'terminal') {
+        terminal = execution.preparation.terminal;
+      } else {
+        await postDispatchFact(prepared, session.sessionId, config.workerId, target, offer.dispatch.dispatchId, 'accepted');
+        startRemoteAttemptWithRust(
+          prepared.journalPath,
+          offer.dispatch.dispatchId,
+          session.sessionId
+        );
+        await postDispatchFact(prepared, session.sessionId, config.workerId, target, offer.dispatch.dispatchId, 'started');
+        terminal = await executeRemoteAttemptWithRust(
+          offer,
+          execution.worker,
+          { prestarted: true }
+        );
+      }
+      if (terminal.dispatchId !== offer.dispatch.dispatchId)
+        fail('The worker terminal fact does not match the offered dispatch.');
+      const succeeded = terminal.state === 'succeeded';
+      const response = await postJson(prepared, '/woml/v1/workers/terminal', {
+        profile: 'woml.worker-protocol/v1', protocolVersion: 1,
+        messageId: `terminal_${randomUUID().replaceAll('-', '')}`, messageType: 'terminal',
+        workerId: config.workerId, sessionId: session.sessionId,
+        sentAt: terminal.completedAt, target, dispatchId: terminal.dispatchId,
+        outcome: terminal.state,
+        ...(succeeded
+          ? { result: terminal.outcome }
+          : {
+              failure: {
+                code: terminal.state === 'cancelled' ? 'WOML_RUN_CANCELLED' : 'WOML_REMOTE_ATTEMPT_FAILED',
+                message: 'The authenticated remote attempt did not succeed.',
+                retryable: false,
+                ambiguous: false,
+              },
+            }),
+        finalOutputSequence: 0,
+        journalDigest: terminal.terminalDigest,
+      });
+      if (response.state !== terminal.state || response.dispatchId !== terminal.dispatchId)
+        fail('The coordinator did not durably acknowledge the terminal fact.');
+    } else if (
+      (result.status !== 'idle' && result.status !== 'draining') ||
+      result.dispatch !== null
+    ) {
+      fail('The coordinator returned an invalid worker poll result.');
+    }
     await Promise.race([shutdown, Bun.sleep(1_000)]);
   }
   await shutdown;
@@ -234,4 +319,124 @@ export async function startWorker(
     workerId: config.workerId, sessionId: session.sessionId, sentAt: new Date().toISOString(),
   });
   if (closed.status !== 'closed') fail('Coordinator did not close the worker session.');
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean')
+    return JSON.stringify(value);
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) fail('Worker authority contains a non-finite number.');
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (!isRecord(value)) fail('Worker authority contains an unsupported value.');
+  return `{${Object.keys(value)
+    .sort()
+    .map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+    .join(',')}}`;
+}
+
+async function preparePackagedDispatch(
+  offer: RemoteWorkerDispatchV1,
+  sessionId: string,
+  prepared: PreparedWorkerConfigurationV1
+): Promise<{
+  readonly preparation: ReturnType<typeof prepareRemoteAttemptWithRust>;
+  readonly worker: Parameters<typeof executeRemoteAttemptWithRust>[1];
+}> {
+  const required = offer.dispatch.requiredCapabilities;
+  if (
+    !Array.isArray(required) ||
+    !required.every(item => typeof item === 'string')
+  ) fail('The dispatch package has invalid capability requirements.');
+  const localCapabilities: Readonly<Record<string, number>> = {
+    'runtime.script': 1,
+    'services.process': 2,
+  };
+  const allowedCapabilities = Object.fromEntries(
+    required
+      .filter(capability => Object.hasOwn(localCapabilities, capability))
+      .map(capability => [capability, localCapabilities[capability]!])
+  );
+  if (Object.keys(allowedCapabilities).length !== required.length)
+    throw new RemoteWorkerError(
+      'WOML_TARGET_INCOMPATIBLE',
+      'The worker does not implement every capability required by this dispatch.'
+    );
+  const requiredSecrets = offer.dispatch.requiredSecrets;
+  if (
+    !Array.isArray(requiredSecrets) ||
+    !requiredSecrets.every(
+      item => typeof item === 'string' && /^[A-Z][A-Z0-9_]{0,127}$/u.test(item)
+    )
+  ) fail('The dispatch package has invalid symbolic secret requirements.');
+  if (prepared.configuration.secretProvider !== 'environment' && requiredSecrets.length > 0)
+    throw new RemoteWorkerError(
+      'WOML_TARGET_INCOMPATIBLE',
+      'This packaged worker currently requires the environment secret provider.'
+    );
+  const resolvedSecrets: Record<string, string> = {};
+  for (const name of requiredSecrets) {
+    const value = process.env[name];
+    if (value === undefined)
+      throw new RemoteWorkerError(
+        'WOML_TARGET_UNAVAILABLE',
+        `Required worker-local secret ${name} is unavailable.`
+      );
+    resolvedSecrets[name] = value;
+  }
+  await mkdir(dirname(prepared.journalPath), { recursive: true, mode: 0o700 });
+  const policyDigest = `sha256:${createHash('sha256')
+    .update(canonicalJson(prepared.processAuthority.process.policy))
+    .digest('hex')}`;
+  const worker = {
+    workerId: prepared.configuration.workerId,
+    sessionId,
+    capacity: prepared.configuration.capacity,
+    journalPath: prepared.journalPath,
+    authority: {
+      policyDigest,
+      allowedCapabilities,
+      allowedSecretNames: requiredSecrets,
+    },
+    resolvedSecrets,
+    runtimeCapabilities: prepared.processAuthority,
+  };
+  return {
+    preparation: prepareRemoteAttemptWithRust(offer, worker),
+    worker,
+  };
+}
+
+function parseDispatchOffer(value: unknown, target: string): RemoteWorkerDispatchV1 {
+  if (
+    !isRecord(value) ||
+    value.profile !== 'woml.remote-dispatch-offer/v1' ||
+    typeof value.offerId !== 'string' ||
+    typeof value.expiresAt !== 'string' ||
+    !isRecord(value.dispatch) ||
+    typeof value.dispatch.dispatchId !== 'string' ||
+    value.dispatch.target !== target ||
+    !isRecord(value.coordinatorAuthority) ||
+    Number.isNaN(Date.parse(value.expiresAt)) ||
+    Date.parse(value.expiresAt) <= Date.now()
+  ) fail('The coordinator returned an invalid dispatch offer.');
+  return value as unknown as RemoteWorkerDispatchV1;
+}
+
+async function postDispatchFact(
+  prepared: PreparedWorkerConfigurationV1,
+  sessionId: string,
+  workerId: string,
+  target: string,
+  dispatchId: string,
+  type: 'accepted' | 'started'
+): Promise<void> {
+  const response = await postJson(prepared, `/woml/v1/workers/${type}`, {
+    profile: 'woml.worker-protocol/v1', protocolVersion: 1,
+    messageId: `${type}_${randomUUID().replaceAll('-', '')}`, messageType: type,
+    workerId, sessionId, sentAt: new Date().toISOString(), target, dispatchId,
+  });
+  if (response.status !== type || response.dispatchId !== dispatchId)
+    fail(`The coordinator did not durably acknowledge the ${type} fact.`);
 }

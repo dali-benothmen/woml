@@ -32,6 +32,10 @@ describe('WOML project initialization', () => {
     expect(await readFile(initialized.workflowPath, 'utf8')).toContain(
       '<workflow id="hello" name="Hello WOML">'
     );
+    const guide = await readFile(initialized.authoringGuidePath, 'utf8');
+    expect(guide).toContain('woml check --project woml.project.json');
+    expect(guide).toContain('Do not weaken, replace, inline,');
+    expect(guide).toContain('Never add secret values');
   });
 
   test('refuses every collision and leaves existing content unchanged', async () => {
@@ -63,6 +67,8 @@ describe('WOML project initialization', () => {
     }
     expect(await readFile(resolve(cliRoot, 'templates/woml.project.json'), 'utf8'))
       .toContain('"profile": "woml.project/v1"');
+    expect(await readFile(resolve(cliRoot, 'templates/AGENTS.md'), 'utf8'))
+      .toContain('Keep authority operator-owned');
   });
 });
 

@@ -412,6 +412,9 @@ jobs:
         run: >-
           bun run test:remote-execution-targets-protocol &&
           bun run test:remote-execution-targets-dispatch
+      - name: Test the packaged native remote attempt and terminal replay
+        working-directory: woml-cli
+        run: bun run test:remote-execution-targets-package
       - name: Failure diagnostics
         if: failure()
         run: |

@@ -56,7 +56,7 @@ describe('Remote Worker v1', () => {
     const checked = await checkWorkerConfiguration(configuration);
     expect(checked).toMatchObject({
       profile: 'woml.worker-check/v1', valid: true,
-      workerId: 'production-runner-01', transport: 'mtls', dispatchEnabled: false,
+      workerId: 'production-runner-01', transport: 'mtls', dispatchEnabled: true,
     });
     const result = await invoke(['worker', 'check', '--config', configuration, '--json']);
     expect(result.code).toBe(0);
