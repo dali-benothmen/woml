@@ -1,5 +1,5 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 import type { ProcessRuntimeMode } from './process-policy';
 
@@ -155,7 +155,12 @@ export async function preflightArtifactPolicy(
   for (const value of policy.readRoots) {
     const authored = boundedString(value, 'readRoots entry', 4096);
     const root = await canonicalDirectory(isAbsolute(authored) ? authored : resolve(projectRoot, authored), 'read root');
-    if (root !== projectRoot && !root.startsWith(`${projectRoot}/`)) invalid('Every read root must remain beneath projectRoot.');
+    const fromProject = relative(projectRoot, root);
+    if (
+      fromProject === '..' ||
+      fromProject.startsWith(`..${sep}`) ||
+      isAbsolute(fromProject)
+    ) invalid('Every read root must remain beneath projectRoot.');
     if (!readRoots.includes(root)) readRoots.push(root);
   }
   const materialization = strictObject(policy.materialization, 'materialization', ['directory', 'cleanupOnStart', 'maxBytesPerAttempt']);

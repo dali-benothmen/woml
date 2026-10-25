@@ -14,6 +14,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { basename, dirname, join, parse, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import {
   BackupOperationError,
@@ -213,6 +214,24 @@ async function syncDirectory(path: string): Promise<void> {
     throw error;
   } finally {
     await handle?.close();
+  }
+}
+
+async function renameAtomically(source: string, destination: string): Promise<void> {
+  const attempts = process.platform === 'win32' ? 6 : 1;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await rename(source, destination);
+      return;
+    } catch (error) {
+      const retryable =
+        process.platform === 'win32' &&
+        error instanceof Error &&
+        'code' in error &&
+        ['EACCES', 'EBUSY', 'EPERM'].includes(String(error.code));
+      if (!retryable || attempt + 1 === attempts) throw error;
+      await delay(25 * (attempt + 1));
+    }
   }
 }
 
@@ -494,7 +513,7 @@ export async function createProductionBackup(
     await syncFile(databasePath);
     await syncFile(join(temporaryDirectory, 'manifest.json'));
     await syncDirectory(temporaryDirectory);
-    await rename(temporaryDirectory, args.backupDirectory);
+    await renameAtomically(temporaryDirectory, args.backupDirectory);
     await syncDirectory(parent);
     recordVerifiedBackupWithRust(args.statePath, backupId, createdAt, {
       nativeCorePath: options.nativeCorePath,

@@ -128,9 +128,49 @@ fn post(address: SocketAddr, tls: &TlsFixture, route: &str, body: Value) -> (u16
   .into_bytes();
   request.extend_from_slice(&body);
   stream.write_all(&request).unwrap();
-  stream.flush().unwrap();
+  if let Err(error) = stream.flush() {
+    assert!(
+      expected_peer_close(&error),
+      "loopback request flush failed: {error}"
+    );
+  }
   let mut response = Vec::new();
-  stream.read_to_end(&mut response).unwrap();
+  let mut buffer = [0_u8; 4096];
+  loop {
+    if complete_http_response_length(&response).is_some_and(|length| response.len() >= length) {
+      break;
+    }
+    match stream.read(&mut buffer) {
+      Ok(0) => break,
+      Ok(read) => response.extend_from_slice(&buffer[..read]),
+      Err(error) if expected_peer_close(&error) => {
+        loop {
+          match stream.conn.reader().read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => response.extend_from_slice(&buffer[..read]),
+            Err(buffered_error)
+              if matches!(
+                buffered_error.kind(),
+                std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::WouldBlock
+              ) =>
+            {
+              break;
+            }
+            Err(buffered_error) => panic!("buffered loopback response failed: {buffered_error}"),
+          }
+        }
+        break;
+      }
+      Err(error) => panic!("loopback response failed: {error}"),
+    }
+  }
+  let expected_length = complete_http_response_length(&response)
+    .expect("loopback response did not contain a complete HTTP header");
+  assert!(
+    response.len() >= expected_length,
+    "loopback response ended before its declared Content-Length"
+  );
+  response.truncate(expected_length);
   let split = response
     .windows(4)
     .position(|window| window == b"\r\n\r\n")
@@ -144,6 +184,29 @@ fn post(address: SocketAddr, tls: &TlsFixture, route: &str, body: Value) -> (u16
     .unwrap();
   let value = serde_json::from_slice(&response[split + 4..]).unwrap();
   (status, value)
+}
+
+fn expected_peer_close(error: &std::io::Error) -> bool {
+  matches!(
+    error.kind(),
+    std::io::ErrorKind::BrokenPipe
+      | std::io::ErrorKind::ConnectionAborted
+      | std::io::ErrorKind::ConnectionReset
+      | std::io::ErrorKind::UnexpectedEof
+  )
+}
+
+fn complete_http_response_length(response: &[u8]) -> Option<usize> {
+  let header_end = response
+    .windows(4)
+    .position(|window| window == b"\r\n\r\n")?;
+  let header = std::str::from_utf8(&response[..header_end]).ok()?;
+  let content_length = header.lines().find_map(|line| {
+    line
+      .strip_prefix("Content-Length: ")
+      .and_then(|value| value.parse::<usize>().ok())
+  })?;
+  header_end.checked_add(4)?.checked_add(content_length)
 }
 
 fn setup_store(path: &Path) -> (String, CompiledWorkflowDefinition) {

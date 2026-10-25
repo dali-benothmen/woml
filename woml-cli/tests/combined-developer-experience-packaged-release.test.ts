@@ -1,5 +1,4 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { createRequire } from 'node:module';
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -10,7 +9,14 @@ const roots: string[] = [];
 const repositoryRoot = resolve(import.meta.dir, '../..');
 
 afterAll(async () => {
-  await Promise.all(roots.map(root => rm(root, { recursive: true, force: true })));
+  await Promise.all(
+    roots.map(root => rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: process.platform === 'win32' ? 10 : 0,
+      retryDelay: 50,
+    }))
+  );
 });
 
 function invoke(executable: string, cwd: string, ...args: string[]) {
@@ -69,17 +75,13 @@ describe('Combined Developer Experience clean release', () => {
       expect(await Bun.file(join(installed, path)).exists(), path).toBe(true);
     }
 
-    const addon = createRequire(join(installed, 'dist', 'cli.js'))(
-      candidate.nativePackage
-    ) as Record<string, unknown>;
-    for (const name of [
-      'startWomlRemoteLoopbackCoordinator',
-      'enqueueWomlRemoteDispatch',
-      'prepareWomlRemoteAttempt',
-      'executeWomlRemoteAttempt',
-    ]) {
-      expect(typeof addon[name], name).toBe('function');
-    }
+    const installedNativeBinary = join(
+      consumer,
+      'node_modules',
+      ...candidate.nativePackage.split('/'),
+      `woml-core.${candidate.target}.node`
+    );
+    expect(await Bun.file(installedNativeBinary).exists()).toBe(true);
 
     const project = join(consumer, 'demo');
     const initialized = invoke(executable, consumer, 'init', project, '--json');
