@@ -15,6 +15,7 @@ import { basename, join, relative, resolve } from 'node:path';
 
 import { womlNativeTargets, nativePackageName } from '../src/native-platform';
 import { prepareMainPackage } from './native-release';
+import { npmExecutableForPlatform } from './npm-executable';
 import {
   packedPackageFiles,
   publicJavaScriptFiles,
@@ -62,10 +63,6 @@ function expectedNativeDependencies(version: string): Record<string, string> {
 
 function sameValues(left: readonly string[], right: readonly string[]): boolean {
   return JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
-}
-
-export function npmExecutableForPlatform(platform: string): string {
-  return platform === 'win32' ? 'npm.cmd' : 'npm';
 }
 
 async function assertNonempty(path: string): Promise<void> {

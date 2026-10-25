@@ -128,43 +128,9 @@ fn post(address: SocketAddr, tls: &TlsFixture, route: &str, body: Value) -> (u16
   .into_bytes();
   request.extend_from_slice(&body);
   stream.write_all(&request).unwrap();
-  if let Err(error) = stream.flush() {
-    // Some TLS/socket implementations report the peer's orderly HTTP close as
-    // a failed flush even though the complete request was accepted and the
-    // response is available to read. Preserve every other transport failure.
-    if !matches!(
-      error.kind(),
-      std::io::ErrorKind::BrokenPipe
-        | std::io::ErrorKind::ConnectionAborted
-        | std::io::ErrorKind::ConnectionReset
-    ) {
-      panic!("loopback request flush failed: {error}");
-    }
-  }
+  stream.flush().unwrap();
   let mut response = Vec::new();
-  let mut buffer = [0u8; 4096];
-  loop {
-    match stream.read(&mut buffer) {
-      Ok(0) => break,
-      Ok(read) => response.extend_from_slice(&buffer[..read]),
-      Err(error)
-        if matches!(
-          error.kind(),
-          std::io::ErrorKind::UnexpectedEof
-            | std::io::ErrorKind::ConnectionAborted
-            | std::io::ErrorKind::ConnectionReset
-        ) =>
-      {
-        // StreamOwned can observe the transport close while authenticated
-        // plaintext is still buffered in rustls. Drain that plaintext before
-        // treating the peer close as the end of this HTTP/1.1 response. The
-        // parsing below still rejects an empty, partial, or malformed response.
-        let _ = stream.conn.reader().read_to_end(&mut response);
-        break;
-      }
-      Err(error) => panic!("loopback response failed: {error}"),
-    }
-  }
+  stream.read_to_end(&mut response).unwrap();
   let split = response
     .windows(4)
     .position(|window| window == b"\r\n\r\n")

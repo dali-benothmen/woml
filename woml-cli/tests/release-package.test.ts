@@ -9,9 +9,9 @@ import {
 } from '../scripts/release-contract';
 import { prepareMainPackage } from '../scripts/native-release';
 import {
-  npmExecutableForPlatform,
   verifyMainPackage,
 } from '../scripts/release-package';
+import { npmExecutableForPlatform } from '../scripts/npm-executable';
 
 const cliRoot = resolve(import.meta.dir, '..');
 const temporaryDirectories: string[] = [];

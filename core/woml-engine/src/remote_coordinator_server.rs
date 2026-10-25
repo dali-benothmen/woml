@@ -499,6 +499,7 @@ fn write_response(
     body.len()
   )?;
   stream.write_all(body)?;
+  stream.conn.send_close_notify();
   stream.flush()
 }
 
