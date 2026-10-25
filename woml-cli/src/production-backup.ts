@@ -189,7 +189,9 @@ async function digestFile(path: string): Promise<{ digest: string; sizeBytes: nu
 }
 
 async function syncFile(path: string): Promise<void> {
-  const handle = await open(path, 'r');
+  // Windows FlushFileBuffers requires a write-capable handle. The backup
+  // files are owned by this operation, so opening without truncation is safe.
+  const handle = await open(path, 'r+');
   try {
     await handle.sync();
   } finally {
@@ -459,6 +461,7 @@ export async function createProductionBackup(
   const createdAt = new Date().toISOString();
   await mkdir(temporaryDirectory, { mode: 0o700 });
   const databasePath = join(temporaryDirectory, 'state.sqlite');
+  let stage = 'creating the SQLite snapshot';
   try {
     let inventory: RustBackupStoreInspection;
     try {
@@ -476,8 +479,11 @@ export async function createProductionBackup(
       }
       throw error;
     }
+    stage = 'setting snapshot permissions';
     await restrictFileToOwner(databasePath);
+    stage = 'hashing the SQLite snapshot';
     const database = await digestFile(databasePath);
+    stage = 'exporting artifact inventory';
     const artifacts = options.artifactAuthority === undefined
       ? undefined
       : exportArtifactBackupWithRust(
@@ -511,23 +517,43 @@ export async function createProductionBackup(
       ...(artifacts === undefined ? {} : { artifacts }),
       verified: true,
     };
+    stage = 'writing the backup manifest';
     await writeFile(
       join(temporaryDirectory, 'manifest.json'),
       `${JSON.stringify(manifest, null, 2)}\n`,
       { encoding: 'utf8', mode: 0o600, flag: 'wx' }
     );
+    stage = 'verifying the backup directory';
     await verifyBackupDirectory(temporaryDirectory, options.nativeCorePath);
+    stage = 'flushing the SQLite snapshot';
     await syncFile(databasePath);
+    stage = 'flushing the backup manifest';
     await syncFile(join(temporaryDirectory, 'manifest.json'));
+    stage = 'flushing the temporary directory';
     await syncDirectory(temporaryDirectory);
+    stage = 'publishing the backup directory';
     await renameAtomically(temporaryDirectory, args.backupDirectory);
+    stage = 'flushing the parent directory';
     await syncDirectory(parent);
+    stage = 'recording the verified backup';
     recordVerifiedBackupWithRust(args.statePath, backupId, createdAt, {
       nativeCorePath: options.nativeCorePath,
     });
     return manifest;
   } catch (error) {
     await rm(temporaryDirectory, { recursive: true, force: true }).catch(() => {});
+    if (
+      !(error instanceof ProductionBackupError) &&
+      !(error instanceof BackupOperationError) &&
+      error instanceof Error &&
+      'code' in error
+    ) {
+      throw new ProductionBackupError(
+        'WOML_BACKUP_FILESYSTEM_FAILED',
+        `Backup failed while ${stage} (${String(error.code)}).`,
+        { cause: error }
+      );
+    }
     throw error;
   }
 }

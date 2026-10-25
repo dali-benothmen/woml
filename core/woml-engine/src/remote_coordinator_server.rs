@@ -9,7 +9,7 @@ use std::{
   collections::VecDeque,
   fs::File,
   io::{BufReader, Read, Write},
-  net::{SocketAddr, TcpListener, TcpStream},
+  net::{Shutdown, SocketAddr, TcpListener, TcpStream},
   path::PathBuf,
   sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -138,7 +138,12 @@ impl RemoteCoordinatorServerV1 {
                 .name("woml-remote-session".to_string())
                 .spawn(move || {
                   let _guard = ActiveConnection(active);
-                  let _ = handle_connection(stream, tls, authority, transport);
+                  if let Err(stage) = handle_connection(stream, tls, authority, transport) {
+                    #[cfg(debug_assertions)]
+                    eprintln!("WOML remote coordinator connection failed at {stage}");
+                    #[cfg(not(debug_assertions))]
+                    let _ = stage;
+                  }
                 });
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -191,23 +196,26 @@ fn handle_connection(
   tls: Arc<ServerConfig>,
   authority: Arc<Mutex<RemoteSessionAuthorityV1>>,
   transport: Option<Arc<RemoteDispatchTransportV1>>,
-) -> Result<(), ()> {
+) -> Result<(), &'static str> {
   stream
     .set_read_timeout(Some(Duration::from_secs(
       REMOTE_COORDINATOR_IO_TIMEOUT_SECONDS,
     )))
-    .map_err(|_| ())?;
+    .map_err(|error| connection_io_error("set_read_timeout", error))?;
   stream
     .set_write_timeout(Some(Duration::from_secs(
       REMOTE_COORDINATOR_IO_TIMEOUT_SECONDS,
     )))
-    .map_err(|_| ())?;
-  let connection = ServerConnection::new(tls).map_err(|_| ())?;
+    .map_err(|error| connection_io_error("set_write_timeout", error))?;
+  let connection = ServerConnection::new(tls).map_err(|_| "tls_connection")?;
   let mut stream = StreamOwned::new(connection, stream);
   let request = match read_request(&mut stream) {
     Ok(request) => request,
     Err(status) => {
-      let _ = write_error(&mut stream, status, "WOML_REMOTE_PROTOCOL_INVALID");
+      #[cfg(debug_assertions)]
+      eprintln!("WOML remote coordinator rejected request with HTTP {status}");
+      write_error(&mut stream, status, "WOML_REMOTE_PROTOCOL_INVALID")
+        .map_err(|error| connection_io_error("write_request_error", error))?;
       return Ok(());
     }
   };
@@ -216,7 +224,7 @@ fn handle_connection(
     .peer_certificates()
     .and_then(|certificates| certificates.first())
     .map(|certificate| format!("sha256:{:x}", Sha256::digest(certificate.as_ref())))
-    .ok_or(())?;
+    .ok_or("peer_certificate_missing")?;
   let now = Utc::now();
   let result = if request.method == "POST" && request.path == "/woml/v1/workers/session" {
     decode_worker_hello(&request.body)
@@ -318,18 +326,21 @@ fn handle_connection(
         }))
       })
   } else {
-    write_error(&mut stream, 404, "WOML_TARGET_UNAVAILABLE").map_err(|_| ())?;
+    write_error(&mut stream, 404, "WOML_TARGET_UNAVAILABLE")
+      .map_err(|error| connection_io_error("write_not_found", error))?;
     return Ok(());
   };
   match result {
-    Ok(body) => write_response(&mut stream, 200, &body).map_err(|_| ())?,
+    Ok(body) => write_response(&mut stream, 200, &body)
+      .map_err(|error| connection_io_error("write_response", error))?,
     Err(error) => {
       let status = match error {
         RemoteCoordinatorError::Unauthorized => 403,
         RemoteCoordinatorError::Incompatible | RemoteCoordinatorError::ReplayOrConflict => 400,
         RemoteCoordinatorError::Unavailable | RemoteCoordinatorError::Capacity => 503,
       };
-      write_error(&mut stream, status, error.code()).map_err(|_| ())?;
+      write_error(&mut stream, status, error.code())
+        .map_err(|error| connection_io_error("write_authority_error", error))?;
     }
   }
   Ok(())
@@ -394,7 +405,7 @@ fn read_request(stream: &mut StreamOwned<ServerConnection, TcpStream>) -> Result
   let mut bytes = Vec::new();
   let mut buffer = [0u8; 4096];
   let header_end = loop {
-    let read = stream.read(&mut buffer).map_err(|_| 408u16)?;
+    let read = stream.read(&mut buffer).map_err(request_read_error)?;
     if read == 0 {
       return Err(400);
     }
@@ -444,7 +455,7 @@ fn read_request(stream: &mut StreamOwned<ServerConnection, TcpStream>) -> Result
     return Err(413);
   }
   while bytes.len() - header_end < content_length {
-    let read = stream.read(&mut buffer).map_err(|_| 408u16)?;
+    let read = stream.read(&mut buffer).map_err(request_read_error)?;
     if read == 0 {
       return Err(400);
     }
@@ -458,6 +469,25 @@ fn read_request(stream: &mut StreamOwned<ServerConnection, TcpStream>) -> Result
     path,
     body: bytes[header_end..].to_vec(),
   })
+}
+
+fn request_read_error(error: std::io::Error) -> u16 {
+  #[cfg(debug_assertions)]
+  eprintln!(
+    "WOML remote coordinator request read failed: {:?}",
+    error.kind()
+  );
+  #[cfg(not(debug_assertions))]
+  let _ = error;
+  408
+}
+
+fn connection_io_error(stage: &'static str, error: std::io::Error) -> &'static str {
+  #[cfg(debug_assertions)]
+  eprintln!("WOML remote coordinator {stage} failed: {:?}", error.kind());
+  #[cfg(not(debug_assertions))]
+  let _ = error;
+  stage
 }
 
 fn json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, RemoteCoordinatorError> {
@@ -493,14 +523,19 @@ fn write_response(
     431 => "Request Header Fields Too Large",
     _ => "Service Unavailable",
   };
-  write!(
-    stream,
+  let response_header = format!(
     "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
     body.len()
-  )?;
-  stream.write_all(body)?;
+  );
+  stream.conn.writer().write_all(response_header.as_bytes())?;
+  stream.conn.writer().write_all(body)?;
   stream.conn.send_close_notify();
-  stream.flush()
+  while stream.conn.wants_write() {
+    if stream.conn.write_tls(&mut stream.sock)? == 0 {
+      return Err(std::io::ErrorKind::WriteZero.into());
+    }
+  }
+  stream.sock.shutdown(Shutdown::Write)
 }
 
 fn server_configuration(

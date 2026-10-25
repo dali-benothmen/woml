@@ -1,6 +1,6 @@
 use std::{
   io::{Read, Write},
-  net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
+  net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpStream},
   path::{Path, PathBuf},
   sync::Arc,
 };
@@ -131,8 +131,11 @@ fn post(address: SocketAddr, tls: &TlsFixture, route: &str, body: Value) -> (u16
   request.extend_from_slice(&body);
   connection.writer().write_all(&request).unwrap();
   while connection.wants_write() {
-    connection.write_tls(&mut tcp).unwrap();
+    connection
+      .write_tls(&mut tcp)
+      .unwrap_or_else(|error| panic!("{route}: request TLS write failed: {error}"));
   }
+  tcp.shutdown(Shutdown::Write).unwrap();
   let mut response = Vec::new();
   let mut buffer = [0_u8; 4096];
   loop {
@@ -156,8 +159,12 @@ fn post(address: SocketAddr, tls: &TlsFixture, route: &str, body: Value) -> (u16
       Err(error) => panic!("loopback TLS read failed: {error}"),
     }
   }
-  let expected_length = complete_http_response_length(&response)
-    .expect("loopback response did not contain a complete HTTP header");
+  let expected_length = complete_http_response_length(&response).unwrap_or_else(|| {
+    panic!(
+      "{route}: loopback response did not contain a complete HTTP header ({} bytes)",
+      response.len()
+    )
+  });
   assert!(
     response.len() >= expected_length,
     "loopback response ended before its declared Content-Length"
