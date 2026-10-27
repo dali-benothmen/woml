@@ -114,6 +114,11 @@ describe('WOML release automation', () => {
   test('publishes verified exact tags through the protected npm environment', async () => {
     const { document, source } = await workflow('release');
     const publish = document.jobs?.publish;
+    const validateSteps = document.jobs?.validate?.steps ?? [];
+    const nativeBuild = validateSteps.findIndex(step => step.run === 'bun run build:native');
+    const sourceContracts = validateSteps.findIndex(step => step.name === 'Verify release source contracts');
+    expect(nativeBuild).toBeGreaterThanOrEqual(0);
+    expect(nativeBuild).toBeLessThan(sourceContracts);
     expect(document.on).toHaveProperty('push');
     expect(document.on).toHaveProperty('workflow_dispatch');
     expect(publish?.environment).toBe('npm-production');
