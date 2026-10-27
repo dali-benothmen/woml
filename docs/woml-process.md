@@ -118,6 +118,12 @@ woml test examples/process/project-checks.woml --allow-process bun
 the current project directory, inherits no ambient environment variables, and
 works only in the foreground. It cannot be combined with `--background`.
 
+On Windows, WOML also supplies `SystemRoot` from the Windows system-directory
+API so native runtime, cryptographic, and networking initialization can work.
+This is an OS bootstrap value, not an inherited application variable. `PATH`,
+home directories, credentials, and other ambient variables still require
+explicit operator approval.
+
 This is intentionally a local convenience. A long-lived or background runtime
 must use a reviewed policy file.
 

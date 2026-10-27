@@ -220,12 +220,28 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v6
+        if: runner.os == 'Windows'
+        with:
+          node-version: 24
+          package-manager-cache: false
       - name: Test Process v1 containment serially
         working-directory: core
         run: >-
           cargo test --config profile.dev.debug=0
           --config profile.dev.incremental=false -j 1 --locked
           -p woml-engine --lib process::tests -- --test-threads=1
+      - name: Test Windows JavaScript startup with the isolated process environment
+        if: runner.os == 'Windows'
+        working-directory: core
+        shell: bash
+        run: |
+          export WOML_PROCESS_TEST_NODE="$(node -p 'process.execPath')"
+          cargo test --config profile.dev.debug=0 \
+            --config profile.dev.incremental=false -j 1 --locked \
+            -p woml-engine --lib \
+            process::tests::windows_node_executes_javascript_with_only_the_os_bootstrap_environment \
+            -- --exact --ignored --test-threads=1
       - name: Failure diagnostics
         if: failure()
         run: |

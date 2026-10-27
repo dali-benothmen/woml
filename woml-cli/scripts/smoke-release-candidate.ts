@@ -173,24 +173,31 @@ async function main(): Promise<void> {
   <workflow id="release-candidate-process" name="Release candidate process" version="1.0.0">
     <triggers><manual id="start" /></triggers>
     <steps><step id="literal"><script>
-      const result = await services.process.run({
-        executable: "node",
-        args: ["./echo arguments 雪.js", "space value", "café 雪", "\\\"quoted\\\"", "; echo not-a-shell"],
-        timeout: "10s",
-        // This fixture has no secrets. Accept Node's normal error exit so a
-        // Windows release failure reports its actual stderr and exit status.
-        acceptExitCodes: [0, 1]
-      }, { name: "release-literal-arguments" });
-      return result.exitCode === 0
-        ? { exitCode: result.exitCode, arguments: JSON.parse(result.stdout) }
-        : { exitCode: result.exitCode, stderr: result.stderr.slice(0, 2048) };
+      try {
+        const result = await services.process.run({
+          executable: "node",
+          args: ["./echo arguments 雪.js", "space value", "café 雪", "\\\"quoted\\\"", "; echo not-a-shell"],
+          timeout: "10s"
+        }, { name: "release-literal-arguments" });
+        return { exitCode: result.exitCode, arguments: JSON.parse(result.stdout) };
+      } catch (error) {
+        // Preserve safe status metadata, including Windows crash exit codes.
+        // The outer smoke assertion still requires the exact successful result.
+        return { failure: { code: error.code, details: error.details } };
+      }
     </script></step></steps>
   </workflow>
 </woml>\n`
     );
     await writeFile(
       join(consumer, 'echo arguments 雪.js'),
-      'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\r\\n");\n'
+      `if (process.platform === "win32" && !process.env.SystemRoot) {
+  throw new Error("The managed Windows child is missing SystemRoot.");
+}
+if (process.env.PATH !== undefined || process.env.HOME !== undefined) {
+  throw new Error("The managed child inherited unapproved application environment.");
+}
+process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\r\\n");\n`
     );
     await writeFile(
       join(consumer, 'process-tree.woml'),
@@ -340,37 +347,14 @@ setInterval(() => appendFileSync(path, "x"), 20);\n`
         `The installed runtime returned an unexpected for-each result: ${forEachResult}`
       );
     }
-    let processResult: string;
-    try {
-      processResult = command(
-        'test',
-        'process-literal.woml',
-        '--allow-process',
-        'node',
-        '--state',
-        join(directory, 'process-state.sqlite')
-      );
-    } catch (error) {
-      // A failed Process attempt intentionally hides child output. This
-      // isolated, synthetic helper has no secrets, so probe it directly with
-      // the same empty environment to distinguish child startup from policy,
-      // containment, and working-directory failures in the release matrix.
-      const node = Bun.which('node');
-      const probe = node === null
-        ? 'node is unavailable'
-        : (() => {
-            try {
-              const result = Bun.spawnSync(
-                [node, './echo arguments 雪.js', 'space value', 'café 雪'],
-                { cwd: consumer, env: {}, stdout: 'pipe', stderr: 'pipe' }
-              );
-              return `exit=${result.exitCode}; stdout=${result.stdout.toString().slice(0, 2048)}; stderr=${result.stderr.toString().slice(0, 2048)}`;
-            } catch (probeError) {
-              return `failed to start: ${String(probeError)}`;
-            }
-          })();
-      throw new Error(`${String(error)}\nDirect isolated Node probe: ${probe}`);
-    }
+    const processResult = command(
+      'test',
+      'process-literal.woml',
+      '--allow-process',
+      'node',
+      '--state',
+      join(directory, 'process-state.sqlite')
+    );
     const expectedProcess = {
       exitCode: 0,
       arguments: ['space value', 'café 雪', '"quoted"', '; echo not-a-shell'],
@@ -380,7 +364,7 @@ setInterval(() => appendFileSync(path, "x"), 20);\n`
       JSON.stringify(expectedProcess)
     ) {
       throw new Error(
-        `The installed Process v1 runtime changed literal arguments: ${processResult}`
+        `The installed Process v1 runtime failed its launch, environment, or literal-argument check: ${processResult}`
       );
     }
 

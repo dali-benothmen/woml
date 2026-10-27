@@ -324,6 +324,13 @@ adds only values named by `environment.inherit` and explicit `env` values whose
 names are permitted by `environment.allow`. WOML's other secrets are not
 implicitly exposed to the child.
 
+On Windows, the cleared environment additionally receives `SystemRoot`,
+derived from `GetSystemWindowsDirectoryW` rather than the parent environment.
+Windows runtime initialization requires this OS bootstrap value. Application
+variables, including `PATH` and user-profile directories, remain subject to
+the explicit policy lists. Approved inherited or request values are applied
+after the bootstrap value and retain their existing precedence.
+
 Operator-inherited environment values are treated as sensitive by the Rust
 authority. Resolved WOML secret values are known only inside the isolated Bun
 worker, so that boundary replaces their exact occurrences with `[REDACTED]`

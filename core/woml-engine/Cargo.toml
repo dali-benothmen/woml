@@ -41,7 +41,7 @@ tokio-postgres-rustls = { version = "0.14", features = ["ring", "webpki-roots"] 
 uuid = { version = "1.0", features = ["v4"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 
 [dev-dependencies]
 rcgen = "0.13.2"

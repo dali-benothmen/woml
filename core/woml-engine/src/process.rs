@@ -747,11 +747,19 @@ async fn execute_process(
     None => None,
   };
   let mut command = Command::new(&authorized.executable);
-  let child_cwd = child_process_cwd(&authorized.cwd);
+  prepare_process_environment(&mut command).map_err(|_| {
+    failure(
+      CapabilityFailureKind::ServiceRejected,
+      "WOML_PROCESS_SPAWN_FAILED",
+      "The approved executable could not be started.",
+      true,
+      false,
+      None,
+    )
+  })?;
   command
     .args(&request.args)
-    .current_dir(&child_cwd)
-    .env_clear()
+    .current_dir(&authorized.cwd)
     .envs(&policy.inherited_environment)
     .envs(&request.env)
     .stdin(Stdio::null())
@@ -1043,6 +1051,41 @@ async fn terminate_process_tree(
   tokio::time::sleep(PROCESS_TERMINATION_GRACE).await;
   containment.force_terminate()?;
   child.wait().await
+}
+
+fn prepare_process_environment(command: &mut Command) -> io::Result<()> {
+  command.env_clear();
+  #[cfg(windows)]
+  {
+    // Windows runtime initialization (including Node's crypto and Winsock)
+    // requires SystemRoot. Derive this OS bootstrap value from the kernel,
+    // not the ambient environment; application variables remain policy-only.
+    command.env("SystemRoot", windows_system_root()?);
+  }
+  Ok(())
+}
+
+#[cfg(windows)]
+fn windows_system_root() -> io::Result<std::ffi::OsString> {
+  use std::os::windows::ffi::OsStringExt;
+  let mut buffer = vec![0u16; 32_768];
+  // SAFETY: buffer is writable for the supplied number of UTF-16 code units.
+  let length = unsafe {
+    windows_sys::Win32::System::SystemInformation::GetSystemWindowsDirectoryW(
+      buffer.as_mut_ptr(),
+      buffer.len() as u32,
+    )
+  } as usize;
+  if length == 0 {
+    return Err(io::Error::last_os_error());
+  }
+  if length >= buffer.len() {
+    return Err(io::Error::new(
+      io::ErrorKind::InvalidData,
+      "the Windows system directory exceeds the supported path bound",
+    ));
+  }
+  Ok(std::ffi::OsString::from_wide(&buffer[..length]))
 }
 
 #[cfg(unix)]
@@ -1657,32 +1700,6 @@ fn authorize_cwd(
     ));
   }
   Ok(canonical)
-}
-
-#[cfg(windows)]
-fn child_process_cwd(canonical: &Path) -> PathBuf {
-  // Windows canonicalization uses the extended-length namespace. Some child
-  // programs cannot resolve relative files from that form of CWD. Keep the
-  // canonical path for authorization, and only hand a conventional drive path
-  // to the child when it resolves back to the exact same directory.
-  if let Some(path) = canonical
-    .to_str()
-    .and_then(|path| path.strip_prefix(r"\\?\"))
-  {
-    let bytes = path.as_bytes();
-    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\' {
-      let compatible = PathBuf::from(path);
-      if std::fs::canonicalize(&compatible).ok().as_deref() == Some(canonical) {
-        return compatible;
-      }
-    }
-  }
-  canonical.to_path_buf()
-}
-
-#[cfg(not(windows))]
-fn child_process_cwd(canonical: &Path) -> PathBuf {
-  canonical.to_path_buf()
 }
 
 fn validate_relative_cwd(value: &str) -> Result<(), CapabilityFailure> {
@@ -2443,14 +2460,81 @@ mod tests {
   }
 
   #[cfg(windows)]
-  #[test]
-  fn child_cwd_preserves_the_authorized_directory_without_a_verbatim_drive_prefix() {
-    let root = temporary_directory("child-cwd");
-    let canonical = root.canonicalize().expect("canonical test directory");
-    let child = child_process_cwd(&canonical);
-    assert!(!child.to_string_lossy().starts_with(r"\\?\"));
-    assert_eq!(child.canonicalize().expect("child directory"), canonical);
-    let _ = std::fs::remove_dir(root);
+  #[tokio::test]
+  async fn windows_child_receives_system_root_without_inheriting_the_application_environment() {
+    let handler =
+      ManagedProcessHandler::new(policy(), ProcessRuntimeMode::Foreground).expect("valid policy");
+    let value = handler
+      .execute(
+        request(
+          json!({
+            "WOML_PROCESS_FIXTURE": "woml-process-fixture-active",
+            "WOML_PROCESS_FIXTURE_PRINT_ENV": "SystemRoot"
+          }),
+          1_024,
+          vec![0],
+        ),
+        CapabilityCancellationToken::default(),
+      )
+      .await
+      .expect("child starts with the Windows bootstrap environment");
+    assert!(value["stdout"].as_str().expect("stdout").contains(
+      windows_system_root()
+        .expect("Windows system directory")
+        .to_string_lossy()
+        .as_ref()
+    ));
+    let value = handler
+      .execute(
+        request(
+          json!({
+            "WOML_PROCESS_FIXTURE": "woml-process-fixture-active",
+            "WOML_PROCESS_FIXTURE_ENV_NAME": "PATH"
+          }),
+          128,
+          vec![0],
+        ),
+        CapabilityCancellationToken::default(),
+      )
+      .await
+      .expect("child starts without an ambient application PATH");
+    assert!(value["stdout"].as_str().expect("stdout").contains("absent"));
+  }
+
+  #[cfg(windows)]
+  #[tokio::test]
+  #[ignore = "requires WOML_PROCESS_TEST_NODE; run explicitly by Windows CI"]
+  async fn windows_node_executes_javascript_with_only_the_os_bootstrap_environment() {
+    let mut configured = policy();
+    configured.limits.max_timeout_ms = 10_000;
+    configured.executables = vec![ProcessPolicyExecutable {
+      alias: "node".to_string(),
+      path: std::env::var("WOML_PROCESS_TEST_NODE").expect("CI-provided Node executable"),
+    }];
+    let handler = ManagedProcessHandler::new(configured, ProcessRuntimeMode::Foreground)
+      .expect("valid Node process policy");
+    let arguments = ["space value", "café 雪", "\"quoted\"", "; echo not-a-shell"];
+    let script = r#"
+      const assert = require('node:assert/strict');
+      assert.ok(process.env.SystemRoot);
+      assert.equal(process.env.PATH, undefined);
+      assert.equal(process.env.HOME, undefined);
+      assert.equal(require('node:crypto').randomBytes(16).length, 16);
+      process.stdout.write(JSON.stringify(process.argv.slice(1)));
+    "#;
+    let mut args = vec!["-e", script];
+    args.extend(arguments);
+    let mut input = request(json!({}), 1_024, vec![0]);
+    input["executable"] = json!("node");
+    input["args"] = json!(args);
+    input["timeoutMs"] = json!(10_000);
+    let value = handler
+      .execute(input, CapabilityCancellationToken::default())
+      .await
+      .expect("Node executes JavaScript and crypto under Rust process containment");
+    assert_eq!(value["exitCode"], 0);
+    assert_eq!(value["stdout"], serde_json::to_string(&arguments).unwrap());
+    assert_eq!(value["stderr"], "");
   }
 
   #[cfg(unix)]
