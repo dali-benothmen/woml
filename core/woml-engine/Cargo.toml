@@ -10,7 +10,7 @@ repository = "https://github.com/dali-benothmen/woml"
 name = "woml_engine"
 
 [dependencies]
-actix-web = "4.11"
+actix-web = { version = "4.11", default-features = false, features = ["macros", "compress-brotli", "compress-gzip", "cookies", "http2", "unicode", "compat", "ws"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.8"
 futures-util = "0.3"
