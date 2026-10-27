@@ -4,75 +4,57 @@
 
 <img src="./assets/woml.png" alt="WOML — Workflow Orchestration Markup Language" width="760">
 
-### If you can read HTML, you can use WOML to automate anything, literally anything.
+### If you can read HTML, you can build workflows, apps, and AI agents with WOML.
+
+**Readable markup for structure. JavaScript for logic. A durable runtime for execution.**
 
 [![npm version](https://img.shields.io/npm/v/woml-cli.svg)](https://www.npmjs.com/package/woml-cli)
 [![GitHub stars](https://img.shields.io/github/stars/dali-benothmen/woml.svg?style=social)](https://github.com/dali-benothmen/woml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)]()
 
+[Website](https://woml.org/) · [Documentation](https://woml.org/docs/) · [Examples](https://woml.org/examples/)
+
 </div>
 
 ## What is WOML?
 
-WOML is an open, executable format for durable workflow applications. It lets you describe a workflow with readable, HTML-inspired markup, implement custom logic with JavaScript, and run the result through a cross-platform, Rust-powered runtime.
+WOML is an open-source, code-first language and runtime for building automated workflows, backend applications, and AI agents. Describe the process in readable, HTML-inspired markup, use JavaScript for logic, and connect the APIs, services, databases, local tools, and infrastructure involved.
 
-WOML is three things working together:
+Each `.woml` file combines three parts:
 
-- **A language** for expressing triggers, steps, data flow, loops, decisions, parallel work, approvals, lifecycle hooks, and runtime policies.
-- **A durable engine** for supervising attempts, retries, state, events, workflow calls, recovery, and execution history.
-- **An operational runtime** for running, inspecting, cancelling, backing up, and managing automations from the command line.
+- **Readable structure** — triggers, steps, branches, loops, parallel work, approvals, and policies remain visible as markup.
+- **Real code** — inline JavaScript and imported JavaScript or TypeScript modules implement custom behavior without waiting for a built-in connector.
+- **Managed execution** — the runtime handles attempts, retries, state, waits, workflow calls, recovery, and execution history.
 
-A `.woml` file is more than configuration. It is the program, the architecture diagram, the execution policy, and the human-readable documentation for an automation—all in one source-controlled document.
+The workflow source is the program, its readable architecture, and its execution policy. It can live in Git, move through pull requests and CI, and run locally or on infrastructure you control.
 
-When a step needs logic, write JavaScript directly inside `<script>`. WOML handles everything around that code: execution order, durable history, concurrency, external capabilities, human approval, recovery, and production operation.
+Start with one workflow for a local task or webhook. As the work grows, extract reusable modules, call or start other workflows, publish events, and operate the result as a coordinated system without changing its underlying model.
 
-> **The idea:** an automation should not have to be abandoned and rewritten as a backend service when it becomes important. With WOML, it can begin as a small workflow and grow into durable software without changing its fundamental model.
+## What can you build?
 
-## Why WOML?
+| Build | Use WOML to |
+| --- | --- |
+| **Automated workflows** | Process orders, onboard customers, generate reports, review content, and coordinate human approvals. |
+| **Backend applications** | Handle webhooks, expose workflow APIs, run scheduled jobs, and coordinate event-driven services. |
+| **AI agents** | Connect models, tools, memory, specialist workflows, and human review in one durable process. |
+| **Data pipelines** | Import, validate, transform, classify, and store data with explicit control flow and recovery. |
+| **Infrastructure systems** | Run deployment checks, supervise local processes, coordinate infrastructure changes, and respond to incidents. |
 
-Visual workflow builders are excellent for getting started, but large automations can become difficult to review, reuse, and maintain. Traditional orchestration frameworks are powerful, but their workflow structure is often hidden inside application code and framework APIs.
+## Why code-first WOML?
 
-WOML occupies the space between them: readable like a document, expressive like code, and operated like a durable system.
+- **Read the whole process** — semantic markup keeps execution order, decisions, parallel work, and policies visible from top to bottom.
+- **Use code where it belongs** — write JavaScript inline or import JavaScript and TypeScript modules for application-specific logic.
+- **Integrate what your system needs** — call APIs, query databases, run approved local tools, and expose project-owned services without waiting for a connector catalog.
+- **Grow through composition** — split large systems into reusable workflows that call each other, start background work, and communicate through events.
+- **Keep operational history** — durable execution records attempts, decisions, waits, results, and failures so important work can be inspected and recovered.
+- **Own the source and runtime** — review workflows in Git and run them on a developer machine, server, container, or infrastructure you control.
 
-- **Understandable** — semantic markup makes the complete automation visible from top to bottom.
-- **Programmable** — JavaScript, TypeScript modules, and managed services handle logic beyond markup.
-- **Version controlled** — workflows are ordinary files with meaningful diffs, pull requests, and CI validation.
-- **Durable** — the event-sourced runtime records decisions, attempts, waits, results, and failures.
-- **Composable** — workflows can call or start other workflows and reuse project-owned modules, steps, and providers.
-- **AI-friendly** — coding agents can generate WOML, validate it with the real compiler, and leave a workflow humans can review.
-- **Self-hosted** — run the same workflow on your machine, server, container, or infrastructure without per-step platform billing.
+## How WOML works
 
-## What WOML Unlocks
-
-### For developers
-
-Workflows become real software artifacts. You can write them in VS Code, keep them in Git, review them in pull requests, validate them in CI, compose them with JavaScript or TypeScript modules, and run them without opening a visual editor. An automation can grow in complexity without forcing a rewrite into a separate backend application.
-
-### For automation
-
-WOML goes beyond connecting one application to another. It can coordinate long-running business processes, concurrent work, data pipelines, human decisions, reusable child workflows, and event-driven systems while preserving durable history and operational control.
-
-Runtime policies live beside the workflow: retries, concurrency, rate limits, queues, timeouts, lifecycle hooks, cancellation, and recovery are part of the executable contract rather than instructions someone must remember later.
-
-### For AI agents
-
-WOML gives people and agents a shared language. Tags constrain the workflow structure, JavaScript provides familiar implementation power, `woml check` catches invalid output, and Git exposes exactly what the agent changed.
-
-WOML can also orchestrate AI systems themselves. An LLM or tool call can run as a supervised step, specialist agents can become child workflows, durable state can preserve knowledge between runs, events can coordinate independent agents, and human approval can guard sensitive actions.
-
-## What Can You Build?
-
-| Area                      | Examples                                                                                 |
-| ------------------------- | ---------------------------------------------------------------------------------------- |
-| **Business processes**    | Customer onboarding, order fulfillment, invoice processing, compliance review            |
-| **AI agents**             | Support agents, research agents, content systems, human-supervised autonomous operations |
-| **Data workflows**        | Import, validate, transform, classify, iterate over, and store data                      |
-| **Backend automation**    | Webhook processing, scheduled jobs, event-driven services, workflow APIs                 |
-| **Human operations**      | Approval chains, moderation, escalation, incident response                               |
-| **Communication systems** | Telegram, Discord, Slack, and WhatsApp-driven workflows                                  |
-| **Developer automation**  | Deployment checks, backups, reports, repository and filesystem operations                |
-| **Automation products**   | Domain-specific workflow platforms built on the WOML language and runtime                |
+1. **Describe the process** in a `.woml` file using triggers, steps, control flow, and runtime policies.
+2. **Connect your tools** with inline JavaScript, imported modules, managed services, secrets, and reusable child workflows.
+3. **Run and operate it** with the WOML runtime, which records durable state and provides inspection, cancellation, recovery, logs, and backups.
 
 ## Installation
 
@@ -309,7 +291,7 @@ RUN  run_8f21c4                                                Order Router
 Completed in 10 ms · 6 succeeded
 ```
 
-The exact run ID and timings will differ. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop the active automation.
+The exact run ID and timings will differ. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop the active workflow host.
 
 ## What You Just Built
 
@@ -320,7 +302,7 @@ The exact run ID and timings will differ. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to 
 - **`<choose>`** selected one route and published a stable merged result.
 - **The terminal experience** showed each step, result, duration, and final outcome.
 
-## More “Aha” Examples
+## Explore what you can build
 
 Every example below is checked against the current WOML compiler.
 
@@ -338,38 +320,55 @@ Every example below is checked against the current WOML compiler.
 
 Provider examples require their documented credentials. Browse the [complete example catalog](./examples/) for webhooks, schedules, intervals, internal events, databases, storage, cache, lifecycle, retries, communication providers, and production deployment.
 
-## Key Features
+## Build larger systems from reusable workflows
 
-- **Readable workflow files** — author automation with semantic, HTML-inspired markup.
+A WOML project can begin with one file and grow into a system of focused workflows and modules. Workflows can call another workflow and wait for its result, start independent work in the background, or publish events that other workflows consume.
+
+Create a project with workflow discovery and operator-owned configuration already in place:
+
+```bash
+woml init my-project
+cd my-project
+woml check
+woml test
+```
+
+The generated `workflow.json` keeps workflow discovery, policies, reviewers, and execution targets reviewable while secret values remain outside source control. The same project model supports local execution, durable artifacts and waits, rich approvals, infrastructure policies, streamed output, OpenTelemetry, and authenticated remote targets. Remote work never silently falls back to the coordinator.
+
+Read the [project manifest reference](./docs/project-manifest.md), follow the [infrastructure-agent tutorial](./docs/infrastructure-agent-tutorial.md), or use the [operator runbook](./docs/combined-developer-experience-operator-runbook.md).
+
+## Built for real execution
+
+### Connect and extend
+
 - **Embedded JavaScript** — use `context.payload`, `context.steps`, `attempt`, `services`, and explicitly referenced `secrets` inside scripts.
-- **Production triggers** — manual, webhook, schedule, interval, internal event, Slack, Telegram, Discord, and WhatsApp.
-- **Structured control flow** — sequential steps, durable bounded item loops, parallel groups, choices, switches, and concurrent multi-step forks with explicit joins.
-- **Retries and idempotency** — declare retry behavior with the `retry` attribute while preserving durable attempt and operation identities.
-- **Human-in-the-loop** — pause durably for approval and continue through approved or rejected routes.
-- **Durable waits and signals** — suspend without holding a worker, survive restarts, and resume the same run from timers or authenticated callbacks.
-- **Locks, leases, and fencing** — serialize shared-resource work across runs and local processes, then reject stale owners with monotonic fencing tokens.
-- **Compensation and cleanup** — correct proven partial success in reverse completion order, always run cleanup, and fail closed when an effect is ambiguous.
+- **Project-owned modules** — import local JavaScript or TypeScript and expose reusable logic through `services.*`.
 - **Managed capabilities** — use supervised HTTP, SQLite/PostgreSQL, storage, cache, state, events, workflow calls, and communication services.
-- **Reusable building blocks** — import local JavaScript or TypeScript modules and define reusable WOML steps or notification providers.
-- **Lifecycle and runtime policy** — observe workflow and step events while controlling concurrency, rate limits, queues, and timeouts.
-- **Production operations** — run in the foreground or background, inspect activity, follow logs, cancel runs, back up state, and prune old history.
-- **Streaming output and progress** — follow supervised process output and structured script progress live, reconnect by cursor, and replay bounded redacted records without turning logs into workflow state.
+- **Production triggers** — start work manually or from webhooks, schedules, intervals, internal events, Slack, Telegram, Discord, and WhatsApp.
+
+### Structure complex work
+
+- **Explicit control flow** — combine sequential steps, durable bounded item loops, parallel groups, choices, switches, and concurrent forks with explicit joins.
+- **Reusable workflows** — call a workflow for a result, start background work, and coordinate independent components through events.
+- **Human decisions** — pause durably for approval, preserve the decision, and continue through approved or rejected routes.
+- **Runtime policies** — define concurrency, rate limits, queues, timeouts, retries, and lifecycle hooks beside the workflow they govern.
+
+### Continue through failure
+
+- **Durable execution** — preserve attempts, decisions, waits, results, failures, and operation identities across process restarts.
+- **Retries and idempotency** — declare retry behavior while retaining stable attempt and operation identities.
+- **Durable waits and signals** — suspend without holding a worker and resume the same run from timers or authenticated callbacks.
+- **Locks, leases, and fencing** — serialize shared-resource work and reject stale owners with monotonic fencing tokens.
+- **Compensation and cleanup** — correct proven partial success, always run cleanup, and stop for review when an external effect is ambiguous.
+
+### Operate on your infrastructure
+
+- **Inspection and recovery** — inspect activity, follow logs, cancel runs, retry verified-safe work, back up state, and prune old history.
+- **Streaming output and progress** — follow supervised process output live, reconnect by cursor, and replay bounded redacted records.
+- **Portable deployment** — run the same project locally or against authenticated remote targets without silent fallback.
 - **Cross-platform runtime** — install one CLI that selects the appropriate native Rust engine automatically.
 
-## WOML vs Alternatives
-
-Most workflow tools optimize for either visual simplicity or engineering power. WOML is designed to keep both: readable workflow structure for the whole team and real JavaScript whenever the automation needs it.
-
-| Tool                                                                                                                   | How you build workflows | Readable by the whole team                   | Self-hosted |             Logic without a ceiling             |
-| ---------------------------------------------------------------------------------------------------------------------- | ----------------------- | -------------------------------------------- | :---------: | :---------------------------------------------: |
-| **WOML**                                                                                                               | **Markup + JavaScript** | ✅ **Clear, document-like structure**        |     ✅      | ✅ **Inline JavaScript, modules, and services** |
-| [n8n](https://docs.n8n.io/)                                                                                            | Visual canvas           | ⚠️ Easy at first; harder as the canvas grows |     ✅      |            ⚠️ Code and custom nodes             |
-| [Zapier](https://help.zapier.com/hc/en-us/articles/16722578092429-Use-the-editor-to-build-and-view-your-Zap-workflows) | Visual canvas           | ⚠️ Friendly for smaller automations          |     ❌      |       ⚠️ Platform actions and code steps        |
-| [Temporal](https://docs.temporal.io/)                                                                                  | Code with language SDKs | ❌ Primarily readable by engineers           |     ✅      |          ✅ Full programming languages          |
-| [AWS Step Functions](https://docs.aws.amazon.com/step-functions/latest/dg/concepts-amazon-states-language.html)        | JSON/YAML with ASL      | ❌ Requires ASL and AWS knowledge            |     ❌      | ⚠️ Extended through AWS services and functions  |
-| [Apache Airflow](https://airflow.apache.org/docs/apache-airflow/stable/tutorial/fundamentals.html)                     | Python DAGs             | ❌ Primarily readable by Python/data teams   |     ✅      |             ✅ Python and operators             |
-
-> **WOML's difference:** it combines document-like readability, self-hosted ownership, and full JavaScript flexibility in the same workflow file.
+When an interrupted external effect has an uncertain outcome, WOML marks it **ambiguous** instead of retrying it automatically. Inspect the real system with `woml dispatch inspect`, then record an audited decision with `woml dispatch reconcile`.
 
 ## Common Commands
 
@@ -400,16 +399,16 @@ The [WOML extension](./woml-vscode/) gives `.woml` files HTML-style markup highl
 
 The extension follows your existing VS Code theme instead of requiring a separate WOML color theme.
 
-## Let AI Build Your Workflows
+## Build WOML with AI coding agents
 
-Describe the automation you want in plain language and let your coding agent turn it into readable, validated WOML. The **WOML Skill** teaches AI agents the language structure, runtime bindings, control-flow patterns, services, secrets, and validation workflow they need to create real `.woml` files without inventing syntax.
+WOML is structured source code, so coding agents can create and change workflows in the same environment as the rest of your project. The **WOML Skill** teaches agents the language structure, runtime bindings, control-flow patterns, services, secrets, and validation workflow they need to produce real `.woml` files without inventing syntax.
 
 ```text
-Use the WOML workflow skill to build an order-processing automation that starts
-from a webhook, checks inventory and risk concurrently, and routes the result.
+Use the WOML skill to build an order-processing workflow that starts from a
+webhook, checks inventory and risk concurrently, and routes the result.
 ```
 
-Install it once in your project or personal agent skills directory, then ask for workflows naturally or invoke `$woml` explicitly.
+The generated workflow remains readable, reviewable in Git, and verifiable with `woml check` before it runs.
 
 For Claude Code, install the complete skill in the current project:
 
@@ -455,28 +454,3 @@ Contributions are welcome, including bug reports, documentation improvements, te
 ## License
 
 WOML is released under the [Apache License 2.0](./LICENSE).
-# Projects: one command from authoring to operations
-
-Start a portable project instead of repeating workflow, policy, reviewer, and
-target flags on every command:
-
-```bash
-woml init my-automation
-cd my-automation
-woml check
-woml test
-```
-
-`workflow.json` keeps workflow discovery and operator-owned configuration
-reviewable while secret values remain outside source control. The same project
-works with local execution, durable artifacts and waits, rich approvals,
-infrastructure policies, streamed output, OpenTelemetry, and authenticated
-remote targets. Remote work never silently falls back to the coordinator.
-
-Read the [project manifest reference](docs/project-manifest.md), follow the
-[infrastructure-agent tutorial](docs/infrastructure-agent-tutorial.md), or use
-the [operator runbook](docs/combined-developer-experience-operator-runbook.md).
-
-An interrupted remote effect may become **ambiguous**. Inspect the real system
-and run `woml dispatch inspect` before recording an audited decision with
-`woml dispatch reconcile`; WOML never retries an uncertain effect automatically.
