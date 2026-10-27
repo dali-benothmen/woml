@@ -747,9 +747,10 @@ async fn execute_process(
     None => None,
   };
   let mut command = Command::new(&authorized.executable);
+  let child_cwd = child_process_cwd(&authorized.cwd);
   command
     .args(&request.args)
-    .current_dir(&authorized.cwd)
+    .current_dir(&child_cwd)
     .env_clear()
     .envs(&policy.inherited_environment)
     .envs(&request.env)
@@ -1658,6 +1659,32 @@ fn authorize_cwd(
   Ok(canonical)
 }
 
+#[cfg(windows)]
+fn child_process_cwd(canonical: &Path) -> PathBuf {
+  // Windows canonicalization uses the extended-length namespace. Some child
+  // programs cannot resolve relative files from that form of CWD. Keep the
+  // canonical path for authorization, and only hand a conventional drive path
+  // to the child when it resolves back to the exact same directory.
+  if let Some(path) = canonical
+    .to_str()
+    .and_then(|path| path.strip_prefix(r"\\?\"))
+  {
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\' {
+      let compatible = PathBuf::from(path);
+      if std::fs::canonicalize(&compatible).ok().as_deref() == Some(canonical) {
+        return compatible;
+      }
+    }
+  }
+  canonical.to_path_buf()
+}
+
+#[cfg(not(windows))]
+fn child_process_cwd(canonical: &Path) -> PathBuf {
+  canonical.to_path_buf()
+}
+
 fn validate_relative_cwd(value: &str) -> Result<(), CapabilityFailure> {
   if value.is_empty() || value.len() > 4096 || value.contains('\0') {
     return Err(invalid_input(
@@ -2412,6 +2439,17 @@ mod tests {
     }
     #[cfg(not(windows))]
     assert!(stdout.contains(canonical_root.to_string_lossy().as_ref()));
+    let _ = std::fs::remove_dir(root);
+  }
+
+  #[cfg(windows)]
+  #[test]
+  fn child_cwd_preserves_the_authorized_directory_without_a_verbatim_drive_prefix() {
+    let root = temporary_directory("child-cwd");
+    let canonical = root.canonicalize().expect("canonical test directory");
+    let child = child_process_cwd(&canonical);
+    assert!(!child.to_string_lossy().starts_with(r"\\?\"));
+    assert_eq!(child.canonicalize().expect("child directory"), canonical);
     let _ = std::fs::remove_dir(root);
   }
 
