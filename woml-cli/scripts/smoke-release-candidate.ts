@@ -165,6 +165,8 @@ async function main(): Promise<void> {
   </workflow>
 </woml>\n`
     );
+    // Node is installed in every release matrix job. A direct script invocation
+    // keeps this smoke focused on Process v1, not Bun's platform-specific `run` routing.
     await writeFile(
       join(consumer, 'process-literal.woml'),
       `<woml>
@@ -172,8 +174,8 @@ async function main(): Promise<void> {
     <triggers><manual id="start" /></triggers>
     <steps><step id="literal"><script>
       const result = await services.process.run({
-        executable: "bun",
-        args: ["run", "echo arguments 雪.ts", "space value", "café 雪", "\\\"quoted\\\"", "; echo not-a-shell"],
+        executable: "node",
+        args: ["./echo arguments 雪.js", "space value", "café 雪", "\\\"quoted\\\"", "; echo not-a-shell"],
         timeout: "10s"
       }, { name: "release-literal-arguments" });
       return { exitCode: result.exitCode, arguments: JSON.parse(result.stdout) };
@@ -182,8 +184,8 @@ async function main(): Promise<void> {
 </woml>\n`
     );
     await writeFile(
-      join(consumer, 'echo arguments 雪.ts'),
-      'process.stdout.write(JSON.stringify(Bun.argv.slice(2)) + "\\r\\n");\n'
+      join(consumer, 'echo arguments 雪.js'),
+      'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\r\\n");\n'
     );
     await writeFile(
       join(consumer, 'process-tree.woml'),
@@ -192,29 +194,28 @@ async function main(): Promise<void> {
     <triggers><manual id="start" /></triggers>
     <steps><step id="tree"><script>
       return await services.process.run({
-        executable: "bun",
-        args: ["run", "tree-parent.ts", "process-heartbeat"],
-        timeout: "350ms"
+        executable: "node",
+        args: ["./tree-parent.js", "process-heartbeat"],
+        timeout: "2s"
       }, { name: "release-process-tree" });
     </script></step></steps>
   </workflow>
 </woml>\n`
     );
     await writeFile(
-      join(consumer, 'tree-parent.ts'),
-      `const child = Bun.spawn([process.execPath, "run", "tree-grandchild.ts", Bun.argv[2]], {
-  stdin: "ignore", stdout: "ignore", stderr: "ignore"
+      join(consumer, 'tree-parent.js'),
+      `const { spawn } = require("node:child_process");
+const child = spawn(process.execPath, ["./tree-grandchild.js", process.argv[2]], {
+  stdio: "ignore"
 });
-await child.exited;\n`
+child.on("error", error => { process.stderr.write(String(error)); process.exitCode = 1; });
+child.on("exit", code => { process.exitCode = code ?? 1; });\n`
     );
     await writeFile(
-      join(consumer, 'tree-grandchild.ts'),
-      `import { appendFile } from "node:fs/promises";
-const path = Bun.argv[2]!;
-while (true) {
-  await appendFile(path, "x");
-  await Bun.sleep(20);
-}\n`
+      join(consumer, 'tree-grandchild.js'),
+      `const { appendFileSync } = require("node:fs");
+const path = process.argv[2];
+setInterval(() => appendFileSync(path, "x"), 20);\n`
     );
 
     const installEnvironment = {
@@ -338,7 +339,7 @@ while (true) {
       'test',
       'process-literal.woml',
       '--allow-process',
-      'bun',
+      'node',
       '--state',
       join(directory, 'process-state.sqlite')
     );
@@ -363,7 +364,7 @@ while (true) {
           'test',
           'process-tree.woml',
           '--allow-process',
-          'bun',
+          'node',
           '--state',
           join(directory, 'process-tree-state.sqlite'),
         ],
