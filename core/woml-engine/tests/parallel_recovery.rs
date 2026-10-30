@@ -332,7 +332,7 @@ async fn wait_all_resumes_pending_siblings_after_a_recorded_failure_then_fails_t
   .await
   .unwrap_err();
   let RuntimeExecutionError::ParallelFailed(details) = error else {
-    panic!("expected the resumed wait-all group to fail");
+    panic!("expected the resumed wait-all group to fail with its parallel failure: {error:?}");
   };
   assert_eq!(details.failed_node_ids, ["loadWeather"]);
   assert!(details.cancelled_node_ids.is_empty());

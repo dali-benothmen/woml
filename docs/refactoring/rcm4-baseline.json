@@ -1,0 +1,65 @@
+{
+  "baseRevision": "6d2b7ec7bf026fd9ec852e3d4ff4ae2f7d79cb08",
+  "description": "Pre-RCM4/RCM5 runtime source identity and intentional boxed call-site inventory. Schemas, public APIs, fixtures, exports, deadlines, and algorithms remain frozen by their existing contracts.",
+  "files": [
+    {
+      "path": "core/woml-engine/src/runtime.rs",
+      "sha256": "3c4d28c9fb4a9905a67f82baa26a1f2ccd53e287ebf36ffcb995b8d49c856ec2"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/cleanup.rs",
+      "sha256": "5feccf5b146ed91ab2ed65ebc8e6c10fe3f2bccab2e22da29ee3f6e0882d9ebc"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/clock.rs",
+      "sha256": "562ab3184de2bdf083d0f574630e62393528e757e69e1c1e0da3d78a4d8df0f4"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/composition.rs",
+      "sha256": "b927d796015748279c425578182713f0a5af1dcbb63470cf115429b85e3e21e4"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/context.rs",
+      "sha256": "75644dcfb7fae2be042f2a6c617a81f6e27489f28231f688fbe5ccb4b8dd3e61"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/errors.rs",
+      "sha256": "1590427ff0d61f899ca404f41f3be93ce0d63dcc042206dd202fc9ea949fea6f"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/modules.rs",
+      "sha256": "15e3220067e473e8add402dda4bc00151ff4764d484483a7b5aa90ed2f08d470"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/options.rs",
+      "sha256": "3f630165135c6f4a9725bdd4c219325a7c951335abd27e9c7d2379ec524352c0"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/outcomes.rs",
+      "sha256": "8af077a2d3170cac58dee1bb488e4e3a51c6bf3eb7b2dcd693bf2386d10ec18c"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/progress.rs",
+      "sha256": "952c959bdd6d7eafb6c02c9b0398bf36788282b37cd5b449bad10753c10937b6"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/script_execution.rs",
+      "sha256": "35347244d3d674c7d5882716c857f180f20454070e1d438c203e11e64f106934"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/script_host_pool.rs",
+      "sha256": "da6c4d762cbef5d1dffe7ce5bc3311bdf89d6107212db42dff18885c204267b2"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/tests.rs",
+      "sha256": "4e801baee0b17817039b611136b7ff9b8bf540265b6536b0bca60a760fd4c105"
+    }
+  ],
+  "boxedCallees": [
+    "continue_runtime_loop",
+    "host_client.execute",
+    "host_client.execute",
+    "invoke_parallel_child",
+    "invoke_parallel_child"
+  ]
+}

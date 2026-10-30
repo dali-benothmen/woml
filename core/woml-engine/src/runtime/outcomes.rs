@@ -1,4 +1,8 @@
-//! runtime outcomes.
+//! Runtime outcomes, recorded execution order, and final-result reconstruction.
+
+use crate::runtime::errors::RuntimeExecutionError;
+use crate::runtime::RuntimeDagEngine;
+use crate::RunEventPayload;
 
 use crate::event::ApprovalTimeoutPolicy;
 use crate::ReviewPayloadV1;
@@ -124,4 +128,63 @@ impl WorkflowRuntimeOutcome {
       execution,
     }
   }
+}
+
+pub(in crate::runtime) fn succeeded_execution(
+  outcome: WorkflowRuntimeOutcome,
+) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
+  match outcome {
+    WorkflowRuntimeOutcome::Succeeded { execution, .. } => Ok(execution),
+    WorkflowRuntimeOutcome::Waiting { .. } => Err(RuntimeExecutionError::Stalled(
+      "workflow is durably waiting for approval; use the runtime outcome API".to_string(),
+    )),
+    WorkflowRuntimeOutcome::WaitingTime { .. } => Err(RuntimeExecutionError::Stalled(
+      "workflow is durably waiting for time; use the runtime outcome API".to_string(),
+    )),
+    WorkflowRuntimeOutcome::WaitingSignal { .. } => Err(RuntimeExecutionError::Stalled(
+      "workflow is durably waiting for an external signal; use the runtime outcome API".to_string(),
+    )),
+  }
+}
+
+pub(in crate::runtime) fn recorded_execution_order(events: &[RunEvent]) -> Vec<String> {
+  events
+    .iter()
+    .filter_map(|event| match &event.payload {
+      RunEventPayload::StepAttemptSucceeded(data) => Some(data.node_id.clone()),
+      RunEventPayload::WaitSatisfied(data) => Some(data.wait_id.clone()),
+      RunEventPayload::WaitTimedOut(data)
+        if data.behavior == crate::DurableWaitTimeoutBehavior::Continue =>
+      {
+        Some(data.wait_id.clone())
+      }
+      _ => None,
+    })
+    .collect()
+}
+
+pub(in crate::runtime) fn final_result<E: RuntimeDagEngine>(
+  engine: &E,
+  run_id: &str,
+  execution_order: Vec<String>,
+) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
+  let projection = engine.projection(run_id)?;
+  let terminal_node_id = projection
+    .terminal_node_id
+    .or_else(|| engine.workflow().terminal_node_id().map(str::to_string))
+    .ok_or_else(|| {
+      RuntimeExecutionError::Stalled("successful run has no terminal node".to_string())
+    })?;
+  let result = projection
+    .result
+    .ok_or_else(|| RuntimeExecutionError::Stalled("successful run has no result".to_string()))?;
+  Ok(WorkflowExecutionResult {
+    workflow_id: engine.workflow().workflow_id.clone(),
+    run_id: run_id.to_string(),
+    terminal_node_id,
+    result,
+    context: projection.context,
+    execution_order,
+    events: engine.events(run_id)?,
+  })
 }

@@ -4,11 +4,11 @@
 //! Control-flow callers retain responsibility for choosing the correct fork or
 //! iteration snapshot before preparing its protocol bindings.
 
-use super::{
-  resolved_reusable_props_with_iteration, reusable_step_descriptor, RuntimeExecutionError,
-  RuntimeExecutionOptions,
-};
+use super::RuntimeExecutionError;
+use super::RuntimeExecutionOptions;
+use crate::engine::resolve_context_reference;
 use crate::model::CompiledReusableInvocation;
+use crate::model::ValueExpression;
 use crate::protocol::ReusableDefinitionBindingV3;
 use crate::protocol::ReusableDefinitionKind;
 use crate::protocol::ReusableScriptBindingV3;
@@ -351,4 +351,95 @@ pub(super) fn lock_descriptor_for_body_node<'a>(
           .iter()
           .any(|loop_| contains_node(lock, node_id, &loop_.body.edges))
     })
+}
+
+pub(in crate::runtime) fn reusable_step_descriptor<'a>(
+  workflow: &'a CompiledWorkflowDefinition,
+  node_id: &str,
+) -> Option<&'a CompiledReusableInvocation> {
+  workflow
+    .reusable_definitions
+    .iter()
+    .flatten()
+    .find(|definition| {
+      matches!(definition, CompiledReusableInvocation::Step { node_id: value, .. } if value == node_id)
+    })
+}
+
+fn resolved_reusable_props_with_iteration(
+  descriptor: &CompiledReusableInvocation,
+  context: &WorkflowContext,
+  secrets: &BTreeMap<String, String>,
+  iteration: Option<(&Value, u32, u32)>,
+) -> Result<BTreeMap<String, Value>, RuntimeExecutionError> {
+  let props = match descriptor {
+    CompiledReusableInvocation::Step { props, .. }
+    | CompiledReusableInvocation::NotificationProvider { props, .. } => props,
+  };
+  props
+    .iter()
+    .map(|prop| {
+      let value = match &prop.expression {
+        crate::model::CompiledReusablePropExpression::Literal { value } => {
+          Value::String(value.clone())
+        }
+        crate::model::CompiledReusablePropExpression::Context { path } => {
+          if let Some((item, index, total)) = iteration {
+            if path == "item" || path.starts_with("item.") {
+              let mut value = item;
+              for segment in path.split('.').skip(1) {
+                value = value.get(segment).ok_or_else(|| {
+                  RuntimeExecutionError::InvalidConfiguration(format!(
+                    "Reusable prop {:?} is unavailable on context.item.",
+                    prop.name
+                  ))
+                })?;
+              }
+              return Ok((prop.binding_name.clone(), value.clone()));
+            }
+            if path == "iteration.index" || path == "iteration.total" {
+              return Ok((
+                prop.binding_name.clone(),
+                Value::from(if path.ends_with("index") {
+                  index
+                } else {
+                  total
+                }),
+              ));
+            }
+          }
+          let path = path
+            .split('.')
+            .map(|segment| {
+              if segment == "payload" {
+                "trigger".to_string()
+              } else {
+                segment.to_string()
+              }
+            })
+            .collect::<Vec<_>>();
+          resolve_context_reference(&ValueExpression::ContextReference { path }, context).map_err(
+            |_| {
+              RuntimeExecutionError::InvalidConfiguration(format!(
+                "Reusable prop {:?} is unavailable at this invocation.",
+                prop.name
+              ))
+            },
+          )?
+        }
+        crate::model::CompiledReusablePropExpression::Secret { name } => Value::String(
+          secrets
+            .get(name)
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .ok_or_else(|| {
+              RuntimeExecutionError::InvalidConfiguration(format!(
+                "Required reusable secret {name:?} is unavailable."
+              ))
+            })?,
+        ),
+      };
+      Ok((prop.binding_name.clone(), value))
+    })
+    .collect()
 }

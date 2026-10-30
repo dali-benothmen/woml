@@ -6,6 +6,7 @@ import { readRustModuleSource } from '../scripts/rust-source';
 import { expectedNativeExports } from '../scripts/verify-native-exports';
 import baseline from '../../docs/refactoring/rcm0-baseline.json';
 import executionBaseline from '../../docs/refactoring/rcm2-baseline.json';
+import runtimeBaseline from '../../docs/refactoring/rcm4-baseline.json';
 
 const root = resolve(import.meta.dir, '../..');
 const hash = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex');
@@ -38,6 +39,15 @@ test('contract extraction does not change native exports or hide integration tar
   const targets = (await readdir(resolve(root, 'core/woml-engine/tests')))
     .filter(name => name.endsWith('.rs')).map(name => name.slice(0, -3));
   expect(baseline.integrationTargets.filter(name => !targets.includes(name))).toEqual([]);
+});
+
+test('runtime extraction preserves intentional boxed invocation and continuation boundaries', async () => {
+  const source = await readRustModuleSource(resolve(root, 'core/woml-engine/src/runtime.rs'));
+  const code = source.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|r#*"[\s\S]*?"#*|"(?:\\.|[^"\\])*"/g, ' ');
+  const callees = [...code.matchAll(/\bBox::pin\s*\(\s*([\w:.]+)/g)].map(match => match[1]!).sort();
+  // Complements ordinary-stack runtime tests; counting call sites alone is
+  // not proof of cancellation, ownership, stack safety, or equivalent futures.
+  expect(callees).toEqual(runtimeBaseline.boxedCallees);
 });
 
 test('the reviewed text fixture tree retains its canonical LF bytes', async () => {

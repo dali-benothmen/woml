@@ -1,4 +1,4 @@
-# Rust core modularization: RCM0–RCM3 verification
+# Rust core modularization: RCM0–RCM5 verification
 
 This is an internal refactor, not a language, schema, or runtime revision.
 Branch: `refactor/rust-core-modularization`. Baseline source:
@@ -295,3 +295,169 @@ No schema, dependency, serialized fixture, native export, or budget baseline
 is intentionally changed by these phases. The ignored developer book is
 updated locally; the user's ignore rule and unrelated roadmap notes remain
 untouched.
+
+## RCM4 and RCM5: scheduling, control flow, lifecycle, and correction
+
+These phases start from committed RCM2/RCM3 source
+`6d2b7ec7bf026fd9ec852e3d4ff4ae2f7d79cb08`. The
+[RCM4 source baseline](rcm4-baseline.json) records the original runtime facade
+and private-file hashes plus the five intentional boxed call sites. Earlier
+schema, API, fixture, native-name, and integration-target baselines remain in
+force; they were not refreshed to accept extraction drift.
+
+### Ownership after extraction
+
+All new implementation modules are private. Explicit facade re-exports retain
+existing root/direct-module APIs. Cross-sibling helpers use runtime-scoped
+visibility, not new public APIs or blanket exports.
+
+| Responsibility | Private implementation owner |
+|---|---|
+| Continuation wrapper and central execution loop | `runtime/scheduling/run_loop.rs` |
+| Capacity coordination, durable claim acquisition, heartbeat ownership | `runtime/scheduling/policy.rs` |
+| Total workflow deadlines and timeout lifecycle settlement | `runtime/scheduling/timeouts.rs` |
+| Root/iteration lock renewal and key resolution | `runtime/scheduling/locks.rs` |
+| Parallel invocation/group completion | `runtime/control_flow/parallel.rs` |
+| Fork snapshots, branches, joins, and closure | `runtime/control_flow/forks.rs` |
+| Branch/choice failure helpers | `runtime/control_flow/branches.rs` |
+| Approval/signal/timer waiting outcomes and wait registration | `runtime/control_flow/waits.rs` |
+| Bounded iteration and ordered aggregation | `runtime/control_flow/for_each/coordinator.rs` |
+| Iteration references, module bindings, and digests | `runtime/control_flow/for_each/context.rs` |
+| Iteration script supervision and settlement | `runtime/control_flow/for_each/script.rs` |
+| Shared borrowed-engine iteration adapter | `runtime/control_flow/for_each/shared.rs` |
+| Workflow lifecycle and settlement snapshots | `runtime/lifecycle/workflow.rs` |
+| Step lifecycle admission and outcomes | `runtime/lifecycle/steps.rs` |
+| Reusable/provider lifecycle | `runtime/lifecycle/reusable.rs` |
+| Iteration-scoped lifecycle | `runtime/lifecycle/iteration.rs` |
+| Lifecycle-specific notifications and rendering | `runtime/lifecycle/notifications.rs` |
+| Atomic success/compensation registration and scope identity | `runtime/correction/registration.rs` |
+| Exact corrective attempt execution | `runtime/correction/execution.rs` |
+| Saga compensation, cleanup, and recovery continuation | `runtime/correction/saga.rs` |
+| Cancellation closure/settlement ordering | `runtime/cancellation.rs` |
+| Primary failure classification and reconstruction | `runtime/failure.rs` |
+
+The original `runtime.rs` is now 1,986 lines, down from 11,858 at this phase's
+baseline. It retains execution/resume APIs, reviewer authority registration,
+the small correction-resume result, and the main `RuntimeDagEngine` interface
+and adapters. Those adapters belong to RCM9. The iteration-specific shared
+adapter moved with bounded iteration in RCM4 because it directly owns that
+algorithm's borrowed-engine access; it still shares the same
+`Arc<Mutex<&mut E>>`. Durable store, migration, and native bridge extraction
+has not started. There are 27 new private Rust files, including module facades.
+Line counts measure navigation, not performance improvement.
+
+The central continuation loop moved intact first. Policy scheduling,
+parallel work, forks, then iteration moved in separate compiling checkpoints.
+Lifecycle/correction extraction followed that control-flow verification.
+No independent scheduler, store, connection, transaction owner, or per-item
+event log was introduced. A policy wakeup still only prompts a durable claim
+check; suspension does not invent new ownership authority.
+
+Cancellation still settles operations/attempts and closes active scopes in
+the original order before deciding the run outcome. Saga correction still
+uses proven forward completions in reverse completion order, then cleanup.
+Manual recovery and ambiguity still block fabricated final success or safe
+retry. Lifecycle notification behavior is not mandatory saga cleanup.
+Corrective context, declared secrets, retry identities, local/remote guards,
+capability intersections, cancellation flags, and drop order are unchanged.
+
+### Preservation evidence
+
+A one-time declaration/method audit compared the committed runtime tree with
+the extracted tree: all 357 declarations/methods remain across 40 files.
+It compares token streams, retaining string literals, attributes, and statement
+order while allowing formatting/trailing commas and documented runtime-scoped
+visibility. No wrappers, algorithm rewrites, synchronization substitutions,
+deadline changes, or new boxing were needed. The audit complements executable
+tests; it is not a proof of full behavioral equivalence.
+
+The persistent source guard now freezes the intentional `Box::pin` callees:
+one continuation-loop boundary, two host executions, and two parallel-child
+invocations. Actual async/control-flow tests ran on their ordinary thread and
+Tokio runtime configurations, without `RUST_MIN_STACK`, thread stack overrides,
+increased watchdogs, or relaxed concurrency/output budgets.
+
+The compensation, policy, and streaming-output source verifiers already scan
+owned nested modules from RCM0/RCM2 preparation. Their original assertions pass
+without marker-comment substitutes. The API guard still freezes public
+types/functions/constants/traits, 68 expected native names, existing integration
+targets, and all 356 reviewed text fixture files. No schema, lockfile, package
+allowlist, native export, serialized contract, or performance baseline changed.
+
+### Local verification
+
+Cargo tests/checks used `-j 1 --locked --offline`, disabled dev debug information
+and incremental compilation, and serial test threads. Only one Cargo build/test
+ran at a time. The established Clippy command retains its existing allowlist.
+Bun 1.3.14 was present, so host-dependent tests exercised real script hosts.
+
+| Check | RCM4/RCM5 result |
+|---|---|
+| Pre-extraction API/policy/timeout/lifecycle/compensation selection | 38 passed |
+| RCM4 control-flow/policy/rate/timeout selection (13 targets) | 55 passed; 1 baseline-confirmed failure |
+| RCM5 lifecycle/cancellation/compensation/composition selection (16 targets) | 87 passed; 2 baseline-confirmed failures |
+| Final engine and native consumer checks | Passed without warnings |
+| Native separation rebuilt against the final engine | 4 passed |
+| Established engine Clippy policy | Passed; no new allowances |
+| Final foundation unit filter | 15 passed (5 runtime tests plus 10 matching policy tests) |
+| Final post-RCM5 scheduler/rate/timeout/parallel/fork smoke | 25 passed (repeat coverage) |
+| Portable CLI contracts | 17-file shard passed |
+| Recursive source/API/fixture/boxing guards | 12 passed |
+| TypeScript checking and Rust formatting | Passed |
+| Compensation, infrastructure-policy, output source verifiers | Passed |
+| Developer book and regenerated source atlas | Passed; 1,655 files, 77 pages, 3,151 local links |
+
+The two phase selections overlap (notably iteration coverage); do not treat
+their counts as distinct tests. RCM5 used `--no-fail-fast` so its known failed
+targets did not hide the remaining tests. RCM4's remaining targets were run
+separately after Cargo stopped at its failed target.
+
+RCM4 targets: `for_each_recovery`, `for_each_runtime`,
+`fork_control_flow_runtime`, `fork_failure_runtime`, `fork_join_all_runtime`,
+`fork_join_modes_runtime`, `fork_recovery_runtime`, `parallel_failures`,
+`parallel_recovery`, `parallel_runtime`, `policy_scheduler`, `rate_limits`,
+`workflow_timeouts`.
+
+RCM5 targets: `cancellation_runtime`, `compensation_runtime`,
+`compensation_store`, `core_contract_paths`, `for_each_recovery`,
+`for_each_runtime`, `lifecycle_authority`, `lifecycle_notifications`,
+`lifecycle_runtime`, `module_recovery`, `remote_worker_attempt`,
+`retry_composition`, `reusable_lifecycle_events`, `services_composition`,
+`step_lifecycle`, `workflow_call_composition`.
+
+### Baseline failures, not a green-release claim
+
+Three distinct failures were observed. None was skipped, reclassified as a
+passing test, or hidden with a timeout/schema/expected-result change:
+
+1. `lifecycle_authority::model_v11_maps_to_event_v10_while_current_store_is_v14`
+   expects store version 15 while the existing constant is 20. It failed before
+   this phase's extraction and again afterward. This is the earlier recorded
+   stale-version assertion; its other compatibility checks remain unchanged.
+2. `parallel_recovery::wait_all_resumes_pending_siblings_after_a_recorded_failure_then_fails_the_group`
+   returns a durable contract error: `Parallel completion for "fieldData" does
+   not match its durable child outcomes.`, instead of the expected
+   `ParallelFailed`. The test's panic message now includes the actual error;
+   its assertion is unchanged. An independent `git archive` of the exact
+   pre-RCM4 commit reproduced the same error using cached dependencies and
+   the same single-job command. No source rollback or branch switch was used.
+3. `workflow_call_composition::nested_cross_process_calls_compose_with_branch_and_parallel_targets`
+   records `WOML_WORKFLOW_TARGET_UNAVAILABLE` / `The durable workflow call
+   authority is unavailable.` for `requestRisk`. The extracted source failed
+   twice; the archived pre-RCM4 commit independently produced the same failed
+   run and capability failure. This establishes that it is not introduced by
+   RCM4/RCM5; it does not establish whether its deeper cause is a baseline defect
+   or a local cross-process/environment limitation.
+
+The isolated historical checks used a temporary archive under `/tmp`, sharing
+the existing target cache and CLI dependencies. The primary working tree and
+user changes stayed intact. The only test code change is diagnostic detail
+for the parallel failure. These findings need separate investigation rather
+than an algorithm fix buried in a large refactor.
+
+macOS/Windows, actual-addon export loading, installed release-package journeys,
+and release performance budgets remain CI gates. The local developer book
+now explains each new owner and why it exists, and its teaching/source routes
+and atlas match these modules. That book remains ignored according to the
+user's existing `.gitignore`; neither that rule nor unrelated roadmaps changed.
+The next extraction is RCM6 (durable opening, schema, and migrations).
