@@ -1,4 +1,4 @@
-# Rust core modularization: RCM0–RCM9 verification
+# Rust core modularization: RCM0–RCM11 verification
 
 This is an internal refactor, not a language, schema, or runtime revision.
 Branch: `refactor/rust-core-modularization`. Baseline source:
@@ -844,3 +844,160 @@ executed platform coverage. macOS/Windows, actual-addon export loading,
 installed-package journeys and full performance/security release gates remain
 unrun locally for these phases. No commit or push was made. The next planned
 implementation phase is RCM10, capability authority and process supervision.
+
+## RCM10 and RCM11: capability, process, and artifact ownership
+
+These phases start from committed RCM8/RCM9 revision `a99d1fa` on
+`refactor/rust-core-modularization`. The exact revision, source hashes, public
+inventories, production declaration fingerprints, and original test bodies
+are frozen in [rcm10-baseline.json](rcm10-baseline.json). No dependency, schema,
+language, protocol, native export, or retry-policy revision is introduced.
+
+### RCM10: lookup is not permission; supervision is not replay safety
+
+`capability.rs` is now a stable 50-line facade. Its private modules retain
+these distinct responsibilities:
+
+| Owner | Responsibility and preserved boundary |
+|---|---|
+| `contracts.rs`, `handler.rs` | Frozen call/result/descriptor shapes, Serde behavior, constants and handler defaults. A valid request is not permission to invoke it. |
+| `registry.rs`, `validation.rs` | Handler selection, contract/version/input/result checks, safe metadata, bounded timeout/cancellation/crash supervision. This is not a second durable authority. |
+| `concurrency.rs`, `cancellation.rs` | Existing invocation/global permit accounting, Drop release, shared atomics and cooperative cancellation notification. No new queue or synchronization primitive. |
+| `authority.rs`, `identity.rs`, `policy.rs` | Exact active attempt/lifecycle/iteration/correction identity, stable operation key, current locks, trusted policy evidence, managed operation start and terminal facts. Start-before-effect and settlement-before-return ordering are unchanged. |
+| `native_fetch.rs` | Frozen observations of fetch performed by Bun, durable observation checks and closure. Observation does not turn the operation into replayable managed I/O. |
+| `operational_output.rs` | Authorized, redacted operational records and progress snapshots, separate from authoritative workflow events. |
+| `failures.rs`, `test_handler.rs` | Existing safe envelopes and the existing deterministic exported test capability. |
+
+`process.rs` is a stable 69-line facade. Contracts, prepared policy, request
+validation, executable identity, handler authorization, live execution,
+environment bootstrap, containment, platform operations, output draining,
+incremental redaction, and failures have named private homes. The common
+containment owner still delegates to Unix process groups or Windows Jobs;
+the OS-specific functions live in `platform/unix.rs` and `platform/windows.rs`.
+
+The extraction preserves canonical executable pinning and replacement checks,
+literal argument arrays, cwd containment, policy-only application environment,
+and the Windows kernel-derived `SystemRoot` exception after `env_clear()`.
+It retains Job kill-on-close/handle ownership, Unix group signals, cancellation,
+timeout, normal leader-exit and dropped-future cleanup. Concurrent pipe readers
+still drain after retained capture fills; redaction keeps split-secret and
+incomplete UTF-8 state. Operational-output authority failure still terminates
+the supervised tree rather than silently continuing unobserved.
+
+The original process tests moved to `process/tests.rs`. The enclosing filter
+`process::tests` and exact `process::tests::fixture_child` subprocess entrypoint
+are preserved. Only relative fixture include paths/imports changed; the
+assertions, attributes, test bodies and Windows-only case remain frozen.
+The RCM10 checkpoint passed all 24 Linux process tests and 21 capability,
+native-fetch and infrastructure-policy-authority integration tests **before**
+artifact implementation moved.
+
+### RCM11: the ledger decides access; backends preserve bytes
+
+`artifacts.rs` is a stable 93-line facade. The existing backend trait is
+retained, not replaced with a universal filesystem framework:
+
+| Owner | Responsibility and preserved boundary |
+|---|---|
+| `contracts.rs`, `policy.rs` | Public reference/request/inspection shapes, operator modes/limits, prepared roots and local/S3 configuration, symbolic credentials and safe debugging. |
+| `store.rs`, `schema.rs` | Managed store binding, selected database opening, original artifact DDL/version checks and store identity. No new metadata database or schema bump. |
+| `authorization.rs` | Run grant, status, expiry and exact supplied-reference equality before backend content use. Digest knowledge and blob existence are not authorization. |
+| `transfer.rs`, `filesystem.rs` | Stable operation receipts, source containment/reparse/identity checks, scanning, quotas, publication and logical settlement. |
+| `backend/{mod,local,s3}.rs` | Existing verified-byte interface, local/S3 publication, deduplication, integrity, inventory and store binding; staged-file and temporary-blob Drop ownership. |
+| `handlers/{put,read}.rs` | Validated identity-bound capability calls, transfer concurrency, timeout/cancellation and safe metadata. |
+| `materialization.rs` | Authorized invocation-private copies, byte/digest limits, cancellation, private `.part` files, sync/publication/final verification and cleanup. |
+| `maintenance.rs` | Bounded retention, scrub and orphan passes protecting active access and unreleased rich-review pins. |
+| `backup.rs`, `inspection.rs` | Metadata-derived verified inventory, supported export/restore/verification, bounded inspection, explicit destination-safe export and audit. |
+| `output.rs` | Explicit bounded redacted operational-output rollover, ordered settlement and artifact publication. Denial does not create an alternate stage. |
+| `validation.rs`, `identity.rs`, `failures.rs` | Strict requests/names/content types, existing identifiers/digests and unchanged safe failures. |
+
+Transfer-start bookkeeping and later settlement keep their original separate
+transactions. `put_started` still publishes backend bytes inside its metadata
+settlement transaction before writing the successful logical relationships
+and committing. SQLite cannot roll back already-published remote/local bytes:
+a failed commit may leave an orphan, never invented logical success. Likewise,
+maintenance commits logical removal before deleting unreachable bytes. No
+extraction turned these boundaries into a claimed distributed transaction.
+
+All original artifact tests moved into focused `tests/` modules for publication,
+references/materialization, lifecycle, backup, backend conformance, operator
+inspection/budgets and output. Shared fixtures and the controlled local S3
+server live in `tests/mod.rs`. The existing `artifacts::tests` CI filter still
+discovers all cases. Individual artifact case paths now include their focused
+module; no script invokes them by an old exact path. All 16 tests pass,
+including both-backend conformance, corrupt/foreign/expired references,
+partial-file cancellation, verified backup, active-run/review protection,
+bounded maintenance and output rollover. The controlled S3 fixture is not
+certification of every real S3-compatible provider.
+
+### Preservation, source verifiers, and developer navigation
+
+The persistent Bun guard matches **all 422 original production declarations**:
+99 capability, 103 process, and 220 artifact declarations/methods. It retains
+literal contents, SQL, attributes and statement order; only formatting,
+trailing commas and documented family-private visibility are normalized.
+It also matches 65 original test/helper declarations, normalizing only fixture
+include relocation in addition to formatting. This includes the Windows-only
+process case, which cannot execute in this Linux environment. Earlier durable,
+runtime, fixture, boxing, public API and native-name guards remain intact.
+
+Three new compile-only `core_contract_paths` cases cover public capability,
+process and artifact types, root/direct-module type identity where originally
+exported, constants, traits and free-function paths. Generic artifact functions
+are checked through typed closures that are never invoked; an API-path test
+must not perform artifact I/O or maintenance. All 12 contract-path cases pass.
+
+The artifact release verifier now uses the established owned-tree Rust reader
+instead of reading only the facade. Its required markers and forbidden
+telemetry assertions are unchanged. Process/policy/streaming verifiers retain
+their assertions and configured platform/native-target inventories. Passing
+these source checks is not the same as executing installed platform packages.
+
+The codebase-documenter workflow guided the ignored local book updates:
+registry versus permit-office explanations; process policy, cleared environment,
+platform containment, draining and redaction; artifact ledger versus warehouse,
+publication/orphan boundaries and cleanup; concrete source-reading routes and
+focused test locations. Architecture, services, policies, streaming, recovery,
+schema and responsibility maps, beginner story, edition inventory and atlas
+were updated together. The existing book ignore rule is unchanged, and no
+unrelated roadmaps were modified or force-added.
+
+### Verification scope
+
+One Cargo command and one build job run at a time, with serial durable/process
+tests, locked offline dependencies, and dev debug/incremental output disabled.
+No release/native-addon rebuild, package installation or dependency update was
+performed. The original Windows x64/ARM64 and Unix packaged containment and
+artifact lanes remain required CI/release verification, along with real
+macOS/Windows filesystem and process behavior. RCM14 remains pending.
+
+| Check | Local result |
+|---|---|
+| Before extraction: process/artifact units and capability/fetch/policy authority | 61 passed |
+| RCM10 process/authority checkpoint | 45 passed |
+| RCM11 full artifact unit/conformance filter | 16 passed |
+| Final rebuilt process/artifact unit filters | 40 passed (24 process, 16 artifacts) |
+| Native separation rebuilt against the final engine | 4 passed; build without warnings |
+| Expanded root/direct-module contract-path tests | 12 passed |
+| Final capability/artifact/output/worker/review/backup/retention integration selection | 86 passed across 10 targets |
+| Production/test-body/API/DDL/fixture/boxing/native-name/source-reader/architecture guards | 16 passed |
+| Portable CLI contracts | 17-file shard passed |
+| TypeScript and ten affected source verifiers | Passed |
+| Established engine Clippy policy | Passed without new allowances |
+| Rust formatting and diff validation | Passed |
+| Ignored book/atlas validation | Passed; 1,790 source files, 77 pages, 3,510 local links |
+
+The final integration targets were `core_contract_paths`, `capability_authority`,
+`native_fetch`, `infrastructure_policy_authority`, `operational_output_store`,
+`services_script_host_v4`, `remote_worker_attempt`, `backup_restore`, `retention`,
+and `rich_plan_approval_authority`, run with `--no-fail-fast`. The 17 output-store
+cases cover ordering, bounded records, retention, recovery and publication
+budgets; artifact unit cases separately check governed rollover. The authority tests include both rejected
+calls that never reach a handler and terminal event commit before returning.
+
+Selections overlap and should not be added as distinct tests. Earlier baseline
+failures documented above remain untouched; these phases do not fix them or
+claim the whole CI matrix is green. No timeout, output/resource limit,
+performance budget, test assertion or Clippy allowance was relaxed. No commit
+or push was made. The next implementation phase is RCM12, the remaining
+feature-family ownership audit.

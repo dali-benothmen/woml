@@ -1206,3 +1206,217 @@ fn durable_contract_paths_remain_available() {
   let _ = woml_engine::durable::MAX_MODULE_ARTIFACT_BYTES;
   let _ = woml_engine::durable::MAX_MODULE_ARTIFACT_SET_BYTES;
 }
+
+#[test]
+fn capability_contract_paths_remain_available() {
+  let _ = std::any::type_name::<woml_engine::capability::CapabilityIdentityMode>();
+  let _ = std::any::type_name::<woml_engine::capability::CapabilityCallIdentity>();
+  let _: fn(
+    woml_engine::CapabilityCallIdentity,
+  ) -> woml_engine::capability::CapabilityCallIdentity = |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::CapabilityCallLimits>();
+  let _: fn(woml_engine::CapabilityCallLimits) -> woml_engine::capability::CapabilityCallLimits =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::CapabilityCallRequest>();
+  let _: fn(woml_engine::CapabilityCallRequest) -> woml_engine::capability::CapabilityCallRequest =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::CapabilityFailureKind>();
+  let _: fn(woml_engine::CapabilityFailureKind) -> woml_engine::capability::CapabilityFailureKind =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::CapabilityFailure>();
+  let _: fn(woml_engine::CapabilityFailure) -> woml_engine::capability::CapabilityFailure =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::CapabilityCallSucceeded>();
+  let _ = std::any::type_name::<woml_engine::capability::CapabilityCallFailed>();
+  let _ = std::any::type_name::<woml_engine::capability::CapabilityCallResult>();
+  let _: fn(woml_engine::CapabilityCallResult) -> woml_engine::capability::CapabilityCallResult =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::CapabilityEffect>();
+  let _: fn(woml_engine::CapabilityEffect) -> woml_engine::capability::CapabilityEffect =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::CapabilityDescriptor>();
+  let _: fn(woml_engine::CapabilityDescriptor) -> woml_engine::capability::CapabilityDescriptor =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::CapabilityCancellationToken>();
+  let _: fn(
+    woml_engine::CapabilityCancellationToken,
+  ) -> woml_engine::capability::CapabilityCancellationToken = |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::CapabilityRegistryError>();
+  let _: fn(
+    woml_engine::CapabilityRegistryError,
+  ) -> woml_engine::capability::CapabilityRegistryError = |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::CapabilityRegistry>();
+  let _: fn(woml_engine::CapabilityRegistry) -> woml_engine::capability::CapabilityRegistry =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::DurableCapabilityAuthorityError>();
+  let _: fn(
+    woml_engine::DurableCapabilityAuthorityError,
+  ) -> woml_engine::capability::DurableCapabilityAuthorityError = |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::NativeFetchInvocationIdentity>();
+  let _: fn(
+    woml_engine::NativeFetchInvocationIdentity,
+  ) -> woml_engine::capability::NativeFetchInvocationIdentity = |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::NativeFetchFailureKind>();
+  let _: fn(
+    woml_engine::NativeFetchFailureKind,
+  ) -> woml_engine::capability::NativeFetchFailureKind = |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::NativeFetchFailure>();
+  let _: fn(woml_engine::NativeFetchFailure) -> woml_engine::capability::NativeFetchFailure =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::NativeFetchObservation>();
+  let _: fn(
+    woml_engine::NativeFetchObservation,
+  ) -> woml_engine::capability::NativeFetchObservation = |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::DurableCapabilityAuthority>();
+  let _: fn(
+    woml_engine::DurableCapabilityAuthority,
+  ) -> woml_engine::capability::DurableCapabilityAuthority = |value| value;
+  let _ = std::any::type_name::<woml_engine::capability::TestCapabilityHandler>();
+  let _: fn(woml_engine::TestCapabilityHandler) -> woml_engine::capability::TestCapabilityHandler =
+    |value| value;
+  let _ = woml_engine::capability::CAPABILITY_CALL_CONTRACT;
+  let _ = woml_engine::capability::CAPABILITY_CALL_CONTRACT_VERSION;
+  let _ = woml_engine::capability::DEFAULT_CAPABILITY_INPUT_BYTES;
+  let _ = woml_engine::capability::DEFAULT_CAPABILITY_RESULT_BYTES;
+  let _ = woml_engine::capability::DEFAULT_CAPABILITY_FRAME_BYTES;
+  let _ = woml_engine::capability::DEFAULT_CAPABILITY_TIMEOUT_MS;
+  let _ = woml_engine::capability::MAX_CAPABILITY_TIMEOUT_MS;
+  let _ = woml_engine::capability::DEFAULT_CAPABILITY_IN_FLIGHT_PER_INVOCATION;
+  let _ = woml_engine::capability::DEFAULT_CAPABILITY_IN_FLIGHT_GLOBAL;
+  let _ = woml_engine::capability::NATIVE_FETCH_OBSERVATION_CONTRACT;
+  let _ = woml_engine::capability::NATIVE_FETCH_OBSERVATION_CONTRACT_VERSION;
+  let _ = woml_engine::capability::derive_operation_key;
+  let _ = woml_engine::capability::validate_safe_metadata;
+  let _ = woml_engine::capability::capability_transport_failure;
+  let _: Option<&dyn woml_engine::capability::CapabilityHandler> = None;
+}
+
+#[test]
+fn process_contract_paths_remain_available() {
+  let _ = std::any::type_name::<woml_engine::process::ProcessRuntimeMode>();
+  let _: fn(woml_engine::ProcessRuntimeMode) -> woml_engine::process::ProcessRuntimeMode =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::process::ProcessPolicyV1>();
+  let _: fn(woml_engine::ProcessPolicyV1) -> woml_engine::process::ProcessPolicyV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::process::ProcessPolicyModes>();
+  let _: fn(woml_engine::ProcessPolicyModes) -> woml_engine::process::ProcessPolicyModes =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::process::ProcessPolicyExecutable>();
+  let _: fn(woml_engine::ProcessPolicyExecutable) -> woml_engine::process::ProcessPolicyExecutable =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::process::ProcessPolicyEnvironment>();
+  let _: fn(
+    woml_engine::ProcessPolicyEnvironment,
+  ) -> woml_engine::process::ProcessPolicyEnvironment = |value| value;
+  let _ = std::any::type_name::<woml_engine::process::ProcessPolicyLimits>();
+  let _: fn(woml_engine::ProcessPolicyLimits) -> woml_engine::process::ProcessPolicyLimits =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::process::ProcessPolicyError>();
+  let _: fn(woml_engine::ProcessPolicyError) -> woml_engine::process::ProcessPolicyError =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::process::ManagedProcessHandler>();
+  let _: fn(woml_engine::ManagedProcessHandler) -> woml_engine::process::ManagedProcessHandler =
+    |value| value;
+  let _ = woml_engine::process::PROCESS_CONTRACT;
+  let _ = woml_engine::process::PROCESS_CONTRACT_VERSION;
+  let _ = woml_engine::process::PROCESS_CONTRACT_VERSION_V2;
+  let _ = woml_engine::process::PROCESS_POLICY_CONTRACT;
+  let _ = woml_engine::process::PROCESS_POLICY_CONTRACT_VERSION;
+}
+
+#[test]
+fn artifacts_contract_paths_remain_available() {
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactRuntimeMode>();
+  let _: fn(woml_engine::ArtifactRuntimeMode) -> woml_engine::artifacts::ArtifactRuntimeMode =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactPolicyV1>();
+  let _: fn(woml_engine::ArtifactPolicyV1) -> woml_engine::artifacts::ArtifactPolicyV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactOperationalOutputPolicy>();
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactPolicyModes>();
+  let _: fn(woml_engine::ArtifactPolicyModes) -> woml_engine::artifacts::ArtifactPolicyModes =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactMaterializationPolicy>();
+  let _: fn(
+    woml_engine::ArtifactMaterializationPolicy,
+  ) -> woml_engine::artifacts::ArtifactMaterializationPolicy = |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactLimits>();
+  let _: fn(woml_engine::ArtifactLimits) -> woml_engine::artifacts::ArtifactLimits = |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactRetentionPolicy>();
+  let _: fn(
+    woml_engine::ArtifactRetentionPolicy,
+  ) -> woml_engine::artifacts::ArtifactRetentionPolicy = |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::KnownSecretAction>();
+  let _: fn(woml_engine::KnownSecretAction) -> woml_engine::artifacts::KnownSecretAction =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactSecretScanningPolicy>();
+  let _: fn(
+    woml_engine::ArtifactSecretScanningPolicy,
+  ) -> woml_engine::artifacts::ArtifactSecretScanningPolicy = |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactBackendPolicy>();
+  let _: fn(woml_engine::ArtifactBackendPolicy) -> woml_engine::artifacts::ArtifactBackendPolicy =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactReferenceV1>();
+  let _: fn(woml_engine::ArtifactReferenceV1) -> woml_engine::artifacts::ArtifactReferenceV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactMaintenanceV1>();
+  let _: fn(woml_engine::ArtifactMaintenanceV1) -> woml_engine::artifacts::ArtifactMaintenanceV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactBackupInventoryV1>();
+  let _: fn(
+    woml_engine::ArtifactBackupInventoryV1,
+  ) -> woml_engine::artifacts::ArtifactBackupInventoryV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactInspectionV1>();
+  let _: fn(woml_engine::ArtifactInspectionV1) -> woml_engine::artifacts::ArtifactInspectionV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactProvenanceV1>();
+  let _: fn(woml_engine::ArtifactProvenanceV1) -> woml_engine::artifacts::ArtifactProvenanceV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactRunInspectionV1>();
+  let _: fn(
+    woml_engine::ArtifactRunInspectionV1,
+  ) -> woml_engine::artifacts::ArtifactRunInspectionV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactExportV1>();
+  let _: fn(woml_engine::ArtifactExportV1) -> woml_engine::artifacts::ArtifactExportV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactObservationV1>();
+  let _: fn(woml_engine::ArtifactObservationV1) -> woml_engine::artifacts::ArtifactObservationV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ArtifactPolicyError>();
+  let _: fn(woml_engine::ArtifactPolicyError) -> woml_engine::artifacts::ArtifactPolicyError =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ManagedArtifactStore>();
+  let _: fn(woml_engine::ManagedArtifactStore) -> woml_engine::artifacts::ManagedArtifactStore =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ManagedArtifactPutHandler>();
+  let _: fn(
+    woml_engine::ManagedArtifactPutHandler,
+  ) -> woml_engine::artifacts::ManagedArtifactPutHandler = |value| value;
+  let _ = std::any::type_name::<woml_engine::artifacts::ManagedArtifactReadHandler>();
+  let _ = woml_engine::artifacts::ARTIFACTS_CONTRACT;
+  let _ = woml_engine::artifacts::ARTIFACTS_CONTRACT_VERSION;
+  let _ = woml_engine::artifacts::ARTIFACT_POLICY_CONTRACT;
+  let _ = woml_engine::artifacts::ARTIFACT_POLICY_CONTRACT_VERSION;
+  // These closures are compiled, never invoked: the check must not open a
+  // database, publish bytes, or run maintenance just to verify an API path.
+  let _ = |path: std::path::PathBuf, policy, mode, secrets, now, dry_run| {
+    woml_engine::artifacts::maintain_artifacts(path, policy, mode, secrets, now, dry_run)
+  };
+  let _ = |path: std::path::PathBuf, id| woml_engine::artifacts::inspect_artifact(path, id);
+  let _ = |path: std::path::PathBuf, run| woml_engine::artifacts::inspect_run_artifacts(path, run);
+  let _ = |path: std::path::PathBuf, destination: std::path::PathBuf, id, policy, mode, secrets| {
+    woml_engine::artifacts::export_artifact(path, destination, id, policy, mode, secrets)
+  };
+  let _ = |path: std::path::PathBuf, policy, mode, secrets| {
+    woml_engine::artifacts::observe_artifacts(path, policy, mode, secrets)
+  };
+  let _ = |path: std::path::PathBuf, destination: std::path::PathBuf, policy, mode, secrets| {
+    woml_engine::artifacts::export_artifact_backup(path, destination, policy, mode, secrets)
+  };
+  let _ = |path: std::path::PathBuf, source: std::path::PathBuf, policy, mode, secrets| {
+    woml_engine::artifacts::restore_artifact_backup(path, source, policy, mode, secrets)
+  };
+  let _ = |path: std::path::PathBuf, source: std::path::PathBuf| {
+    woml_engine::artifacts::verify_artifact_backup(path, source)
+  };
+}
