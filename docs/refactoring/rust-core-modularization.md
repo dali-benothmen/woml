@@ -1,4 +1,4 @@
-# Rust core modularization: RCM0 baseline and RCM1 gates
+# Rust core modularization: RCM0–RCM3 verification
 
 This is an internal refactor, not a language, schema, or runtime revision.
 Branch: `refactor/rust-core-modularization`. Baseline source:
@@ -150,3 +150,148 @@ the atlas includes explicitly reviewed additions without staging unrelated
 notes. The user's `developer-book/` ignore rule is preserved. Cross-platform
 release execution, installed-package journeys, actual rebuilt-addon export
 loading, and the full remaining feature matrix were not run locally.
+
+## RCM2: graph decisions and validated projection
+
+This phase starts from `2c485abca716b7bf7c5c9cc1aca02bbf61a361c7`, the
+committed RCM0/RCM1 implementation. The additional
+[execution API baseline](rcm2-baseline.json) was captured before extraction;
+the new compile-time path checks also passed against the original files.
+It freezes 2 engine, 46 projection, and 27 runtime public types, 16 public
+functions, 6 constants, and the `EngineClock` trait. Public root exports and
+direct-module imports remain as before; private children are not public APIs.
+
+| Responsibility | Private owner |
+|---|---|
+| Graph readiness, active routes, completion | `engine/readiness.rs` |
+| Branch/choice evaluation and diagnostics | `engine/routing.rs` |
+| Context-reference lookup | `engine/context.rs` |
+| Definition-bound payload/scoped validation | `engine/validation.rs` |
+| Prefix-history checks and their cross-event rules | `engine/history.rs` |
+| Stable effect identity | `engine/identity.rs` |
+| Projected context/status/feature shapes | `projection/{context,run,attempts,control_flow,...}.rs` |
+| Global sequence/identity/version/terminal gate and exhaustive dispatch | `projection/fold.rs` |
+| Typed feature transition handlers | `projection/fold_*.rs` |
+| Scoped iteration fold | `projection/iteration_fold.rs` |
+| Shared transition preconditions | `projection/guards.rs` |
+
+The in-memory engine remains in its public facade. It validates the candidate
+history against its definition before appending. The fold's 77 extracted
+transition bodies receive typed borrowed payloads behind one exhaustive
+dispatch, not a second permissive event decoder. The remote transition stays
+the original projection no-op: durable dispatch authority still owns that
+state. Iteration dispatch still passes through the common gate first.
+
+`ProjectionFoldState::apply` itself is not transactional. It may change a
+candidate before rejecting an event. `InMemoryEventStore::append` still clones
+the cache, applies to the candidate, and publishes history, IDs, and projection
+only on success. Durable commit/cache boundaries were not moved. New graph
+tests reject global gate drift and invalid feature transitions, then reuse the
+rejected ID for a valid append to prove committed context and indexes remain
+usable. Existing prefix-history, fork, parallel, choice, and retry tests retain
+their entrypoints.
+
+## RCM3: foundations and ordinary script invocation
+
+| Responsibility | Private owner |
+|---|---|
+| Clock contract and implementations | `runtime/clock.rs` |
+| Options, reviewed settings, and safe debugging | `runtime/options.rs` |
+| Explicit built-in registration and durable capability attachment | `runtime/composition.rs` |
+| Script-host pool acquisition, return, retirement, and shutdown | `runtime/script_host_pool.rs` |
+| Attempt-local artifact cleanup guard | `runtime/cleanup.rs` |
+| Public outcomes and errors | `runtime/outcomes.rs`, `runtime/errors.rs` |
+| Progress contracts and delivery helpers | `runtime/progress.rs` |
+| Stored module recovery and module validation | `runtime/modules.rs` |
+| Node context snapshots, declared secrets, reusable bindings | `runtime/context.rs` |
+| Ordinary invocation, placement guard, interruption, failure settlement | `runtime/script_execution.rs` |
+
+`runtime.rs` retains execution/resume entrypoints, policy coordination,
+continuation and control-flow algorithms, lifecycle/correction orchestration,
+and engine adapters for RCM4, RCM5, and RCM9. This is intentionally not the
+completion of runtime modularization. The in-memory and durable adapters
+still share the existing private `RuntimeDagEngine` interface.
+
+The composition helper preserves construction and registration order. Its
+small typed resource bundle transfers the same owned `Arc`s back to the
+options constructor; it is not a new generic capability framework. Process,
+artifacts, output, and durable authority retain their existing opt-in/lazy
+boundaries. Private options fields and helpers needed by siblings become
+`pub(super)` within the private runtime tree, not `pub` or newly crate-wide.
+Host pool mutexes, cancellation flags, deadlines, `Box::pin` boundaries,
+cleanup drop order, and exact invocation/attempt identity are unchanged.
+
+Context construction has separate owners: projection proves completed
+results; callers choose the appropriate fork opening snapshot; compiled
+visibility filters node inputs; protocol constructors attach iteration or
+correction-specific bindings. Moving these helpers does not grant a sibling's
+result merely because it finished earlier. The developer book's context deep
+dive and execution reading map now link to these implementation owners.
+
+The Compensation and Cleanup release reader now reads Rust facades together
+with their owned private trees, as the policy and output verifiers already
+do. Its required and forbidden assertions were not weakened or satisfied by
+adding marker comments. Existing native and package export lists are unchanged.
+
+A one-time source audit compared 455 original declaration/method token streams
+and all 77 extracted transition bodies against the committed base. It allows
+parent-only visibility and formatting; both transition bodies were normalized
+with rustfmt to account for single-expression closure wrapping. Inlining the
+registration helper reproduces the constructor's original token order. This
+audit is supporting evidence, not a substitute for executable regression tests.
+
+### Verification scope
+
+All local Cargo commands use one job, disabled dev debug/incremental output,
+locked offline dependencies, and serial tests. The focused pre-extraction
+baseline passed 21 tests (`core_contract_paths`, `dag_engine`). After extraction,
+the planned 11-target RCM2/RCM3 regression set passed 72 tests; the foundation
+unit filter passed 15 tests (5 new runtime tests and 10 existing infrastructure
+policy tests also matched by the filter).
+
+The 17-file CLI contract shard passed with ordinary workspace write access;
+its first sandboxed run rejected the existing editor-types write with EROFS.
+No CLI behavior was changed to hide that environment restriction. The focused
+Bun source/API/fixture guards passed 11 tests, TypeScript checking passed, and
+the policy, compensation, and streaming-output source release verifiers passed
+with their original assertions. Broader feature/native/lint results are
+recorded below.
+
+| Check | RCM2/RCM3 local result |
+|---|---|
+| Planned compatibility/graph/script/services/worker set (11 targets) | 72 passed |
+| Broader cancellation/store/wait/loop/fork/lock/notification/parallel/retry/review set (18 targets) | 126 passed; 1 unchanged stale-version assertion failed |
+| Foundation unit filter | 15 passed, including all 5 new runtime tests |
+| Native separation rebuilt against the final engine | 4 passed |
+| Final post-format API/DAG/iteration smoke rerun | 30 passed (repeat coverage) |
+| Portable CLI contract shard | 96 tests across 17 files passed |
+| Recursive source/API/native-name/fixture guards | 11 passed |
+| Established engine Clippy policy | Passed; no new lint allowances |
+| TypeScript and Rust formatting | Passed |
+| Policy, compensation, streaming-output source release verifiers | Passed |
+| Ignored developer book and regenerated atlas | Passed; 1,627 files, 77 pages, 3,077 local file links |
+
+The known broader-suite failure is
+`lifecycle_authority::model_v11_maps_to_event_v10_while_current_store_is_v14`:
+line 90 asserts `DURABLE_STORE_SCHEMA_VERSION == 15`, while the existing
+`durable.rs` constant is 20. Both the assertion and the constant are unchanged
+from `2c485ab`; their files have no diff in these phases. Eight other tests in
+that target passed. The failure was not skipped in its run, and neither the
+schema nor the assertion was changed to make this refactor look green. Review
+that historical test separately (including its misleading name), preserving
+its model-v11/event-v10 compatibility checks. Cargo stopped at this target;
+the remaining eight targets were run in a separate command and all 55 passed.
+
+The public engine facade is now 209 lines (from 3,069); projection is a
+114-line facade (from 3,919), with its global gate/dispatch in a 340-line file.
+Runtime is 11,858 lines (from 14,065) because later orchestration phases are
+intentionally still pending. There are 42 new private Rust files, including
+the five-test foundation module. File-size changes are navigation evidence,
+not a claim of improved execution performance.
+
+macOS/Windows, release/native rebuilds and actual-addon export loading,
+installed-package journeys, and release performance budgets remain CI gates.
+No schema, dependency, serialized fixture, native export, or budget baseline
+is intentionally changed by these phases. The ignored developer book is
+updated locally; the user's ignore rule and unrelated roadmap notes remain
+untouched.

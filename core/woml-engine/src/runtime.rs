@@ -1,936 +1,255 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::future::{poll_fn, Future};
-use std::path::{Path, PathBuf};
+//! Stable runtime entrypoints and scheduling orchestration.
+//!
+//! Foundations and ordinary script invocation live in private children. Policy
+//! claims, continuation, control-flow families, correction, and engine adapters
+//! deliberately remain here for their separate modularization phases.
+
+use futures_util::StreamExt;
+
+mod cleanup;
+mod clock;
+mod composition;
+mod context;
+mod errors;
+mod modules;
+mod options;
+mod outcomes;
+mod progress;
+mod script_execution;
+mod script_host_pool;
+
+#[cfg(test)]
+mod tests;
+
+use cleanup::ArtifactInvocationCleanup;
+pub use clock::{EngineClock, FixedEngineClock, SystemEngineClock};
+use composition::{
+  attach_durable_capability_authority, register_builtin_capabilities, BuiltinCapabilityResources,
+};
+use context::{
+  lock_descriptor_for_body_node, resolve_json_path, resolved_reusable_descriptor_secrets,
+  resolved_script_secrets, reusable_definition_binding, reusable_definition_binding_for_iteration,
+  reusable_step_binding, reusable_step_binding_for_iteration, runtime_context_for_node,
+};
+pub use errors::{
+  BranchFailureSite, CancelledRunDetails, FailedApprovalDetails, FailedBranchDetails,
+  FailedNotificationDetails, FailedParallelDetails, FailedRunDetails, RuntimeExecutionError,
+};
+pub use modules::RuntimeModuleArtifact;
+use modules::{
+  reusable_lifecycle_artifact_name, runtime_modules_from_store, validate_runtime_modules,
+};
+pub use options::RuntimeExecutionOptions;
+pub use outcomes::{
+  WaitingRichApprovalAuthority, WaitingWorkflowApproval, WaitingWorkflowSignal,
+  WaitingWorkflowTimer, WorkflowExecutionResult, WorkflowRuntimeOutcome, RUNTIME_OUTCOME_CONTRACT,
+  RUNTIME_OUTCOME_VERSION,
+};
+use progress::{
+  report_attempt_failed, report_attempt_succeeded, report_for_each_progress,
+  report_retry_scheduled, retry_max_attempts,
+};
+pub use progress::{
+  ExecutionProgress, ExecutionProgressReporter, LifecycleProgress, LifecycleProgressPhase,
+  LifecycleProgressReporter, RuntimePolicyProgress, RuntimePolicyProgressPhase,
+  RuntimePolicyProgressReporter, EXECUTION_PROGRESS_CONTRACT, EXECUTION_PROGRESS_VERSION,
+  LIFECYCLE_PROGRESS_PROFILE, RUNTIME_POLICY_PROGRESS_PROFILE,
+};
+use script_execution::{
+  ensure_local_script_execution, execute_script_node, ScriptNodeOutcome, CANCELLATION_POLL_INTERVAL,
+};
+use script_host_pool::SharedScriptHostPool;
+
+use crate::engine::node_is_complete;
+use crate::engine::resolve_context_reference;
+use crate::engine::selected_branch_arm;
+use crate::engine::selected_choice_arm;
+use crate::engine::step_effect_idempotency_key;
+use crate::engine::BranchEvaluationError;
+use crate::engine::BranchEvaluationErrorKind;
+use crate::event::ApprovalRequestedData;
+use crate::event::ApprovalTimeoutPolicy;
+use crate::event::BranchSelectedData;
+use crate::event::ChoiceSelectedData;
+use crate::event::CompensationRegisteredData;
+use crate::event::CorrectionAttemptFailedData;
+use crate::event::CorrectionAttemptIdentityData;
+use crate::event::CorrectionInterruptedData;
+use crate::event::CorrectionRetryScheduledData;
+use crate::event::CorrectiveActionKind;
+use crate::event::FinalLifecycleStatus;
+use crate::event::ForEachIterationFailedData;
+use crate::event::ForEachIterationFailureKind;
+use crate::event::ForEachIterationIdentityData;
+use crate::event::ForEachIterationScope;
+use crate::event::ForEachIterationSkippedData;
+use crate::event::ForEachIterationSucceededData;
+use crate::event::ForEachOpenedData;
+use crate::event::ForEachSettledData;
+use crate::event::ForEachSkipReason;
+use crate::event::ForkBranchOutcome;
+use crate::event::ForkBranchSettledData;
+use crate::event::ForkJoinOutcome;
+use crate::event::ForkJoinSettledData;
+use crate::event::ForkOpenedData;
+use crate::event::LifecycleActionFailedData;
+use crate::event::LifecycleActionIdentityData;
+use crate::event::LifecycleFailure;
+use crate::event::LifecycleFailureKind;
+use crate::event::LifecycleHookCompletedData;
+use crate::event::LifecycleHookCompletionStatus;
+use crate::event::LifecycleHookRequestedData;
+use crate::event::LifecycleSubject;
+use crate::event::LifecycleSubjectKind;
+use crate::event::ManualRecoveryRequiredData;
+use crate::event::OperationExecutionMode;
+use crate::event::OperationFailedData;
+use crate::event::OperationStartedData;
+use crate::event::OperationSucceededData;
+use crate::event::ParallelFailure;
+use crate::event::ParallelFailurePolicy;
+use crate::event::ParallelGroupCompletedData;
+use crate::event::ParallelGroupOutcome;
+use crate::event::ParallelGroupStartedData;
+use crate::event::RunFailedData;
+use crate::event::RunFailedDataV1;
+use crate::event::RunFailedDataV2;
+use crate::event::RunFailedDataV3;
+use crate::event::RunFinalizedData;
+use crate::event::RunOutcomeDecidedData;
+use crate::event::RunSucceededData;
+use crate::event::SagaCorrectionReason;
+use crate::event::SagaCorrectionStartedData;
+use crate::event::SagaIdentityData;
+use crate::event::StepAttemptFailedData;
+use crate::event::StepAttemptStartedData;
+use crate::event::StepAttemptSucceededData;
+use crate::event::StepRetryScheduledData;
+use crate::model::ApprovalDefinition;
+use crate::model::CompiledCorrectionIdentity;
+use crate::model::CompiledCorrectiveAction;
+use crate::model::CompiledLifecycleAction;
+use crate::model::CompiledReusableInvocation;
+use crate::model::CompiledSaga;
+use crate::model::LifecycleEventName;
+use crate::model::ParallelGroupDefinition;
+use crate::model::TemplatePart;
+use crate::model::ValueExpression;
+use crate::projection::ApprovalRequestStatus;
+use crate::projection::AttemptStatus;
+use crate::projection::ForEachIterationStatus;
+use crate::projection::ForEachStatus;
+use crate::projection::LifecycleActionStatus;
+use crate::projection::LifecycleHookProjection;
+use crate::projection::LifecycleHookStatus;
+use crate::projection::ParallelGroupStatus;
+use crate::projection::ReusableLifecycleStatus;
+use crate::protocol::CleanupBindingV1;
+use crate::protocol::CleanupReasonV1;
+use crate::protocol::CompensationBindingV1;
+use crate::protocol::CompensationStatusV1;
+use crate::protocol::CorrectionBindingRef;
+use crate::protocol::CorrectionReasonV1;
+use crate::protocol::ExecuteMessage;
+use crate::protocol::HostOutcome;
+use crate::protocol::LifecycleBindingV1;
+use crate::protocol::LifecycleFailureBindingV1;
+use crate::protocol::LifecycleStepBindingV1;
+use crate::protocol::LifecycleWorkflowBindingV1;
+use crate::protocol::ReusableInvocationOutcome;
+use crate::protocol::ReusableLifecycleBindingV1;
+use crate::protocol::ReusableLifecycleErrorV1;
+use crate::protocol::ReusableLifecycleHook as ProtocolReusableLifecycleHook;
+use crate::protocol::ReusableScriptBindingV3;
+use crate::protocol::RuntimeModuleBinding;
+use crate::protocol::ScriptAttempt;
+use crate::run_event_schema_version_for_model;
+use crate::ApprovalDecisionOutcome;
+use crate::ApprovalTimeoutSettlement;
+use crate::AttemptFailure;
+use crate::AttemptFailureKind;
+use crate::BoundRichApprovalReview;
+use crate::BranchFailure;
+use crate::CapabilityFailure;
+use crate::CapabilityFailureKind;
+use crate::CompiledWorkflowDefinition;
+use crate::CustomNotificationHostClient;
+use crate::CustomNotificationHostClientError;
+use crate::CustomNotificationHostProcessOptions;
+use crate::CustomNotificationKind;
+use crate::CustomNotificationRequest;
+use crate::CustomProviderAttempt;
+use crate::CustomProviderExecuteMessage;
+use crate::CustomProviderLimits;
+use crate::CustomProviderOutcome;
+use crate::CustomProviderScriptArtifact;
+use crate::DurableDagEngine;
+use crate::DurableEventStore;
+use crate::DurableStoreError;
+use crate::InMemoryDagEngine;
+use crate::InformationalNotificationDeliverMessage;
+use crate::IssuedApprovalToken;
+use crate::NotificationCredentials;
+use crate::NotificationHostClient;
+use crate::NotificationHostClientError;
+use crate::NotificationHostOutcome;
+use crate::OperationStatus;
+use crate::PolicyClaimWaitReason;
+use crate::PolicyExecutionClaimResult;
+use crate::PolicyWaitingFor;
+use crate::RecoveryReport;
+use crate::ReviewerDirectoryAuthorityV1;
+use crate::RichApprovalArtifactVerifier;
+use crate::RichApprovalBindingInput;
+use crate::RichApprovalError;
+use crate::RichApprovalResolutionReason;
+use crate::RunEvent;
+use crate::RunEventPayload;
+use crate::RunFailure;
+use crate::RunProjection;
+use crate::RunStatus;
+use crate::RunTimeoutSettlement;
+use crate::SchedulerClaimV1;
+use crate::ScriptHostClient;
+use crate::ScriptHostClientError;
+use crate::StepFailureDisposition;
+use crate::TriggerAdmissionRequest;
+use crate::WorkflowContext;
+use crate::CUSTOM_NOTIFICATION_PROVIDER_PROTOCOL;
+use crate::CUSTOM_NOTIFICATION_PROVIDER_PROTOCOL_VERSION;
+use crate::INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION;
+use crate::NOTIFICATION_PROVIDER_PROTOCOL;
+use crate::RUN_EVENT_SCHEMA_VERSION_V1;
+use crate::RUN_EVENT_SCHEMA_VERSION_V2;
+use futures_util::stream::FuturesUnordered;
+use serde_json::Map;
+use serde_json::Value;
+use sha2::Digest;
+use sha2::Sha256;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
+use std::future::poll_fn;
+use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::RwLock;
 use std::task::Poll;
 use std::time::Duration;
-
-use futures_util::stream::FuturesUnordered;
-use futures_util::StreamExt;
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
-use thiserror::Error;
 use uuid::Uuid;
-
-use crate::engine::{
-  node_is_complete, resolve_context_reference, selected_branch_arm, selected_choice_arm,
-  step_effect_idempotency_key, BranchEvaluationError, BranchEvaluationErrorKind,
-};
-use crate::event::{
-  ApprovalFailure, ApprovalRequestedData, ApprovalTimeoutPolicy, BranchSelectedData,
-  ChoiceSelectedData, CompensationRegisteredData, CorrectionAttemptFailedData,
-  CorrectionAttemptIdentityData, CorrectionInterruptedData, CorrectionRetryScheduledData,
-  CorrectiveActionKind, FinalLifecycleStatus, ForEachIterationFailedData,
-  ForEachIterationFailureKind, ForEachIterationIdentityData, ForEachIterationScope,
-  ForEachIterationSkippedData, ForEachIterationSucceededData, ForEachOpenedData,
-  ForEachSettledData, ForEachSkipReason, ForkBranchOutcome, ForkBranchSettledData, ForkJoinOutcome,
-  ForkJoinSettledData, ForkOpenedData, LifecycleActionFailedData, LifecycleActionIdentityData,
-  LifecycleFailure, LifecycleFailureKind, LifecycleHookCompletedData,
-  LifecycleHookCompletionStatus, LifecycleHookRequestedData, LifecycleSubject,
-  LifecycleSubjectKind, ManualRecoveryRequiredData, OperationExecutionMode, OperationFailedData,
-  OperationStartedData, OperationSucceededData, ParallelFailure, ParallelFailurePolicy,
-  ParallelGroupCompletedData, ParallelGroupOutcome, ParallelGroupStartedData, RunFailedData,
-  RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunFinalizedData, RunOutcomeDecidedData,
-  RunSucceededData, SagaCorrectionReason, SagaCorrectionStartedData, SagaIdentityData,
-  StepAttemptFailedData, StepAttemptStartedData, StepAttemptSucceededData, StepRetryScheduledData,
-};
-use crate::interval::{IntervalProgress, IntervalProgressReporter};
-use crate::model::{
-  ApprovalDefinition, CompiledCorrectionIdentity, CompiledCorrectiveAction,
-  CompiledLifecycleAction, CompiledReusableInvocation, CompiledSaga, LifecycleEventName,
-  ParallelGroupDefinition, TemplatePart, ValueExpression,
-};
-use crate::projection::{
-  ApprovalRequestStatus, AttemptStatus, ForEachIterationStatus, ForEachStatus,
-  LifecycleActionStatus, LifecycleHookProjection, LifecycleHookStatus, ParallelGroupStatus,
-  ReusableLifecycleStatus,
-};
-use crate::protocol::{
-  CleanupBindingV1, CleanupReasonV1, CompensationBindingV1, CompensationStatusV1,
-  CorrectionBindingRef, CorrectionReasonV1, ExecuteMessage, HostOutcome, LifecycleBindingV1,
-  LifecycleFailureBindingV1, LifecycleStepBindingV1, LifecycleWorkflowBindingV1,
-  ReusableDefinitionBindingV3, ReusableDefinitionKind, ReusableInvocationOutcome,
-  ReusableLifecycleBindingV1, ReusableLifecycleErrorV1,
-  ReusableLifecycleHook as ProtocolReusableLifecycleHook, ReusableScriptBindingV3,
-  RuntimeModuleBinding, ScriptAttempt,
-};
-use crate::schedule::{
-  ScheduleClock, ScheduleProgress, ScheduleProgressReporter, SystemScheduleClock,
-};
-use crate::workflow_calls::WorkflowCallProgressReporter;
-use crate::{
-  run_event_schema_version_for_model, ApprovalDecisionOutcome, ApprovalTimeoutSettlement,
-  AttemptFailure, AttemptFailureKind, BoundRichApprovalReview, BranchFailure, CapabilityFailure,
-  CapabilityFailureKind, CapabilityRegistry, CompiledWorkflowDefinition,
-  CustomNotificationHostClient, CustomNotificationHostClientError,
-  CustomNotificationHostProcessOptions, CustomNotificationKind, CustomNotificationRequest,
-  CustomProviderAttempt, CustomProviderExecuteMessage, CustomProviderLimits, CustomProviderOutcome,
-  CustomProviderScriptArtifact, DurableCapabilityAuthority, DurableDagEngine, DurableEngineError,
-  DurableEventStore, DurableStoreError, EngineError, InMemoryDagEngine,
-  InformationalNotificationDeliverMessage, IssuedApprovalToken, NotificationCredentials,
-  NotificationHostClient, NotificationHostClientError, NotificationHostOutcome,
-  NotificationHostProcessOptions, OperationStatus, PolicyClaimWaitReason,
-  PolicyExecutionClaimResult, PolicyWaitingFor, RecoveryReport, ReviewPayloadV1,
-  ReviewerDirectoryAuthorityV1, RichApprovalArtifactVerifier, RichApprovalBindingInput,
-  RichApprovalError, RichApprovalResolutionReason, RunEvent, RunEventPayload, RunFailure,
-  RunProjection, RunStatus, RunTimeoutSettlement, SchedulerClaimV1, ScriptHostClient,
-  ScriptHostClientError, ScriptHostModuleArtifact, ScriptHostProcessOptions,
-  StepFailureDisposition, TriggerAdmissionRequest, WorkflowContext,
-  CUSTOM_NOTIFICATION_PROVIDER_PROTOCOL, CUSTOM_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
-  INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION, NOTIFICATION_PROVIDER_PROTOCOL,
-  RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
-};
-
-pub trait EngineClock: Send + Sync {
-  fn now(&self) -> chrono::DateTime<chrono::Utc>;
-}
-
-pub const EXECUTION_PROGRESS_CONTRACT: &str = "woml.execution-progress";
-pub const EXECUTION_PROGRESS_VERSION: u32 = 1;
 
 static REVIEWER_AUTHORITIES: OnceLock<RwLock<HashMap<PathBuf, Arc<ReviewerDirectoryAuthorityV1>>>> =
   OnceLock::new();
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ExecutionProgress {
-  ForEachProgress {
-    contract: &'static str,
-    version: u32,
-    #[serde(rename = "runId")]
-    run_id: String,
-    #[serde(rename = "forEachId")]
-    for_each_id: String,
-    status: &'static str,
-    total: u32,
-    succeeded: u32,
-    failed: u32,
-    skipped: u32,
-    active: u32,
-    pending: u32,
-    concurrency: u32,
-  },
-  StepAttemptFailed {
-    contract: &'static str,
-    version: u32,
-    #[serde(rename = "runId")]
-    run_id: String,
-    #[serde(rename = "nodeId")]
-    node_id: String,
-    attempt: u32,
-    #[serde(rename = "maxAttempts")]
-    max_attempts: u32,
-    #[serde(rename = "failureCode")]
-    failure_code: String,
-  },
-  StepRetryScheduled {
-    contract: &'static str,
-    version: u32,
-    #[serde(rename = "runId")]
-    run_id: String,
-    #[serde(rename = "nodeId")]
-    node_id: String,
-    #[serde(rename = "nextAttempt")]
-    next_attempt: u32,
-    #[serde(rename = "maxAttempts")]
-    max_attempts: u32,
-    #[serde(rename = "scheduledAt")]
-    scheduled_at: chrono::DateTime<chrono::Utc>,
-  },
-  StepAttemptSucceeded {
-    contract: &'static str,
-    version: u32,
-    #[serde(rename = "runId")]
-    run_id: String,
-    #[serde(rename = "nodeId")]
-    node_id: String,
-    attempt: u32,
-    #[serde(rename = "maxAttempts")]
-    max_attempts: u32,
-  },
-}
-
-pub type ExecutionProgressReporter = Arc<dyn Fn(ExecutionProgress) + Send + Sync>;
-
-pub const LIFECYCLE_PROGRESS_PROFILE: &str = "woml.lifecycle-progress/v1";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LifecycleProgressPhase {
-  HookRequested,
-  ActionStarted,
-  ActionSucceeded,
-  ActionFailed,
-  HookCompleted,
-  RunFinalizing,
-  RunFinalized,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LifecycleProgress {
-  pub profile: &'static str,
-  pub run_id: String,
-  pub workflow_id: String,
-  pub phase: LifecycleProgressPhase,
-  pub hook_id: String,
-  pub action_id: String,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub step_id: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub code: Option<String>,
-}
-
-pub type LifecycleProgressReporter = Arc<dyn Fn(LifecycleProgress) + Send + Sync>;
-
-pub const RUNTIME_POLICY_PROGRESS_PROFILE: &str = "woml.runtime-policy-progress/v1";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimePolicyProgressPhase {
-  Queued,
-  Eligible,
-  Started,
-  TimedOut,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimePolicyProgress {
-  pub profile: &'static str,
-  pub run_id: String,
-  pub workflow_id: String,
-  pub phase: RuntimePolicyProgressPhase,
-  pub queue: String,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub waiting_for: Option<PolicyWaitingFor>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub eligible_at: Option<chrono::DateTime<chrono::Utc>>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub code: Option<String>,
-}
-
-pub type RuntimePolicyProgressReporter = Arc<dyn Fn(RuntimePolicyProgress) + Send + Sync>;
 pub(crate) type PolicyExecutionRegistry =
   Arc<tokio::sync::RwLock<HashMap<String, std::sync::Weak<PolicyExecutionCoordinator>>>>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RuntimeModuleArtifact {
-  pub name: String,
-  pub bundle_digest: String,
-  pub source_map_digest: String,
-  pub exports: Vec<String>,
-  pub bundle: String,
-  pub source_map: String,
-}
-
-#[derive(Debug, Default)]
-pub struct SystemEngineClock;
-
-impl EngineClock for SystemEngineClock {
-  fn now(&self) -> chrono::DateTime<chrono::Utc> {
-    chrono::Utc::now()
-  }
-}
-
-#[derive(Debug, Clone)]
-pub struct FixedEngineClock {
-  now: chrono::DateTime<chrono::Utc>,
-}
-
-impl FixedEngineClock {
-  pub const fn new(now: chrono::DateTime<chrono::Utc>) -> Self {
-    Self { now }
-  }
-}
-
-impl EngineClock for FixedEngineClock {
-  fn now(&self) -> chrono::DateTime<chrono::Utc> {
-    self.now
-  }
-}
-
-#[derive(Clone)]
-pub struct RuntimeExecutionOptions {
-  pub script_host: ScriptHostProcessOptions,
-  pub notification_host: Option<NotificationHostProcessOptions>,
-  pub custom_notification_host_path: Option<PathBuf>,
-  pub script_timeout_ms: u64,
-  pub max_context_bytes: Option<usize>,
-  pub clock: Arc<dyn EngineClock>,
-  pub progress_reporter: Option<ExecutionProgressReporter>,
-  pub lifecycle_progress_reporter: Option<LifecycleProgressReporter>,
-  pub schedule_clock: Arc<dyn ScheduleClock>,
-  pub schedule_progress_reporter: Option<ScheduleProgressReporter>,
-  pub interval_progress_reporter: Option<IntervalProgressReporter>,
-  pub workflow_call_progress_reporter: Option<WorkflowCallProgressReporter>,
-  pub runtime_policy_progress_reporter: Option<RuntimePolicyProgressReporter>,
-  pub operational_output_reporter: Option<crate::OperationalOutputReporter>,
-  pub telemetry_reporter: Option<crate::TelemetrySignalReporter>,
-  pub telemetry_context: Option<crate::TelemetrySignalContext>,
-  pub telemetry_admission_link_reporter: Option<crate::TelemetryAdmissionLinkReporter>,
-  pub telemetry_propagation: Arc<AtomicBool>,
-  pub telemetry_sampling_ratio: Arc<RwLock<f64>>,
-  pub resolved_secrets: Arc<BTreeMap<String, String>>,
-  pub(crate) signal_ingress_token: Option<String>,
-  pub capability_registry: Arc<CapabilityRegistry>,
-  pub runtime_modules: Arc<Vec<RuntimeModuleArtifact>>,
-  shared_script_hosts: Option<Arc<SharedScriptHostPool>>,
-  capability_authority: Option<Arc<DurableCapabilityAuthority>>,
-  managed_database_pool: Option<Arc<crate::ManagedDatabasePool>>,
-  managed_storage_store: Option<Arc<crate::ManagedStorageStore>>,
-  managed_cache_store: Option<Arc<crate::ManagedCacheStore>>,
-  managed_durable_state_store: Option<Arc<crate::ManagedDurableStateStore>>,
-  managed_locks_service: Option<Arc<crate::ManagedLocksService>>,
-  managed_artifact_store: Option<Arc<crate::ManagedArtifactStore>>,
-  managed_artifact_put_handler: Option<Arc<crate::ManagedArtifactPutHandler>>,
-  managed_process_handler: Option<Arc<crate::ManagedProcessHandler>>,
-  operational_output_store: Option<Arc<crate::LazyOperationalOutputStore>>,
-  artifact_policy: Option<Arc<crate::artifacts::PreparedArtifactPolicy>>,
-  infrastructure_policy: Option<Arc<crate::PreparedInfrastructurePolicyV1>>,
-  emergency_deny_overlay: Option<Arc<crate::PreparedInfrastructurePolicyV1>>,
-  infrastructure_policy_required: bool,
-  reviewer_authority: Option<Arc<ReviewerDirectoryAuthorityV1>>,
-  policy_execution: Option<Arc<PolicyExecutionCoordinator>>,
-  policy_execution_registry: PolicyExecutionRegistry,
-  lock_renewals: Arc<std::sync::Mutex<HashMap<String, Arc<AtomicBool>>>>,
-}
-
-struct ArtifactInvocationCleanup {
-  store: Option<Arc<crate::ManagedArtifactStore>>,
-  invocation_id: String,
-}
-
-impl ArtifactInvocationCleanup {
-  fn new(options: &RuntimeExecutionOptions, invocation_id: &str) -> Self {
-    Self {
-      store: options.managed_artifact_store.clone(),
-      invocation_id: invocation_id.to_string(),
-    }
-  }
-
-  fn from_store(store: Option<Arc<crate::ManagedArtifactStore>>, invocation_id: &str) -> Self {
-    Self {
-      store,
-      invocation_id: invocation_id.to_string(),
-    }
-  }
-}
-
-impl Drop for ArtifactInvocationCleanup {
-  fn drop(&mut self) {
-    if let Some(store) = &self.store {
-      store.cleanup_invocation(&self.invocation_id);
-    }
-  }
-}
-
-#[derive(Debug)]
-struct IdleScriptHost {
-  options: ScriptHostProcessOptions,
-  client: ScriptHostClient,
-}
-
-#[derive(Debug, Default)]
-struct SharedScriptHostPool {
-  idle: tokio::sync::Mutex<Vec<IdleScriptHost>>,
-}
-
-const MAX_IDLE_SCRIPT_HOSTS: usize = 4;
-
-impl std::fmt::Debug for RuntimeExecutionOptions {
-  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    formatter
-      .debug_struct("RuntimeExecutionOptions")
-      .field("script_host", &self.script_host)
-      .field("script_timeout_ms", &self.script_timeout_ms)
-      .field("notification_host", &self.notification_host)
-      .field(
-        "custom_notification_host_path",
-        &self.custom_notification_host_path,
-      )
-      .field("max_context_bytes", &self.max_context_bytes)
-      .field("clock", &"dyn EngineClock")
-      .field("schedule_clock", &"dyn ScheduleClock")
-      .field("resolved_secret_count", &self.resolved_secrets.len())
-      .field("capability_registry", &"CapabilityRegistry")
-      .field("runtime_module_count", &self.runtime_modules.len())
-      .field(
-        "infrastructure_policy_digest",
-        &self
-          .infrastructure_policy
-          .as_ref()
-          .map(|policy| &policy.digest),
-      )
-      .field(
-        "infrastructure_policy_required",
-        &self.infrastructure_policy_required,
-      )
-      .field(
-        "emergency_deny_overlay_digest",
-        &self
-          .emergency_deny_overlay
-          .as_ref()
-          .map(|policy| &policy.digest),
-      )
-      .field(
-        "shared_script_hosts",
-        &self.shared_script_hosts.as_ref().map(|_| "enabled"),
-      )
-      .field(
-        "lock_renewal_count",
-        &self
-          .lock_renewals
-          .lock()
-          .map(|items| items.len())
-          .unwrap_or(0),
-      )
-      .field(
-        "progress_reporter",
-        &self.progress_reporter.as_ref().map(|_| "configured"),
-      )
-      .field(
-        "lifecycle_progress_reporter",
-        &self
-          .lifecycle_progress_reporter
-          .as_ref()
-          .map(|_| "configured"),
-      )
-      .field(
-        "schedule_progress_reporter",
-        &self
-          .schedule_progress_reporter
-          .as_ref()
-          .map(|_| "configured"),
-      )
-      .field(
-        "interval_progress_reporter",
-        &self
-          .interval_progress_reporter
-          .as_ref()
-          .map(|_| "configured"),
-      )
-      .field(
-        "workflow_call_progress_reporter",
-        &self
-          .workflow_call_progress_reporter
-          .as_ref()
-          .map(|_| "configured"),
-      )
-      .field(
-        "telemetry_reporter",
-        &self.telemetry_reporter.as_ref().map(|_| "configured"),
-      )
-      .field(
-        "telemetry_context",
-        &self.telemetry_context.as_ref().map(|_| "configured"),
-      )
-      .finish()
-  }
-}
-
 impl RuntimeExecutionOptions {
-  pub fn new(script_host: ScriptHostProcessOptions, script_timeout_ms: u64) -> Self {
-    let notification_host_path = script_host.host_script_path.parent().map(|parent| {
-      let extension = script_host
-        .host_script_path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("js");
-      parent.join(format!("notification-provider-host.{extension}"))
-    });
-    let notification_host = notification_host_path.map(|path| {
-      NotificationHostProcessOptions::new(script_host.bun_executable.clone(), path)
-        .with_protocol_version(INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION)
-    });
-    let custom_notification_host_path = script_host.host_script_path.parent().map(|parent| {
-      let extension = script_host
-        .host_script_path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("js");
-      parent.join(format!("custom-notification-provider-host.{extension}"))
-    });
-    let capability_registry = Arc::new(CapabilityRegistry::default());
-    let managed_storage_store = Arc::new(crate::ManagedStorageStore::default());
-    let telemetry_propagation = Arc::new(AtomicBool::new(false));
-    let telemetry_sampling_ratio = Arc::new(RwLock::new(0.0));
-    capability_registry
-      .register(Arc::new(
-        crate::ManagedHttpHandler::with_storage_and_propagation(
-          Arc::clone(&managed_storage_store),
-          Arc::clone(&telemetry_propagation),
-          Arc::clone(&telemetry_sampling_ratio),
-        ),
-      ))
-      .expect("the production HTTP capability is registered exactly once");
-    capability_registry
-      .register(Arc::new(crate::ManagedTelegramHandler::default()))
-      .expect("the production Telegram capability is registered exactly once");
-    capability_registry
-      .register(Arc::new(crate::ManagedDiscordHandler::default()))
-      .expect("the production Discord capability is registered exactly once");
-    capability_registry
-      .register(Arc::new(crate::ManagedWhatsAppHandler::default()))
-      .expect("the production WhatsApp capability is registered exactly once");
-    let managed_database_pool = Arc::new(crate::ManagedDatabasePool::default());
-    for handler in crate::ManagedDatabaseHandler::handlers(Arc::clone(&managed_database_pool)) {
-      capability_registry
-        .register(handler)
-        .expect("each production database operation is registered exactly once");
-    }
-    for handler in crate::ManagedStorageHandler::handlers(Arc::clone(&managed_storage_store)) {
-      capability_registry
-        .register(handler)
-        .expect("each production storage operation is registered exactly once");
-    }
-    let managed_cache_store = Arc::new(crate::ManagedCacheStore::default());
-    for handler in crate::ManagedCacheHandler::handlers(Arc::clone(&managed_cache_store)) {
-      capability_registry
-        .register(handler)
-        .expect("each production cache operation is registered exactly once");
-    }
-    let managed_durable_state_store = Arc::new(crate::ManagedDurableStateStore::default());
-    for handler in
-      crate::ManagedDurableStateHandler::handlers(Arc::clone(&managed_durable_state_store))
-    {
-      capability_registry
-        .register(handler)
-        .expect("each production durable state operation is registered exactly once");
-    }
-    let managed_locks_service = Arc::new(crate::ManagedLocksService::default());
-    for handler in crate::ManagedLocksService::handlers(Arc::clone(&managed_locks_service)) {
-      capability_registry
-        .register(handler)
-        .expect("each production lock operation is registered exactly once");
-    }
-    Self {
-      script_host,
-      notification_host,
-      custom_notification_host_path,
-      script_timeout_ms,
-      max_context_bytes: None,
-      clock: Arc::new(SystemEngineClock),
-      progress_reporter: None,
-      lifecycle_progress_reporter: None,
-      schedule_clock: Arc::new(SystemScheduleClock),
-      schedule_progress_reporter: None,
-      interval_progress_reporter: None,
-      workflow_call_progress_reporter: None,
-      runtime_policy_progress_reporter: None,
-      operational_output_reporter: None,
-      telemetry_reporter: None,
-      telemetry_context: None,
-      telemetry_admission_link_reporter: None,
-      telemetry_propagation,
-      telemetry_sampling_ratio,
-      resolved_secrets: Arc::new(BTreeMap::new()),
-      signal_ingress_token: None,
-      capability_registry,
-      runtime_modules: Arc::new(Vec::new()),
-      shared_script_hosts: None,
-      capability_authority: None,
-      managed_database_pool: Some(managed_database_pool),
-      managed_storage_store: Some(managed_storage_store),
-      managed_cache_store: Some(managed_cache_store),
-      managed_durable_state_store: Some(managed_durable_state_store),
-      managed_locks_service: Some(managed_locks_service),
-      managed_artifact_store: None,
-      managed_artifact_put_handler: None,
-      managed_process_handler: None,
-      operational_output_store: None,
-      artifact_policy: None,
-      infrastructure_policy: None,
-      emergency_deny_overlay: None,
-      infrastructure_policy_required: false,
-      reviewer_authority: None,
-      policy_execution: None,
-      policy_execution_registry: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-      lock_renewals: Arc::new(std::sync::Mutex::new(HashMap::new())),
-    }
-  }
-
-  pub fn with_clock(mut self, clock: Arc<dyn EngineClock>) -> Self {
-    self.clock = clock;
-    self
-  }
-
-  pub fn with_notification_host(mut self, host: NotificationHostProcessOptions) -> Self {
-    self.notification_host =
-      Some(host.with_protocol_version(INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION));
-    self
-  }
-
-  pub fn with_progress_reporter(mut self, reporter: ExecutionProgressReporter) -> Self {
-    self.progress_reporter = Some(reporter);
-    self
-  }
-
-  pub fn with_telemetry_reporter(
-    mut self,
-    context: crate::TelemetrySignalContext,
-    reporter: crate::TelemetrySignalReporter,
-  ) -> Self {
-    self.telemetry_context = Some(context);
-    self.telemetry_reporter = Some(reporter);
-    self
-  }
-
-  pub fn with_telemetry_propagation(
-    mut self,
-    enabled: bool,
-    sampling_ratio: f64,
-    reporter: Option<crate::TelemetryAdmissionLinkReporter>,
-  ) -> Self {
-    self.telemetry_propagation.store(enabled, Ordering::Release);
-    *self
-      .telemetry_sampling_ratio
-      .write()
-      .expect("telemetry sampling ratio lock") = sampling_ratio.clamp(0.0, 1.0);
-    self.telemetry_admission_link_reporter = reporter;
-    self
-  }
-
-  pub fn report_telemetry_admission_context(
-    &self,
-    run_id: &str,
-    context: crate::InboundTraceContext,
-    occurred_at: chrono::DateTime<chrono::Utc>,
-  ) {
-    if !self.telemetry_propagation.load(Ordering::Acquire) {
-      return;
-    }
-    let (Some(reporter), Some(signal_context)) = (
-      self.telemetry_admission_link_reporter.as_ref(),
-      self.telemetry_context.as_ref(),
-    ) else {
-      return;
-    };
-    let (status, trace_id, span_id, sampled) = match context {
-      crate::InboundTraceContext::Absent => return,
-      crate::InboundTraceContext::Invalid => (
-        crate::TelemetryAdmissionLinkStatus::Invalid,
-        None,
-        None,
-        None,
-      ),
-      crate::InboundTraceContext::Valid(context) => (
-        crate::TelemetryAdmissionLinkStatus::Linked,
-        Some(context.trace_id),
-        Some(context.span_id),
-        Some(context.sampled),
-      ),
-    };
-    reporter(crate::TelemetryAdmissionLinkV1 {
-      profile: crate::TELEMETRY_ADMISSION_LINK_PROFILE,
-      occurred_at,
-      runtime_instance_id: signal_context.runtime_instance_id.clone(),
-      deployment_id: signal_context.deployment_id.clone(),
-      run_id: run_id.to_string(),
-      status,
-      trace_id,
-      span_id,
-      sampled,
-    });
-  }
-
-  pub fn with_lifecycle_progress_reporter(mut self, reporter: LifecycleProgressReporter) -> Self {
-    self.lifecycle_progress_reporter = Some(reporter);
-    self
-  }
-
-  pub fn with_schedule_clock(mut self, clock: Arc<dyn ScheduleClock>) -> Self {
-    self.schedule_clock = clock;
-    self
-  }
-
-  pub fn with_resolved_secrets(mut self, secrets: BTreeMap<String, String>) -> Self {
-    self.resolved_secrets = Arc::new(secrets);
-    self
-  }
-
-  pub fn with_signal_ingress_token(mut self, token: Option<String>) -> Self {
-    self.signal_ingress_token = token.filter(|token| !token.is_empty());
-    self
-  }
-
-  pub fn with_infrastructure_policy(
-    mut self,
-    policy: crate::PreparedInfrastructurePolicyV1,
-  ) -> Self {
-    self.infrastructure_policy = Some(Arc::new(policy));
-    self.infrastructure_policy_required = true;
-    self
-  }
-
-  pub fn require_infrastructure_policy(mut self) -> Self {
-    self.infrastructure_policy_required = true;
-    self
-  }
-
-  pub fn with_emergency_deny_overlay(
-    mut self,
-    policy: crate::PreparedInfrastructurePolicyV1,
-  ) -> Self {
-    self.emergency_deny_overlay = Some(Arc::new(policy));
-    self.infrastructure_policy_required = true;
-    self
-  }
-
-  pub fn with_runtime_modules(mut self, modules: Vec<RuntimeModuleArtifact>) -> Self {
-    self.script_host.module_artifacts = modules
-      .iter()
-      .filter(|module| !module.name.starts_with("__woml_"))
-      .map(|module| ScriptHostModuleArtifact {
-        bundle_digest: module.bundle_digest.clone(),
-        bundle: module.bundle.clone(),
-        source_map_digest: module.source_map_digest.clone(),
-        source_map: module.source_map.clone(),
-      })
-      .collect();
-    self.runtime_modules = Arc::new(modules);
-    self
-  }
-
-  pub fn with_shared_script_hosts(mut self) -> Self {
-    self.shared_script_hosts = Some(Arc::new(SharedScriptHostPool::default()));
-    self
-  }
-
-  async fn acquire_script_host(&self) -> Result<ScriptHostClient, ScriptHostClientError> {
-    let Some(pool) = &self.shared_script_hosts else {
-      return ScriptHostClient::spawn_with_authority(
-        self.script_host.clone(),
-        self.capability_authority.clone(),
-      )
-      .await;
-    };
-    loop {
-      let candidate = {
-        let mut idle = pool.idle.lock().await;
-        idle
-          .iter()
-          .position(|host| host.options == self.script_host)
-          .map(|index| idle.swap_remove(index).client)
-      };
-      let Some(mut client) = candidate else {
-        return ScriptHostClient::spawn_with_authority(
-          self.script_host.clone(),
-          self.capability_authority.clone(),
-        )
-        .await;
-      };
-      if client.is_healthy().await {
-        client.set_default_authority(self.capability_authority.clone());
-        return Ok(client);
-      }
-      client.shutdown().await;
-    }
-  }
-
-  async fn release_script_host(&self, mut client: ScriptHostClient) {
-    let Some(pool) = &self.shared_script_hosts else {
-      client.shutdown().await;
-      return;
-    };
-    if !client.is_healthy().await {
-      client.shutdown().await;
-      return;
-    }
-    client.set_default_authority(None);
-    let mut idle = pool.idle.lock().await;
-    if idle.len() < MAX_IDLE_SCRIPT_HOSTS {
-      idle.push(IdleScriptHost {
-        options: self.script_host.clone(),
-        client,
-      });
-      return;
-    }
-    drop(idle);
-    client.shutdown().await;
-  }
-
-  pub async fn shutdown_shared_script_hosts(&self) {
-    let Some(pool) = &self.shared_script_hosts else {
-      return;
-    };
-    let clients = {
-      let mut idle = pool.idle.lock().await;
-      std::mem::take(&mut *idle)
-    };
-    for host in clients {
-      host.client.shutdown().await;
-    }
-  }
-
-  pub fn with_capability_registry(mut self, registry: Arc<CapabilityRegistry>) -> Self {
-    self.capability_registry = registry;
-    self.managed_database_pool = None;
-    self.managed_storage_store = None;
-    self.managed_cache_store = None;
-    self.managed_durable_state_store = None;
-    self.managed_locks_service = None;
-    self.managed_artifact_store = None;
-    self.managed_artifact_put_handler = None;
-    self.managed_process_handler = None;
-    self.operational_output_store = None;
-    self.artifact_policy = None;
-    self
-  }
-
-  /// Binds worker-side capability calls to a durable authority owned by the
-  /// worker journal database. Remote attempt runtimes use this narrow accessor
-  /// so they share the exact same policy, idempotency, and cancellation path as
-  /// local script execution without gaining workflow scheduling authority.
-  pub fn prepare_remote_worker_capabilities(
-    self,
-    database_path: &Path,
-  ) -> Result<Self, RuntimeExecutionError> {
-    attach_durable_capability_authority(self, database_path)
-  }
-
-  pub fn remote_worker_capability_authority(&self) -> Option<Arc<DurableCapabilityAuthority>> {
-    self.capability_authority.clone()
-  }
-
-  /// Enables the managed process capability for this runtime only after the
-  /// runtime-owned Process Policy v1 has been validated by the Rust core.
-  pub fn with_process_policy(
-    mut self,
-    policy: crate::ProcessPolicyV1,
-    mode: crate::ProcessRuntimeMode,
-  ) -> Result<Self, crate::ProcessPolicyError> {
-    let handler = Arc::new(crate::ManagedProcessHandler::new_with_secrets(
-      policy,
-      mode,
-      Arc::clone(&self.resolved_secrets),
-    )?);
-    if let Some(artifacts) = &self.managed_artifact_put_handler {
-      handler.configure_output_artifacts(Arc::clone(artifacts))?;
-    }
-    self
-      .capability_registry
-      .register(handler.clone())
-      .map_err(|error| crate::ProcessPolicyError::Invalid(error.to_string()))?;
-    self.managed_process_handler = Some(handler);
-    Ok(self)
-  }
-
-  /// Enables durable artifacts only after Rust validates Artifact Policy v1.
-  pub fn with_artifact_policy(
-    mut self,
-    policy: crate::ArtifactPolicyV1,
-    mode: crate::ArtifactRuntimeMode,
-  ) -> Result<Self, crate::ArtifactPolicyError> {
-    let store = Arc::new(crate::ManagedArtifactStore::default());
-    let handler = Arc::new(crate::ManagedArtifactPutHandler::new(
-      Arc::clone(&store),
-      policy,
-      mode,
-      &self.resolved_secrets,
-    )?);
-    let head_handler = handler.head_handler();
-    let materialize_handler = handler.materialize_handler();
-    self.artifact_policy = Some(handler.policy());
-    if let Some(process) = &self.managed_process_handler {
-      process
-        .configure_output_artifacts(Arc::clone(&handler))
-        .map_err(|error| crate::ArtifactPolicyError::Invalid(error.to_string()))?;
-    }
-    self
-      .capability_registry
-      .register(handler.clone())
-      .map_err(|error| crate::ArtifactPolicyError::Invalid(error.to_string()))?;
-    self
-      .capability_registry
-      .register(Arc::new(head_handler))
-      .map_err(|error| crate::ArtifactPolicyError::Invalid(error.to_string()))?;
-    self
-      .capability_registry
-      .register(Arc::new(materialize_handler))
-      .map_err(|error| crate::ArtifactPolicyError::Invalid(error.to_string()))?;
-    self.managed_artifact_store = Some(store);
-    self.managed_artifact_put_handler = Some(handler);
-    Ok(self)
-  }
-
-  pub fn with_reviewer_directory(mut self, authority: Arc<ReviewerDirectoryAuthorityV1>) -> Self {
-    self.reviewer_authority = Some(authority);
-    self
-  }
-
-  pub fn reviewer_authority(&self) -> Option<Arc<ReviewerDirectoryAuthorityV1>> {
-    self.reviewer_authority.clone()
-  }
-
-  pub fn with_schedule_progress_reporter(mut self, reporter: ScheduleProgressReporter) -> Self {
-    self.schedule_progress_reporter = Some(reporter);
-    self
-  }
-
-  pub fn with_interval_progress_reporter(mut self, reporter: IntervalProgressReporter) -> Self {
-    self.interval_progress_reporter = Some(reporter);
-    self
-  }
-
-  pub fn with_workflow_call_progress_reporter(
-    mut self,
-    reporter: WorkflowCallProgressReporter,
-  ) -> Self {
-    self.workflow_call_progress_reporter = Some(reporter);
-    self
-  }
-
-  pub fn with_runtime_policy_progress_reporter(
-    mut self,
-    reporter: RuntimePolicyProgressReporter,
-  ) -> Self {
-    self.runtime_policy_progress_reporter = Some(reporter);
-    self
-  }
-
-  pub fn with_operational_output_reporter(
-    mut self,
-    reporter: crate::OperationalOutputReporter,
-  ) -> Self {
-    self.operational_output_reporter = Some(reporter);
-    self
-  }
-
-  pub(crate) fn report_schedule(&self, progress: ScheduleProgress) {
-    if let Some(reporter) = &self.schedule_progress_reporter {
-      reporter(progress);
-    }
-  }
-
-  pub(crate) fn report_interval(&self, progress: IntervalProgress) {
-    if let Some(reporter) = &self.interval_progress_reporter {
-      reporter(progress);
-    }
-  }
-
-  fn report_runtime_policy(&self, progress: RuntimePolicyProgress) {
-    if let Some(reporter) = &self.runtime_policy_progress_reporter {
-      reporter(progress);
-    }
-  }
-
-  fn report(&self, progress: ExecutionProgress) {
-    if let Some(reporter) = &self.progress_reporter {
-      reporter(progress);
-    }
-  }
-
-  fn report_lifecycle(&self, progress: LifecycleProgress) {
-    if let Some(reporter) = &self.lifecycle_progress_reporter {
-      reporter(progress);
-    }
-  }
-
   async fn release_policy_execution_slot(
     &self,
     store: &mut DurableEventStore,
@@ -944,18 +263,15 @@ impl RuntimeExecutionOptions {
     }
     Ok(())
   }
-
   pub(crate) async fn suspend_policy_execution_slot(&self) -> Result<(), RuntimeExecutionError> {
     let Some(coordinator) = &self.policy_execution else {
       return Ok(());
     };
     coordinator.suspend().await
   }
-
   pub(crate) fn policy_execution_registry(&self) -> PolicyExecutionRegistry {
     Arc::clone(&self.policy_execution_registry)
   }
-
   fn ensure_lock_renewal(&self, run_id: &str, lock_id: &str, lease_ms: u64) {
     let Some(authority) = self.capability_authority.clone() else {
       return;
@@ -995,7 +311,6 @@ impl RuntimeExecutionOptions {
       }
     });
   }
-
   fn stop_lock_renewal(&self, run_id: &str, lock_id: &str) {
     let identity = format!("{run_id}\0{lock_id}");
     if let Ok(mut renewals) = self.lock_renewals.lock() {
@@ -1004,7 +319,6 @@ impl RuntimeExecutionOptions {
       }
     }
   }
-
   fn ensure_iteration_lock_renewal(
     &self,
     run_id: &str,
@@ -1058,7 +372,6 @@ impl RuntimeExecutionOptions {
       }
     });
   }
-
   fn stop_iteration_lock_renewal(
     &self,
     run_id: &str,
@@ -1075,7 +388,6 @@ impl RuntimeExecutionOptions {
       }
     }
   }
-
   async fn ensure_policy_execution_slot(&self) -> Result<(), RuntimeExecutionError> {
     let Some(coordinator) = &self.policy_execution else {
       return Ok(());
@@ -1100,365 +412,6 @@ impl RuntimeExecutionOptions {
   }
 }
 
-fn retry_max_attempts<E: RuntimeDagEngine>(engine: &E, node_id: &str) -> u32 {
-  engine
-    .workflow()
-    .node(node_id)
-    .and_then(|node| node.retry_policy.as_ref())
-    .map_or(1, |policy| policy.max_attempts)
-}
-
-fn report_attempt_failed<E: RuntimeDagEngine>(
-  engine: &E,
-  options: &RuntimeExecutionOptions,
-  run_id: &str,
-  node_id: &str,
-  attempt: u32,
-  failure_code: String,
-) {
-  let max_attempts = retry_max_attempts(engine, node_id);
-  if max_attempts > 1 {
-    options.report(ExecutionProgress::StepAttemptFailed {
-      contract: EXECUTION_PROGRESS_CONTRACT,
-      version: EXECUTION_PROGRESS_VERSION,
-      run_id: run_id.to_string(),
-      node_id: node_id.to_string(),
-      attempt,
-      max_attempts,
-      failure_code,
-    });
-  }
-}
-
-fn report_retry_scheduled<E: RuntimeDagEngine>(
-  engine: &E,
-  options: &RuntimeExecutionOptions,
-  run_id: &str,
-  node_id: &str,
-  next_attempt: u32,
-  scheduled_at: chrono::DateTime<chrono::Utc>,
-) {
-  options.report(ExecutionProgress::StepRetryScheduled {
-    contract: EXECUTION_PROGRESS_CONTRACT,
-    version: EXECUTION_PROGRESS_VERSION,
-    run_id: run_id.to_string(),
-    node_id: node_id.to_string(),
-    next_attempt,
-    max_attempts: retry_max_attempts(engine, node_id),
-    scheduled_at,
-  });
-}
-
-fn report_attempt_succeeded<E: RuntimeDagEngine>(
-  engine: &E,
-  options: &RuntimeExecutionOptions,
-  run_id: &str,
-  node_id: &str,
-  attempt: u32,
-) {
-  let max_attempts = retry_max_attempts(engine, node_id);
-  if max_attempts > 1 && attempt > 1 {
-    options.report(ExecutionProgress::StepAttemptSucceeded {
-      contract: EXECUTION_PROGRESS_CONTRACT,
-      version: EXECUTION_PROGRESS_VERSION,
-      run_id: run_id.to_string(),
-      node_id: node_id.to_string(),
-      attempt,
-      max_attempts,
-    });
-  }
-}
-
-fn report_for_each_progress<E: RuntimeDagEngine>(
-  engine: &E,
-  options: &RuntimeExecutionOptions,
-  run_id: &str,
-  for_each_id: &str,
-) -> Result<(), RuntimeExecutionError> {
-  let projection = engine.projection(run_id)?;
-  let Some(state) = projection.for_each.get(for_each_id) else {
-    return Ok(());
-  };
-  let succeeded = state
-    .iterations
-    .values()
-    .filter(|status| matches!(status, ForEachIterationStatus::Succeeded { .. }))
-    .count() as u32;
-  let failed = state
-    .iterations
-    .values()
-    .filter(|status| matches!(status, ForEachIterationStatus::Failed { .. }))
-    .count() as u32;
-  let skipped = state
-    .iterations
-    .values()
-    .filter(|status| matches!(status, ForEachIterationStatus::Skipped))
-    .count() as u32;
-  let active = state
-    .iterations
-    .values()
-    .filter(|status| matches!(status, ForEachIterationStatus::Started))
-    .count() as u32;
-  let pending = state
-    .total
-    .saturating_sub(succeeded + failed + skipped + active);
-  let status = match state.status {
-    ForEachStatus::Open => "running",
-    ForEachStatus::Succeeded => "succeeded",
-    ForEachStatus::Failed => "failed",
-    ForEachStatus::Cancelled => "cancelled",
-  };
-  options.report(ExecutionProgress::ForEachProgress {
-    contract: EXECUTION_PROGRESS_CONTRACT,
-    version: EXECUTION_PROGRESS_VERSION,
-    run_id: run_id.to_string(),
-    for_each_id: for_each_id.to_string(),
-    status,
-    total: state.total,
-    succeeded,
-    failed,
-    skipped,
-    active,
-    pending,
-    concurrency: state.concurrency,
-  });
-  Ok(())
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkflowExecutionResult {
-  pub workflow_id: String,
-  pub run_id: String,
-  pub terminal_node_id: String,
-  pub result: Value,
-  pub context: WorkflowContext,
-  pub execution_order: Vec<String>,
-  pub events: Vec<RunEvent>,
-}
-
-pub const RUNTIME_OUTCOME_CONTRACT: &str = "woml.runtime-outcome";
-pub const RUNTIME_OUTCOME_VERSION: u32 = 1;
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "status", rename_all = "lowercase")]
-pub enum WorkflowRuntimeOutcome {
-  Succeeded {
-    contract: &'static str,
-    version: u32,
-    execution: WorkflowExecutionResult,
-  },
-  Waiting {
-    contract: &'static str,
-    version: u32,
-    #[serde(rename = "workflowId")]
-    workflow_id: String,
-    #[serde(rename = "runId")]
-    run_id: String,
-    approval: WaitingWorkflowApproval,
-  },
-  #[serde(rename = "waiting_time")]
-  WaitingTime {
-    contract: &'static str,
-    version: u32,
-    #[serde(rename = "workflowId")]
-    workflow_id: String,
-    #[serde(rename = "runId")]
-    run_id: String,
-    wait: WaitingWorkflowTimer,
-  },
-  #[serde(rename = "waiting_signal")]
-  WaitingSignal {
-    contract: &'static str,
-    version: u32,
-    #[serde(rename = "workflowId")]
-    workflow_id: String,
-    #[serde(rename = "runId")]
-    run_id: String,
-    wait: WaitingWorkflowSignal,
-  },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WaitingWorkflowApproval {
-  pub approval_id: String,
-  pub request_id: String,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub name: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub description: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
-  pub on_timeout: ApprovalTimeoutPolicy,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub token: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub credential_expires_at: Option<chrono::DateTime<chrono::Utc>>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub review_digest: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub review: Option<ReviewPayloadV1>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub authority: Option<WaitingRichApprovalAuthority>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WaitingRichApprovalAuthority {
-  pub required: u32,
-  pub received: u32,
-  pub required_roles: Vec<String>,
-  pub represented_roles: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WaitingWorkflowTimer {
-  pub wait_id: String,
-  pub node_id: String,
-  pub kind: crate::DurableWaitKind,
-  pub registered_at: chrono::DateTime<chrono::Utc>,
-  pub deadline: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WaitingWorkflowSignal {
-  pub wait_id: String,
-  pub node_id: String,
-  pub registered_at: chrono::DateTime<chrono::Utc>,
-  pub signals: Vec<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub deadline: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-impl WorkflowRuntimeOutcome {
-  fn succeeded(execution: WorkflowExecutionResult) -> Self {
-    Self::Succeeded {
-      contract: RUNTIME_OUTCOME_CONTRACT,
-      version: RUNTIME_OUTCOME_VERSION,
-      execution,
-    }
-  }
-}
-
-#[derive(Debug, Error)]
-pub enum RuntimeExecutionError {
-  #[error(transparent)]
-  Engine(#[from] EngineError),
-  #[error(transparent)]
-  DurableEngine(#[from] DurableEngineError),
-  #[error(transparent)]
-  DurableStore(#[from] DurableStoreError),
-  #[error(transparent)]
-  Host(#[from] ScriptHostClientError),
-  #[error(transparent)]
-  RunFailed(Box<FailedRunDetails>),
-  #[error(transparent)]
-  BranchFailed(Box<FailedBranchDetails>),
-  #[error(transparent)]
-  ParallelFailed(Box<FailedParallelDetails>),
-  #[error(transparent)]
-  ApprovalFailed(Box<FailedApprovalDetails>),
-  #[error(transparent)]
-  NotificationFailed(Box<FailedNotificationDetails>),
-  #[error(transparent)]
-  RunCancelled(Box<CancelledRunDetails>),
-  #[error("workflow execution stalled: {0}")]
-  Stalled(String),
-  #[error("runtime configuration is invalid: {0}")]
-  InvalidConfiguration(String),
-}
-
-#[derive(Debug, Error)]
-#[error("workflow run {run_id:?} was cancelled [{code}]")]
-pub struct CancelledRunDetails {
-  pub code: String,
-  pub run_id: String,
-  pub cancellation_request_id: String,
-  pub events: Vec<RunEvent>,
-}
-
-#[derive(Debug, Error)]
-#[error("workflow execution failed [{code}]: {message}")]
-pub struct FailedRunDetails {
-  pub code: String,
-  pub message: String,
-  pub node_id: Option<String>,
-  pub attempt: Option<u32>,
-  pub max_attempts: Option<u32>,
-  pub failure: AttemptFailure,
-  pub events: Vec<RunEvent>,
-}
-
-#[derive(Debug, Error)]
-#[error("workflow branch failed [{code}]: {message}")]
-pub struct FailedBranchDetails {
-  pub code: String,
-  pub message: String,
-  pub branch_id: String,
-  pub arm_id: Option<String>,
-  pub path: Option<Vec<String>>,
-  pub site: BranchFailureSite,
-  pub failure: BranchFailure,
-  pub events: Vec<RunEvent>,
-}
-
-#[derive(Debug, Error)]
-#[error("workflow parallel group failed [{code}]: {message}")]
-pub struct FailedParallelDetails {
-  pub code: String,
-  pub message: String,
-  pub parallel_id: String,
-  pub policy: ParallelFailurePolicy,
-  pub primary_node_id: String,
-  pub failed_node_ids: Vec<String>,
-  pub cancelled_node_ids: Vec<String>,
-  pub failure: ParallelFailure,
-  pub events: Vec<RunEvent>,
-}
-
-#[derive(Debug, Error)]
-#[error("workflow approval failed [{code}]: {message}")]
-pub struct FailedApprovalDetails {
-  pub code: String,
-  pub message: String,
-  pub approval_id: String,
-  pub request_id: String,
-  pub failure: ApprovalFailure,
-  pub events: Vec<RunEvent>,
-}
-
-#[derive(Debug, Error)]
-#[error("workflow notification failed [{code}]: {message}")]
-pub struct FailedNotificationDetails {
-  pub code: String,
-  pub message: String,
-  pub approval_id: String,
-  pub request_id: String,
-  pub failed_delivery_ids: Vec<String>,
-  pub failure: crate::event::NotificationRunFailure,
-  pub events: Vec<RunEvent>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BranchFailureSite {
-  Test,
-  Result,
-  Selection,
-}
-
-impl BranchFailureSite {
-  pub const fn as_str(self) -> &'static str {
-    match self {
-      Self::Test => "test",
-      Self::Result => "result",
-      Self::Selection => "selection",
-    }
-  }
-}
-
 pub async fn execute_workflow(
   workflow: CompiledWorkflowDefinition,
   definition_hash: String,
@@ -1470,7 +423,9 @@ pub async fn execute_workflow(
 }
 
 const POLICY_CLAIM_LEASE: Duration = Duration::from_secs(15);
+
 const POLICY_CLAIM_HEARTBEAT: Duration = Duration::from_secs(5);
+
 const POLICY_QUEUE_RECHECK: Duration = Duration::from_millis(250);
 
 fn policy_wakeup(database_path: &std::path::Path) -> Arc<tokio::sync::Notify> {
@@ -2203,96 +1158,6 @@ async fn resume_workflow_durable_internal(
   resume_with_engine(&mut engine, run_id, options).await
 }
 
-fn attach_durable_capability_authority(
-  mut options: RuntimeExecutionOptions,
-  database_path: &std::path::Path,
-) -> Result<RuntimeExecutionOptions, RuntimeExecutionError> {
-  let operational_output = Arc::new(
-    crate::operational_output_store_for_state(database_path)
-      .map(|store| store.with_reporter(options.operational_output_reporter.clone()))
-      .map_err(|error| {
-        RuntimeExecutionError::InvalidConfiguration(format!(
-          "{}: the operational-output path could not be derived",
-          error.code()
-        ))
-      })?,
-  );
-  if let Some(process) = &options.managed_process_handler {
-    process
-      .configure_output_store(Arc::clone(&operational_output))
-      .map_err(|error| RuntimeExecutionError::InvalidConfiguration(error.to_string()))?;
-  }
-  options.operational_output_store = Some(Arc::clone(&operational_output));
-  if let Some(authority) = options.reviewer_authority() {
-    REVIEWER_AUTHORITIES
-      .get_or_init(|| RwLock::new(HashMap::new()))
-      .write()
-      .map_err(|_| {
-        RuntimeExecutionError::InvalidConfiguration(
-          "WOML_APPROVAL_AUTHORITY_UNAVAILABLE: reviewer authority registry is unavailable"
-            .to_string(),
-        )
-      })?
-      .insert(database_path.to_path_buf(), authority);
-  }
-  if let Some(storage) = &options.managed_storage_store {
-    storage
-      .configure_for_state(database_path)
-      .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
-  }
-  if let Some(cache) = &options.managed_cache_store {
-    cache
-      .configure_for_state(database_path)
-      .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
-  }
-  if let Some(state) = &options.managed_durable_state_store {
-    state
-      .configure_for_state(database_path)
-      .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
-  }
-  if let Some(locks) = &options.managed_locks_service {
-    locks
-      .configure_for_state(database_path)
-      .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
-  }
-  if let (Some(artifacts), Some(policy)) =
-    (&options.managed_artifact_store, &options.artifact_policy)
-  {
-    artifacts
-      .configure_for_state(database_path, Arc::clone(policy))
-      .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
-  }
-  if let Some(pool) = &options.managed_database_pool {
-    pool
-      .protect_path(database_path)
-      .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
-  }
-  let store = DurableEventStore::open(database_path.to_path_buf())?;
-  if let Some(pool) = &options.managed_database_pool {
-    // Protect the post-open canonical identity as well as the pre-open lexical
-    // path so a state path created during this call cannot gain an alias.
-    pool
-      .protect_path(database_path)
-      .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
-  }
-  let locks = options
-    .managed_locks_service
-    .clone()
-    .unwrap_or_else(|| Arc::new(crate::ManagedLocksService::default()));
-  options.capability_authority = Some(Arc::new(
-    DurableCapabilityAuthority::new_with_infrastructure_policy_authorities(
-      Arc::clone(&options.capability_registry),
-      Arc::new(tokio::sync::Mutex::new(store)),
-      locks,
-      options.infrastructure_policy_required || options.infrastructure_policy.is_some(),
-      options.managed_artifact_store.clone(),
-      options.emergency_deny_overlay.clone(),
-    )
-    .with_operational_output(operational_output, Arc::clone(&options.resolved_secrets)),
-  ));
-  Ok(options)
-}
-
 fn recover_operational_output(
   options: &RuntimeExecutionOptions,
 ) -> Result<(), RuntimeExecutionError> {
@@ -2348,23 +1213,6 @@ fn bind_run_infrastructure_policy(
     ));
   }
   Ok(())
-}
-
-fn runtime_modules_from_store(
-  options: RuntimeExecutionOptions,
-  store: &DurableEventStore,
-  definition_hash: &str,
-) -> Result<RuntimeExecutionOptions, RuntimeExecutionError> {
-  let stored = store.definition_module_artifacts(definition_hash)?;
-  if options.runtime_modules.is_empty() {
-    return Ok(options.with_runtime_modules(stored));
-  }
-  if options.runtime_modules.as_ref() != &stored {
-    return Err(RuntimeExecutionError::InvalidConfiguration(
-      "supplied module artifacts do not match the durable definition artifacts".to_string(),
-    ));
-  }
-  Ok(options)
 }
 
 /// Finalizes one custom notification provider's definition-owned lifecycle
@@ -2478,36 +1326,6 @@ fn workflow_has_durable_lock(workflow: &CompiledWorkflowDefinition) -> bool {
       .locks
       .as_deref()
       .is_some_and(|locks| !locks.is_empty())
-}
-
-fn resolved_script_secrets(
-  workflow: &CompiledWorkflowDefinition,
-  node_id: &str,
-  options: &RuntimeExecutionOptions,
-) -> Result<BTreeMap<String, String>, RuntimeExecutionError> {
-  let Some(runtime) = workflow
-    .node(node_id)
-    .and_then(|node| node.script_runtime.as_ref())
-  else {
-    return Ok(BTreeMap::new());
-  };
-  runtime
-    .required_secrets
-    .iter()
-    .map(|name| {
-      options
-        .resolved_secrets
-        .get(name)
-        .filter(|value| !value.is_empty())
-        .cloned()
-        .map(|value| (name.clone(), value))
-        .ok_or_else(|| {
-          RuntimeExecutionError::InvalidConfiguration(format!(
-            "script node {node_id:?} requires unresolved secret {name:?}"
-          ))
-        })
-    })
-    .collect()
 }
 
 fn succeeded_execution(
@@ -2890,220 +1708,6 @@ async fn execute_with_engine_unprofiled<E: RuntimeDagEngine>(
 
 fn sha256_identity(content: &str) -> String {
   format!("sha256:{:x}", Sha256::digest(content.as_bytes()))
-}
-
-fn reusable_lifecycle_artifact_name(action_id: &str) -> String {
-  format!(
-    "__woml_lifecycle__{}",
-    sha256_identity(action_id).trim_start_matches("sha256:")
-  )
-}
-
-fn validate_runtime_modules(
-  workflow: &CompiledWorkflowDefinition,
-  options: &RuntimeExecutionOptions,
-) -> Result<(), RuntimeExecutionError> {
-  let module_artifacts = options
-    .runtime_modules
-    .iter()
-    .filter(|artifact| !artifact.name.starts_with("__woml_"))
-    .collect::<Vec<_>>();
-  let provider_artifacts = options
-    .runtime_modules
-    .iter()
-    .filter(|artifact| artifact.name.starts_with("__woml_provider__"))
-    .collect::<Vec<_>>();
-  let reusable_step_artifacts = options
-    .runtime_modules
-    .iter()
-    .filter(|artifact| artifact.name.starts_with("__woml_reusable__"))
-    .collect::<Vec<_>>();
-  let reusable_lifecycle_artifacts = options
-    .runtime_modules
-    .iter()
-    .filter(|artifact| artifact.name.starts_with("__woml_lifecycle__"))
-    .collect::<Vec<_>>();
-  let runtime_bindings = workflow
-    .module_runtime
-    .as_ref()
-    .map_or(&[][..], |runtime| runtime.modules.as_slice());
-  if runtime_bindings.len() != module_artifacts.len() {
-    return Err(RuntimeExecutionError::InvalidConfiguration(
-      "the runtime module artifacts do not match Model v9".to_string(),
-    ));
-  }
-  let mut total_bytes = 0usize;
-  for (binding, artifact) in runtime_bindings.iter().zip(module_artifacts) {
-    total_bytes = total_bytes
-      .checked_add(artifact.bundle.len())
-      .and_then(|value| value.checked_add(artifact.source_map.len()))
-      .ok_or_else(|| {
-        RuntimeExecutionError::InvalidConfiguration(
-          "runtime module artifact byte count overflowed".to_string(),
-        )
-      })?;
-    let matches = binding.name == artifact.name
-      && binding.bundle_digest == artifact.bundle_digest
-      && binding.source_map_digest == artifact.source_map_digest
-      && binding.exports == artifact.exports
-      && sha256_identity(&artifact.bundle) == artifact.bundle_digest
-      && sha256_identity(&artifact.source_map) == artifact.source_map_digest
-      && artifact.bundle.len() <= crate::durable::MAX_MODULE_ARTIFACT_BYTES
-      && artifact.source_map.len() <= crate::durable::MAX_MODULE_ARTIFACT_BYTES;
-    if !matches {
-      return Err(RuntimeExecutionError::InvalidConfiguration(format!(
-        "runtime module artifact {:?} failed its Model v9 identity or size check",
-        binding.name
-      )));
-    }
-    if options.resolved_secrets.values().any(|secret| {
-      !secret.is_empty()
-        && (artifact.bundle.contains(secret) || artifact.source_map.contains(secret))
-    }) {
-      return Err(RuntimeExecutionError::InvalidConfiguration(format!(
-        "runtime module artifact {:?} contains a resolved secret value",
-        binding.name
-      )));
-    }
-  }
-  let provider_descriptors = workflow
-    .reusable_definitions
-    .iter()
-    .flatten()
-    .filter_map(|definition| match definition {
-      crate::model::CompiledReusableInvocation::NotificationProvider {
-        script_artifact_id, ..
-      } => Some(script_artifact_id.as_str()),
-      _ => None,
-    })
-    .collect::<HashSet<_>>();
-  let mut provider_ids = HashSet::new();
-  for artifact in provider_artifacts {
-    let artifact_id = artifact.name.trim_start_matches("__woml_provider__");
-    total_bytes = total_bytes
-      .checked_add(artifact.bundle.len())
-      .and_then(|value| value.checked_add(artifact.source_map.len()))
-      .ok_or_else(|| {
-        RuntimeExecutionError::InvalidConfiguration(
-          "custom-provider artifact byte count overflowed".to_string(),
-        )
-      })?;
-    if !provider_descriptors.contains(artifact_id)
-      || !provider_ids.insert(artifact_id)
-      || !artifact.exports.is_empty()
-      || !artifact.source_map.is_empty()
-      || sha256_identity(&artifact.bundle) != artifact.bundle_digest
-      || sha256_identity("") != artifact.source_map_digest
-      || artifact.bundle.len() > crate::durable::MAX_MODULE_ARTIFACT_BYTES
-    {
-      return Err(RuntimeExecutionError::InvalidConfiguration(format!(
-        "custom-provider artifact {artifact_id:?} failed its immutable identity or size check"
-      )));
-    }
-  }
-  if provider_ids.len() != provider_descriptors.len() {
-    return Err(RuntimeExecutionError::InvalidConfiguration(
-      "the custom-provider runtime artifacts do not match Model v14".to_string(),
-    ));
-  }
-  let reusable_step_descriptors = workflow
-    .reusable_definitions
-    .iter()
-    .flatten()
-    .filter_map(|definition| match definition {
-      crate::model::CompiledReusableInvocation::Step {
-        script_artifact_id, ..
-      } => Some(script_artifact_id.as_str()),
-      _ => None,
-    })
-    .collect::<HashSet<_>>();
-  let mut reusable_step_ids = HashSet::new();
-  for artifact in reusable_step_artifacts {
-    let artifact_id = artifact.name.trim_start_matches("__woml_reusable__");
-    total_bytes = total_bytes
-      .checked_add(artifact.bundle.len())
-      .and_then(|value| value.checked_add(artifact.source_map.len()))
-      .ok_or_else(|| {
-        RuntimeExecutionError::InvalidConfiguration(
-          "custom-step artifact byte count overflowed".to_string(),
-        )
-      })?;
-    if !reusable_step_descriptors.contains(artifact_id)
-      || !reusable_step_ids.insert(artifact_id)
-      || !artifact.exports.is_empty()
-      || !artifact.source_map.is_empty()
-      || sha256_identity(&artifact.bundle) != artifact.bundle_digest
-      || sha256_identity("") != artifact.source_map_digest
-      || artifact.bundle.len() > crate::durable::MAX_MODULE_ARTIFACT_BYTES
-    {
-      return Err(RuntimeExecutionError::InvalidConfiguration(format!(
-        "custom-step artifact {artifact_id:?} failed its immutable identity or size check"
-      )));
-    }
-  }
-  if reusable_step_ids.len() != reusable_step_descriptors.len() {
-    return Err(RuntimeExecutionError::InvalidConfiguration(
-      "the custom-step runtime artifacts do not match Model v14".to_string(),
-    ));
-  }
-  let reusable_lifecycle_names = workflow
-    .reusable_definitions
-    .iter()
-    .flatten()
-    .flat_map(|definition| match definition {
-      crate::model::CompiledReusableInvocation::Step { lifecycle, .. }
-      | crate::model::CompiledReusableInvocation::NotificationProvider { lifecycle, .. } => {
-        lifecycle
-          .iter()
-          .flat_map(|lifecycle| {
-            lifecycle
-              .on_success
-              .iter()
-              .chain(&lifecycle.on_error)
-              .chain(&lifecycle.on_complete)
-              .flat_map(|actions| actions.iter())
-              .map(|action_id| reusable_lifecycle_artifact_name(action_id))
-              .collect::<Vec<_>>()
-          })
-          .collect::<Vec<_>>()
-      }
-    })
-    .collect::<HashSet<_>>();
-  let mut found_lifecycle_names = HashSet::new();
-  for artifact in reusable_lifecycle_artifacts {
-    total_bytes = total_bytes
-      .checked_add(artifact.bundle.len())
-      .and_then(|value| value.checked_add(artifact.source_map.len()))
-      .ok_or_else(|| {
-        RuntimeExecutionError::InvalidConfiguration(
-          "reusable lifecycle artifact byte count overflowed".to_string(),
-        )
-      })?;
-    if !reusable_lifecycle_names.contains(&artifact.name)
-      || !found_lifecycle_names.insert(artifact.name.as_str())
-      || !artifact.exports.is_empty()
-      || !artifact.source_map.is_empty()
-      || sha256_identity(&artifact.bundle) != artifact.bundle_digest
-      || sha256_identity("") != artifact.source_map_digest
-      || artifact.bundle.len() > crate::durable::MAX_MODULE_ARTIFACT_BYTES
-    {
-      return Err(RuntimeExecutionError::InvalidConfiguration(format!(
-        "reusable lifecycle artifact {:?} failed its immutable identity or size check",
-        artifact.name
-      )));
-    }
-  }
-  if found_lifecycle_names.len() != reusable_lifecycle_names.len() {
-    return Err(RuntimeExecutionError::InvalidConfiguration(
-      "the reusable lifecycle runtime artifacts do not match Model v14".to_string(),
-    ));
-  }
-  if total_bytes > crate::durable::MAX_MODULE_ARTIFACT_SET_BYTES {
-    return Err(RuntimeExecutionError::InvalidConfiguration(
-      "runtime module artifacts exceed the per-definition cache limit".to_string(),
-    ));
-  }
-  Ok(())
 }
 
 async fn resume_with_engine<E: RuntimeDagEngine>(
@@ -3809,14 +2413,6 @@ fn reusable_step_descriptor<'a>(
     })
 }
 
-fn resolved_reusable_props(
-  descriptor: &CompiledReusableInvocation,
-  context: &WorkflowContext,
-  secrets: &BTreeMap<String, String>,
-) -> Result<BTreeMap<String, Value>, RuntimeExecutionError> {
-  resolved_reusable_props_with_iteration(descriptor, context, secrets, None)
-}
-
 fn resolved_reusable_props_with_iteration(
   descriptor: &CompiledReusableInvocation,
   context: &WorkflowContext,
@@ -3891,208 +2487,6 @@ fn resolved_reusable_props_with_iteration(
         ),
       };
       Ok((prop.binding_name.clone(), value))
-    })
-    .collect()
-}
-
-fn reusable_step_binding_for_iteration(
-  workflow: &CompiledWorkflowDefinition,
-  node_id: &str,
-  context: &WorkflowContext,
-  item: &Value,
-  index: u32,
-  total: u32,
-  secrets: &BTreeMap<String, String>,
-) -> Result<Option<ReusableScriptBindingV3>, RuntimeExecutionError> {
-  let Some(descriptor) = reusable_step_descriptor(workflow, node_id) else {
-    return Ok(None);
-  };
-  let CompiledReusableInvocation::Step {
-    invocation_id,
-    alias,
-    definition_digest,
-    source,
-    ..
-  } = descriptor
-  else {
-    unreachable!()
-  };
-  Ok(Some(ReusableScriptBindingV3 {
-    profile: "woml.reusable-script-binding/v3".to_string(),
-    invocation_id: invocation_id.clone(),
-    definition: ReusableDefinitionBindingV3 {
-      kind: ReusableDefinitionKind::Step,
-      alias: alias.clone(),
-      digest: definition_digest.clone(),
-      source: source.clone(),
-    },
-    props: resolved_reusable_props_with_iteration(
-      descriptor,
-      context,
-      secrets,
-      Some((item, index, total)),
-    )?,
-  }))
-}
-
-fn reusable_step_binding(
-  workflow: &CompiledWorkflowDefinition,
-  node_id: &str,
-  context: &WorkflowContext,
-  secrets: &BTreeMap<String, String>,
-) -> Result<Option<ReusableScriptBindingV3>, RuntimeExecutionError> {
-  let Some(descriptor) = reusable_step_descriptor(workflow, node_id) else {
-    return Ok(None);
-  };
-  let CompiledReusableInvocation::Step {
-    invocation_id,
-    alias,
-    definition_digest,
-    source,
-    ..
-  } = descriptor
-  else {
-    unreachable!()
-  };
-  Ok(Some(ReusableScriptBindingV3 {
-    profile: "woml.reusable-script-binding/v3".to_string(),
-    invocation_id: invocation_id.clone(),
-    definition: ReusableDefinitionBindingV3 {
-      kind: ReusableDefinitionKind::Step,
-      alias: alias.clone(),
-      digest: definition_digest.clone(),
-      source: source.clone(),
-    },
-    props: resolved_reusable_props(descriptor, context, secrets)?,
-  }))
-}
-
-fn reusable_definition_binding(
-  descriptor: &CompiledReusableInvocation,
-  context: &WorkflowContext,
-  secrets: &BTreeMap<String, String>,
-) -> Result<ReusableScriptBindingV3, RuntimeExecutionError> {
-  let (invocation_id, kind, alias, definition_digest, source) = match descriptor {
-    CompiledReusableInvocation::Step {
-      invocation_id,
-      alias,
-      definition_digest,
-      source,
-      ..
-    } => (
-      invocation_id,
-      ReusableDefinitionKind::Step,
-      alias,
-      definition_digest,
-      source,
-    ),
-    CompiledReusableInvocation::NotificationProvider {
-      provider_id,
-      alias,
-      definition_digest,
-      source,
-      ..
-    } => (
-      provider_id,
-      ReusableDefinitionKind::NotificationProvider,
-      alias,
-      definition_digest,
-      source,
-    ),
-  };
-  Ok(ReusableScriptBindingV3 {
-    profile: "woml.reusable-script-binding/v3".to_string(),
-    invocation_id: invocation_id.clone(),
-    definition: ReusableDefinitionBindingV3 {
-      kind,
-      alias: alias.clone(),
-      digest: definition_digest.clone(),
-      source: source.clone(),
-    },
-    props: resolved_reusable_props(descriptor, context, secrets)?,
-  })
-}
-
-fn reusable_definition_binding_for_iteration(
-  descriptor: &CompiledReusableInvocation,
-  context: &WorkflowContext,
-  item: &Value,
-  index: u32,
-  total: u32,
-  secrets: &BTreeMap<String, String>,
-) -> Result<ReusableScriptBindingV3, RuntimeExecutionError> {
-  let (invocation_id, kind, alias, definition_digest, source) = match descriptor {
-    CompiledReusableInvocation::Step {
-      invocation_id,
-      alias,
-      definition_digest,
-      source,
-      ..
-    } => (
-      invocation_id,
-      ReusableDefinitionKind::Step,
-      alias,
-      definition_digest,
-      source,
-    ),
-    CompiledReusableInvocation::NotificationProvider {
-      provider_id,
-      alias,
-      definition_digest,
-      source,
-      ..
-    } => (
-      provider_id,
-      ReusableDefinitionKind::NotificationProvider,
-      alias,
-      definition_digest,
-      source,
-    ),
-  };
-  Ok(ReusableScriptBindingV3 {
-    profile: "woml.reusable-script-binding/v3".to_string(),
-    invocation_id: invocation_id.clone(),
-    definition: ReusableDefinitionBindingV3 {
-      kind,
-      alias: alias.clone(),
-      digest: definition_digest.clone(),
-      source: source.clone(),
-    },
-    props: resolved_reusable_props_with_iteration(
-      descriptor,
-      context,
-      secrets,
-      Some((item, index, total)),
-    )?,
-  })
-}
-
-fn resolved_reusable_descriptor_secrets(
-  descriptor: &CompiledReusableInvocation,
-  options: &RuntimeExecutionOptions,
-) -> Result<BTreeMap<String, String>, RuntimeExecutionError> {
-  let props = match descriptor {
-    CompiledReusableInvocation::Step { props, .. }
-    | CompiledReusableInvocation::NotificationProvider { props, .. } => props,
-  };
-  props
-    .iter()
-    .filter_map(|prop| match &prop.expression {
-      crate::model::CompiledReusablePropExpression::Secret { name } => Some(name),
-      _ => None,
-    })
-    .map(|name| {
-      options
-        .resolved_secrets
-        .get(name)
-        .filter(|value| !value.is_empty())
-        .cloned()
-        .map(|value| (name.clone(), value))
-        .ok_or_else(|| {
-          RuntimeExecutionError::InvalidConfiguration(format!(
-            "reusable lifecycle requires unresolved secret {name:?}"
-          ))
-        })
     })
     .collect()
 }
@@ -4534,14 +2928,6 @@ fn custom_lifecycle_props(
       Ok((prop.binding_name.clone(), value))
     })
     .collect()
-}
-
-fn resolve_json_path(root: &Value, path: &[String]) -> Option<Value> {
-  let mut value = root;
-  for segment in path {
-    value = value.as_object()?.get(segment)?;
-  }
-  Some(value.clone())
 }
 
 fn render_template_scalar(value: Value) -> Option<String> {
@@ -7092,92 +5478,6 @@ fn ready_fork(
       has_ready_work || has_recovered_failure || needs_join_settlement
     })
     .cloned()
-}
-
-fn runtime_context_for_node(
-  workflow: &CompiledWorkflowDefinition,
-  projection: &RunProjection,
-  node_id: &str,
-) -> WorkflowContext {
-  let mut context = projection.context.clone();
-  if let Some(visibility) = workflow
-    .graph
-    .context_visibility
-    .as_deref()
-    .unwrap_or_default()
-    .iter()
-    .find(|visibility| visibility.node_id == node_id)
-  {
-    context
-      .steps
-      .retain(|step_id, _| visibility.step_ids.contains(step_id));
-  }
-  if let Some(descriptor) = lock_descriptor_for_body_node(workflow, node_id) {
-    if let Some(lock) = projection
-      .locks
-      .get(&descriptor.lock_id)
-      .filter(|lock| lock.status == crate::LockStatus::Held)
-    {
-      context.lock = Some(crate::LockContext {
-        id: lock.lock_id.clone(),
-        key: lock.key.clone(),
-        fencing_token: lock.fencing_token.clone().unwrap_or_default(),
-        acquired_at: lock
-          .acquired_at
-          .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
-          .unwrap_or_default(),
-      });
-    }
-  }
-  context
-}
-
-fn lock_descriptor_for_body_node<'a>(
-  workflow: &'a CompiledWorkflowDefinition,
-  node_id: &str,
-) -> Option<&'a crate::CompiledLock> {
-  fn contains_node(
-    lock: &crate::CompiledLock,
-    node_id: &str,
-    edges: &[crate::model::CompiledWorkflowEdge],
-  ) -> bool {
-    let mut pending = vec![lock.body_entry_node_id.as_str()];
-    let mut visited = HashSet::new();
-    while let Some(candidate) = pending.pop() {
-      if !visited.insert(candidate) {
-        continue;
-      }
-      if candidate == node_id {
-        return true;
-      }
-      if candidate == lock.body_terminal_node_id {
-        continue;
-      }
-      pending.extend(
-        edges
-          .iter()
-          .filter(|edge| edge.from == candidate)
-          .map(|edge| edge.to.as_str()),
-      );
-    }
-    false
-  }
-  workflow
-    .graph
-    .locks
-    .as_deref()
-    .unwrap_or_default()
-    .iter()
-    .find(|lock| {
-      contains_node(lock, node_id, &workflow.graph.edges)
-        || workflow
-          .graph
-          .for_each
-          .as_deref()
-          .unwrap_or_default()
-          .iter()
-          .any(|loop_| contains_node(lock, node_id, &loop_.body.edges))
-    })
 }
 
 fn resolve_lock_key(
@@ -11195,344 +9495,6 @@ async fn execute_for_each_iteration<E: RuntimeDagEngine + Clone>(
   Ok(result)
 }
 
-fn ensure_local_script_execution(
-  node: &crate::model::CompiledWorkflowNode,
-) -> Result<(), RuntimeExecutionError> {
-  let Some(execution) = node.execution.as_ref() else {
-    return Ok(());
-  };
-  if execution.target == "local" {
-    return Ok(());
-  }
-  Err(RuntimeExecutionError::Stalled(format!(
-    "remote target {:?} for node {:?} requires an activated remote dispatch coordinator",
-    execution.target, node.id
-  )))
-}
-
-async fn execute_script_node<E: RuntimeDagEngine>(
-  engine: &mut E,
-  run_id: &str,
-  node_id: &str,
-  source: &str,
-  publish_terminal_success: bool,
-  options: &RuntimeExecutionOptions,
-  host: &mut Option<ScriptHostClient>,
-) -> Result<ScriptNodeOutcome, RuntimeExecutionError> {
-  let node = engine.workflow().node(node_id).ok_or_else(|| {
-    RuntimeExecutionError::Stalled(format!("script node {node_id:?} is unavailable"))
-  })?;
-  ensure_local_script_execution(node)?;
-  let secrets = resolved_script_secrets(engine.workflow(), node_id, options)?;
-  let invocation_id = generated_id("inv");
-  let projection = engine.projection(run_id)?;
-  let attempt_number = match projection.latest_attempt(node_id) {
-    None => 1,
-    Some(_) => projection
-      .pending_retries
-      .get(node_id)
-      .map(|retry| retry.next_attempt)
-      .ok_or_else(|| {
-        RuntimeExecutionError::Stalled(format!(
-          "node {node_id:?} has prior attempts but no pending retry"
-        ))
-      })?,
-  };
-  let max_attempts = engine
-    .workflow()
-    .node(node_id)
-    .and_then(|node| node.retry_policy.as_ref())
-    .map_or(1, |policy| policy.max_attempts);
-  let idempotency_key = step_effect_idempotency_key(run_id, engine.definition_hash(), node_id);
-  engine.append_payload(
-    run_id,
-    RunEventPayload::StepAttemptStarted(StepAttemptStartedData {
-      node_id: node_id.to_string(),
-      attempt: attempt_number,
-      invocation_id: invocation_id.clone(),
-      handler: "runtime.script".to_string(),
-      idempotency_key: (engine.event_schema_version() >= crate::RUN_EVENT_SCHEMA_VERSION_V6)
-        .then(|| idempotency_key.clone()),
-    }),
-  )?;
-
-  let projection = engine.projection(run_id)?;
-  let context = runtime_context_for_node(engine.workflow(), &projection, node_id);
-  if let Some(limit) = options.max_context_bytes {
-    let actual = serde_json::to_vec(&context)
-      .map_err(|error| RuntimeExecutionError::Stalled(error.to_string()))?
-      .len();
-    if actual > limit {
-      let failure = AttemptFailure {
-        kind: AttemptFailureKind::ContextTooLarge,
-        code: AttemptFailureKind::ContextTooLarge.code().to_string(),
-        message: "Invocation context exceeds the configured byte limit.".to_string(),
-        details: Some(crate::FailureSizeDetails {
-          actual_bytes: Some(actual as u64),
-          limit_bytes: Some(limit as u64),
-        }),
-        ..AttemptFailure::legacy_defaults()
-      };
-      return settle_script_attempt_failure(
-        engine,
-        options,
-        host,
-        run_id,
-        node_id,
-        attempt_number,
-        &invocation_id,
-        failure,
-      )
-      .await;
-    }
-  }
-
-  if host.is_none() {
-    match options.acquire_script_host().await {
-      Ok(client) => *host = Some(client),
-      Err(error) => {
-        return settle_script_attempt_failure(
-          engine,
-          options,
-          host,
-          run_id,
-          node_id,
-          attempt_number,
-          &invocation_id,
-          AttemptFailure {
-            kind: AttemptFailureKind::HostCrashed,
-            code: AttemptFailureKind::HostCrashed.code().to_string(),
-            message: error.to_string(),
-            details: None,
-            ..AttemptFailure::legacy_defaults()
-          },
-        )
-        .await;
-      }
-    }
-  }
-
-  let module_bindings = options
-    .runtime_modules
-    .iter()
-    .filter(|module| !module.name.starts_with("__woml_"))
-    .map(|module| RuntimeModuleBinding {
-      name: module.name.clone(),
-      bundle_digest: module.bundle_digest.clone(),
-      exports: module.exports.clone(),
-    })
-    .collect::<Vec<_>>();
-  let attempt = ScriptAttempt::new(attempt_number, max_attempts, &idempotency_key)
-    .map_err(RuntimeExecutionError::Stalled)?;
-  let reusable = reusable_step_binding(engine.workflow(), node_id, &context, &secrets)?;
-  let request = match reusable.as_ref() {
-    Some(reusable) => ExecuteMessage::reusable_script_with_modules(
-      &invocation_id,
-      run_id,
-      node_id,
-      attempt,
-      options.script_timeout_ms,
-      source,
-      &context,
-      &secrets,
-      &module_bindings,
-      reusable,
-    ),
-    None => ExecuteMessage::runtime_script_with_modules(
-      &invocation_id,
-      run_id,
-      node_id,
-      attempt,
-      options.script_timeout_ms,
-      source,
-      &context,
-      &secrets,
-      &module_bindings,
-    ),
-  };
-  let host_client = host.as_ref().expect("script host was initialized");
-  let artifact_cleanup = ArtifactInvocationCleanup::new(options, &invocation_id);
-  let mut execution = Box::pin(host_client.execute(&request));
-  let mut cancellation_sent = false;
-  let mut timeout_sent = false;
-  let mut lease_loss_sent = false;
-  let mut retire_interrupted_host = false;
-  let completed = loop {
-    tokio::select! {
-      result = &mut execution => break result,
-      _ = tokio::time::sleep(CANCELLATION_POLL_INTERVAL), if !cancellation_sent && !timeout_sent && !lease_loss_sent => {
-        settle_workflow_timeout_if_due(engine, run_id, options.clock.now(), options)?;
-        let current = engine.projection(run_id)?;
-        let protected_lease_lost = lock_descriptor_for_body_node(engine.workflow(), node_id)
-          .and_then(|lock| current.locks.get(&lock.lock_id))
-          .is_some_and(|lock| lock.status == crate::LockStatus::LeaseLost);
-        if protected_lease_lost {
-          lease_loss_sent = true;
-          if let Err(error) = interrupt_script_invocation(host_client, &invocation_id).await {
-            retire_interrupted_host = true;
-            break Err(error);
-          }
-        } else if current.timeout_reached_at.is_some() {
-          timeout_sent = true;
-          if let Err(error) = interrupt_script_invocation(host_client, &invocation_id).await {
-            retire_interrupted_host = true;
-            break Err(error);
-          }
-        } else if current.status == RunStatus::Cancelling {
-          cancellation_sent = true;
-          if let Err(error) = interrupt_script_invocation(host_client, &invocation_id).await {
-            retire_interrupted_host = true;
-            break Err(error);
-          }
-        }
-      }
-      _ = tokio::time::sleep(SCRIPT_HOST_INTERRUPT_GRACE), if cancellation_sent || timeout_sent || lease_loss_sent => {
-        retire_interrupted_host = true;
-        break Err(ScriptHostClientError::HostCrashed(
-          "the script host did not acknowledge invocation interruption before its deadline"
-            .to_string(),
-        ));
-      }
-    }
-  };
-  drop(execution);
-  drop(artifact_cleanup);
-  if retire_interrupted_host {
-    // A host that cannot settle an interrupted Worker cannot safely execute
-    // correction or later workflow work. Dropping it terminates the child
-    // process (`kill_on_drop`) and the next action acquires a fresh host.
-    *host = None;
-  }
-  settle_workflow_timeout_if_due(engine, run_id, options.clock.now(), options)?;
-  if timeout_sent || engine.projection(run_id)?.timeout_reached_at.is_some() {
-    let projection = engine.projection(run_id)?;
-    return Err(resumed_failure(engine, run_id, projection)?);
-  }
-  if lease_loss_sent {
-    let failure = AttemptFailure {
-      kind: AttemptFailureKind::Interrupted,
-      code: "WOML_LOCK_LEASE_LOST".to_string(),
-      message: "The protected step was stopped because its durable lock lease expired.".to_string(),
-      details: None,
-      ..AttemptFailure::legacy_defaults()
-    };
-    return settle_script_attempt_failure(
-      engine,
-      options,
-      host,
-      run_id,
-      node_id,
-      attempt_number,
-      &invocation_id,
-      failure,
-    )
-    .await;
-  }
-  let outcome = match completed {
-    _ if cancellation_sent || engine.projection(run_id)?.status == RunStatus::Cancelling => {
-      return settle_script_attempt_failure(
-        engine,
-        options,
-        host,
-        run_id,
-        node_id,
-        attempt_number,
-        &invocation_id,
-        AttemptFailure {
-          kind: AttemptFailureKind::InvocationCancelled,
-          code: AttemptFailureKind::InvocationCancelled.code().to_string(),
-          message: "The step invocation was cancelled with its workflow run.".to_string(),
-          details: None,
-          ..AttemptFailure::legacy_defaults()
-        },
-      )
-      .await;
-    }
-    Ok(completed) => completed.outcome,
-    Err(error) => {
-      let failure = AttemptFailure {
-        kind: AttemptFailureKind::HostCrashed,
-        code: AttemptFailureKind::HostCrashed.code().to_string(),
-        message: error.to_string(),
-        details: None,
-        ..AttemptFailure::legacy_defaults()
-      };
-      return settle_script_attempt_failure(
-        engine,
-        options,
-        host,
-        run_id,
-        node_id,
-        attempt_number,
-        &invocation_id,
-        failure,
-      )
-      .await;
-    }
-  };
-
-  match outcome {
-    HostOutcome::Success { value } => {
-      let succeeded_data = StepAttemptSucceededData {
-        node_id: node_id.to_string(),
-        attempt: attempt_number,
-        invocation_id,
-        output: value.clone(),
-      };
-      let succeeded = RunEventPayload::StepAttemptSucceeded(succeeded_data);
-      if publish_terminal_success {
-        engine.append_payloads(
-          run_id,
-          vec![
-            succeeded,
-            RunEventPayload::RunSucceeded(RunSucceededData {
-              terminal_node_id: node_id.to_string(),
-              result: value.clone(),
-            }),
-          ],
-        )?;
-        report_attempt_succeeded(engine, options, run_id, node_id, attempt_number);
-        return Ok(ScriptNodeOutcome::WorkflowSucceeded);
-      }
-      append_step_attempt_success_payload(engine, run_id, succeeded)?;
-      drive_reusable_step_lifecycle(
-        engine,
-        run_id,
-        node_id,
-        ReusableInvocationOutcome::Succeeded,
-        Some(value.clone()),
-        None,
-        options,
-        host.as_ref().expect("script host was initialized"),
-      )
-      .await?;
-      report_attempt_succeeded(engine, options, run_id, node_id, attempt_number);
-      Ok(ScriptNodeOutcome::Succeeded(value))
-    }
-    HostOutcome::Failure { error } => {
-      settle_script_attempt_failure(
-        engine,
-        options,
-        host,
-        run_id,
-        node_id,
-        attempt_number,
-        &invocation_id,
-        error.into_attempt_failure(),
-      )
-      .await
-    }
-  }
-}
-
-enum ScriptNodeOutcome {
-  Succeeded(Value),
-  WorkflowSucceeded,
-  RetryScheduled,
-  Cancelled,
-  SagaFailed(Box<StepAttemptFailedData>),
-}
-
 fn compensation_registration(
   workflow: &CompiledWorkflowDefinition,
   node_id: &str,
@@ -12353,22 +10315,6 @@ fn final_result<E: RuntimeDagEngine>(
   })
 }
 
-const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
-const SCRIPT_HOST_INTERRUPT_GRACE: Duration = Duration::from_secs(2);
-
-async fn interrupt_script_invocation(
-  host: &ScriptHostClient,
-  invocation_id: &str,
-) -> Result<(), ScriptHostClientError> {
-  tokio::time::timeout(SCRIPT_HOST_INTERRUPT_GRACE, host.cancel_run(invocation_id))
-    .await
-    .map_err(|_| {
-      ScriptHostClientError::HostCrashed(
-        "the script host did not accept invocation interruption before its deadline".to_string(),
-      )
-    })?
-}
-
 fn cancelled_run_error<E: RuntimeDagEngine>(
   engine: &E,
   run_id: &str,
@@ -12591,159 +10537,6 @@ fn settle_cancelling_run<E: RuntimeDagEngine>(
     }
   }
   engine.decide_run_cancelled(run_id, cancellation_request_id, occurred_at)
-}
-
-async fn settle_script_attempt_failure<E: RuntimeDagEngine>(
-  engine: &mut E,
-  options: &RuntimeExecutionOptions,
-  host: &mut Option<ScriptHostClient>,
-  run_id: &str,
-  node_id: &str,
-  attempt: u32,
-  invocation_id: &str,
-  failure: AttemptFailure,
-) -> Result<ScriptNodeOutcome, RuntimeExecutionError> {
-  let failure_event = StepAttemptFailedData {
-    node_id: node_id.to_string(),
-    attempt,
-    invocation_id: invocation_id.to_string(),
-    failure: failure.clone(),
-  };
-  let disposition =
-    engine.record_step_attempt_failure(run_id, options.clock.now(), failure_event.clone())?;
-  report_attempt_failed(
-    engine,
-    options,
-    run_id,
-    node_id,
-    attempt,
-    failure.code.clone(),
-  );
-  let saga_failure_deferred = matches!(&disposition, StepFailureDisposition::RunFailureDeferred)
-    && engine.workflow().saga_for_body_node(node_id).is_some();
-  match disposition {
-    StepFailureDisposition::RetryScheduled {
-      next_attempt,
-      scheduled_at,
-    } => {
-      report_retry_scheduled(engine, options, run_id, node_id, next_attempt, scheduled_at);
-      return Ok(ScriptNodeOutcome::RetryScheduled);
-    }
-    StepFailureDisposition::StepFailed => {
-      if failure.kind == AttemptFailureKind::InvocationCancelled
-        && engine.projection(run_id)?.status == RunStatus::Cancelling
-      {
-        return Ok(ScriptNodeOutcome::Cancelled);
-      }
-      return Err(RuntimeExecutionError::Stalled(format!(
-        "non-parallel node {node_id:?} returned a group-owned failure"
-      )));
-    }
-    StepFailureDisposition::RunFailureDeferred => {}
-    StepFailureDisposition::RunFailed => {}
-  }
-  if saga_failure_deferred {
-    return Ok(ScriptNodeOutcome::SagaFailed(Box::new(failure_event)));
-  }
-  if reusable_step_descriptor(engine.workflow(), node_id).is_some() && host.is_none() {
-    *host = Some(options.acquire_script_host().await?);
-  }
-  if let Some(host) = host.as_ref() {
-    drive_reusable_step_lifecycle(
-      engine,
-      run_id,
-      node_id,
-      ReusableInvocationOutcome::Failed,
-      None,
-      Some(ReusableLifecycleErrorV1 {
-        code: failure.code.clone(),
-        message: failure.message.clone(),
-      }),
-      options,
-      host,
-    )
-    .await?;
-  }
-  release_held_lock_after_body_failure(engine, run_id, node_id, options.clock.now(), options)?;
-  if engine.projection(run_id)?.business_outcome.is_none() {
-    engine.append_payload(
-      run_id,
-      RunEventPayload::RunFailed(attempt_run_failed_data(
-        engine.event_schema_version(),
-        &StepAttemptFailedData {
-          node_id: node_id.to_string(),
-          attempt,
-          invocation_id: invocation_id.to_string(),
-          failure: failure.clone(),
-        },
-      )),
-    )?;
-  }
-  Err(RuntimeExecutionError::RunFailed(Box::new(
-    FailedRunDetails {
-      code: if retry_max_attempts(engine, node_id) > 1
-        && attempt >= retry_max_attempts(engine, node_id)
-        && failure.kind == AttemptFailureKind::ScriptThrew
-      {
-        "WOML_STEP_RETRIES_EXHAUSTED".to_string()
-      } else {
-        failure.code.clone()
-      },
-      message: if retry_max_attempts(engine, node_id) > 1
-        && attempt >= retry_max_attempts(engine, node_id)
-        && failure.kind == AttemptFailureKind::ScriptThrew
-      {
-        format!(
-          "attempt {} of {} failed [{}].",
-          attempt,
-          retry_max_attempts(engine, node_id),
-          failure.code
-        )
-      } else {
-        failure.message.clone()
-      },
-      node_id: Some(node_id.to_string()),
-      attempt: Some(attempt),
-      max_attempts: Some(retry_max_attempts(engine, node_id)),
-      failure,
-      events: engine.events(run_id)?,
-    },
-  )))
-}
-
-fn release_held_lock_after_body_failure<E: RuntimeDagEngine>(
-  engine: &mut E,
-  run_id: &str,
-  node_id: &str,
-  released_at: chrono::DateTime<chrono::Utc>,
-  options: &RuntimeExecutionOptions,
-) -> Result<(), RuntimeExecutionError> {
-  let Some(descriptor) = lock_descriptor_for_body_node(engine.workflow(), node_id).cloned() else {
-    return Ok(());
-  };
-  let projection = engine.projection(run_id)?;
-  let Some(lock) = projection
-    .locks
-    .get(&descriptor.lock_id)
-    .filter(|lock| lock.status == crate::LockStatus::Held)
-    .cloned()
-  else {
-    return Ok(());
-  };
-  let acquired_at = lock.acquired_at.ok_or_else(|| {
-    RuntimeExecutionError::Stalled("A held lock has no acquisition timestamp.".to_string())
-  })?;
-  let result = serde_json::json!({
-    "status": "released",
-    "key": lock.key,
-    "fencingToken": lock.fencing_token,
-    "acquiredAt": acquired_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-    "releasedAt": released_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-    "waitedMs": (acquired_at - lock.registered_at).num_milliseconds().max(0),
-  });
-  engine.release_lock(run_id, &descriptor.lock_id, result, released_at)?;
-  options.stop_lock_renewal(run_id, &descriptor.lock_id);
-  Ok(())
 }
 
 fn fail_choice<T, E: RuntimeDagEngine>(

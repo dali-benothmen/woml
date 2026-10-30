@@ -557,3 +557,258 @@ fn protocol_contract_paths_remain_available() {
   let _ = std::any::type_name::<woml_engine::protocol::FetchObservationMessage>();
   let _ = std::any::type_name::<woml_engine::protocol::FetchObservationAckMessage<'static>>();
 }
+
+// RCM2/RCM3 inventories frozen from commit 2c485ab before extraction.
+
+#[test]
+fn engine_contract_paths_remain_available() {
+  let _ = std::any::type_name::<woml_engine::engine::EngineError>();
+  let _: fn(woml_engine::EngineError) -> woml_engine::engine::EngineError = |value| value;
+  let _ = std::any::type_name::<woml_engine::engine::InMemoryDagEngine>();
+  let _: fn(woml_engine::InMemoryDagEngine) -> woml_engine::engine::InMemoryDagEngine =
+    |value| value;
+  let _ = woml_engine::engine::step_effect_idempotency_key;
+}
+
+#[test]
+fn projection_contract_paths_remain_available() {
+  let _ = std::any::type_name::<woml_engine::projection::RunStatus>();
+  let _: fn(woml_engine::RunStatus) -> woml_engine::projection::RunStatus = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::LifecycleStatus>();
+  let _: fn(woml_engine::LifecycleStatus) -> woml_engine::projection::LifecycleStatus =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::LifecycleActionStatus>();
+  let _: fn(woml_engine::LifecycleActionStatus) -> woml_engine::projection::LifecycleActionStatus =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::LifecycleActionProjection>();
+  let _: fn(
+    woml_engine::LifecycleActionProjection,
+  ) -> woml_engine::projection::LifecycleActionProjection = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::LifecycleHookStatus>();
+  let _: fn(woml_engine::LifecycleHookStatus) -> woml_engine::projection::LifecycleHookStatus =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::LifecycleHookProjection>();
+  let _: fn(
+    woml_engine::LifecycleHookProjection,
+  ) -> woml_engine::projection::LifecycleHookProjection = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::ReusableLifecycleStatus>();
+  let _: fn(
+    woml_engine::ReusableLifecycleStatus,
+  ) -> woml_engine::projection::ReusableLifecycleStatus = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::ReusableLifecycleProjection>();
+  let _: fn(
+    woml_engine::ReusableLifecycleProjection,
+  ) -> woml_engine::projection::ReusableLifecycleProjection = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::WorkflowContext>();
+  let _: fn(woml_engine::WorkflowContext) -> woml_engine::projection::WorkflowContext =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::LockContext>();
+  let _: fn(woml_engine::LockContext) -> woml_engine::projection::LockContext = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::AttemptIdentity>();
+  let _ = std::any::type_name::<woml_engine::projection::AttemptStatus>();
+  let _ = std::any::type_name::<woml_engine::projection::AttemptProjection>();
+  let _ = std::any::type_name::<woml_engine::projection::OperationIdentity>();
+  let _: fn(woml_engine::OperationIdentity) -> woml_engine::projection::OperationIdentity =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::OperationStatus>();
+  let _: fn(woml_engine::OperationStatus) -> woml_engine::projection::OperationStatus =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::OperationProjection>();
+  let _: fn(woml_engine::OperationProjection) -> woml_engine::projection::OperationProjection =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::RetryScheduleProjection>();
+  let _: fn(
+    woml_engine::RetryScheduleProjection,
+  ) -> woml_engine::projection::RetryScheduleProjection = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::ParallelGroupStatus>();
+  let _: fn(woml_engine::ParallelGroupStatus) -> woml_engine::projection::ParallelGroupStatus =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::ParallelGroupProjection>();
+  let _: fn(
+    woml_engine::ParallelGroupProjection,
+  ) -> woml_engine::projection::ParallelGroupProjection = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::ForkJoinStatus>();
+  let _: fn(woml_engine::ForkJoinStatus) -> woml_engine::projection::ForkJoinStatus = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::ForkBranchProjection>();
+  let _: fn(woml_engine::ForkBranchProjection) -> woml_engine::projection::ForkBranchProjection =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::ForkProjection>();
+  let _: fn(woml_engine::ForkProjection) -> woml_engine::projection::ForkProjection = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::ForEachStatus>();
+  let _ = std::any::type_name::<woml_engine::projection::ForEachIterationStatus>();
+  let _ = std::any::type_name::<woml_engine::projection::ForEachProjection>();
+  let _ = std::any::type_name::<woml_engine::projection::ForEachIterationExecutionProjection>();
+  let _ = std::any::type_name::<woml_engine::projection::ApprovalRequestStatus>();
+  let _: fn(woml_engine::ApprovalRequestStatus) -> woml_engine::projection::ApprovalRequestStatus =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::ApprovalRequestProjection>();
+  let _: fn(
+    woml_engine::ApprovalRequestProjection,
+  ) -> woml_engine::projection::ApprovalRequestProjection = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::RichApprovalRequestStatus>();
+  let _: fn(
+    woml_engine::RichApprovalRequestStatus,
+  ) -> woml_engine::projection::RichApprovalRequestStatus = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::RichApprovalReviewerDecisionProjection>();
+  let _: fn(
+    woml_engine::RichApprovalReviewerDecisionProjection,
+  ) -> woml_engine::projection::RichApprovalReviewerDecisionProjection = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::RichApprovalRequestProjection>();
+  let _: fn(
+    woml_engine::RichApprovalRequestProjection,
+  ) -> woml_engine::projection::RichApprovalRequestProjection = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::DurableWaitStatus>();
+  let _: fn(woml_engine::DurableWaitStatus) -> woml_engine::projection::DurableWaitStatus =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::DurableWaitProjection>();
+  let _: fn(woml_engine::DurableWaitProjection) -> woml_engine::projection::DurableWaitProjection =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::LockStatus>();
+  let _: fn(woml_engine::LockStatus) -> woml_engine::projection::LockStatus = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::LockProjection>();
+  let _: fn(woml_engine::LockProjection) -> woml_engine::projection::LockProjection = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::SagaPhase>();
+  let _: fn(woml_engine::SagaPhase) -> woml_engine::projection::SagaPhase = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::CorrectionActionStatus>();
+  let _: fn(
+    woml_engine::CorrectionActionStatus,
+  ) -> woml_engine::projection::CorrectionActionStatus = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::CorrectionActionProjection>();
+  let _: fn(
+    woml_engine::CorrectionActionProjection,
+  ) -> woml_engine::projection::CorrectionActionProjection = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::SagaProjection>();
+  let _: fn(woml_engine::SagaProjection) -> woml_engine::projection::SagaProjection = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::NotificationDeliveryStatus>();
+  let _: fn(
+    woml_engine::NotificationDeliveryStatus,
+  ) -> woml_engine::projection::NotificationDeliveryStatus = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::NotificationDeliveryProjection>();
+  let _: fn(
+    woml_engine::NotificationDeliveryProjection,
+  ) -> woml_engine::projection::NotificationDeliveryProjection = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::NotificationMessageUpdateStatus>();
+  let _: fn(
+    woml_engine::NotificationMessageUpdateStatus,
+  ) -> woml_engine::projection::NotificationMessageUpdateStatus = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::NotificationMessageUpdateProjection>();
+  let _: fn(
+    woml_engine::NotificationMessageUpdateProjection,
+  ) -> woml_engine::projection::NotificationMessageUpdateProjection = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::RunFailure>();
+  let _: fn(woml_engine::RunFailure) -> woml_engine::projection::RunFailure = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::RunProjection>();
+  let _: fn(woml_engine::RunProjection) -> woml_engine::projection::RunProjection = |value| value;
+  let _ = std::any::type_name::<woml_engine::projection::FoldError>();
+  let _: fn(woml_engine::FoldError) -> woml_engine::projection::FoldError = |value| value;
+  let _ = woml_engine::projection::fold_events;
+}
+
+#[test]
+fn runtime_contract_paths_remain_available() {
+  let _ = std::any::type_name::<woml_engine::runtime::ExecutionProgress>();
+  let _: fn(woml_engine::ExecutionProgress) -> woml_engine::runtime::ExecutionProgress =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::ExecutionProgressReporter>();
+  let _: fn(
+    woml_engine::ExecutionProgressReporter,
+  ) -> woml_engine::runtime::ExecutionProgressReporter = |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::LifecycleProgressPhase>();
+  let _: fn(woml_engine::LifecycleProgressPhase) -> woml_engine::runtime::LifecycleProgressPhase =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::LifecycleProgress>();
+  let _: fn(woml_engine::LifecycleProgress) -> woml_engine::runtime::LifecycleProgress =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::LifecycleProgressReporter>();
+  let _: fn(
+    woml_engine::LifecycleProgressReporter,
+  ) -> woml_engine::runtime::LifecycleProgressReporter = |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::RuntimePolicyProgressPhase>();
+  let _: fn(
+    woml_engine::RuntimePolicyProgressPhase,
+  ) -> woml_engine::runtime::RuntimePolicyProgressPhase = |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::RuntimePolicyProgress>();
+  let _: fn(woml_engine::RuntimePolicyProgress) -> woml_engine::runtime::RuntimePolicyProgress =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::RuntimePolicyProgressReporter>();
+  let _: fn(
+    woml_engine::RuntimePolicyProgressReporter,
+  ) -> woml_engine::runtime::RuntimePolicyProgressReporter = |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::RuntimeModuleArtifact>();
+  let _: fn(woml_engine::RuntimeModuleArtifact) -> woml_engine::runtime::RuntimeModuleArtifact =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::SystemEngineClock>();
+  let _: fn(woml_engine::SystemEngineClock) -> woml_engine::runtime::SystemEngineClock =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::FixedEngineClock>();
+  let _: fn(woml_engine::FixedEngineClock) -> woml_engine::runtime::FixedEngineClock =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::RuntimeExecutionOptions>();
+  let _: fn(woml_engine::RuntimeExecutionOptions) -> woml_engine::runtime::RuntimeExecutionOptions =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::WorkflowExecutionResult>();
+  let _: fn(woml_engine::WorkflowExecutionResult) -> woml_engine::runtime::WorkflowExecutionResult =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::WorkflowRuntimeOutcome>();
+  let _: fn(woml_engine::WorkflowRuntimeOutcome) -> woml_engine::runtime::WorkflowRuntimeOutcome =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::WaitingWorkflowApproval>();
+  let _: fn(woml_engine::WaitingWorkflowApproval) -> woml_engine::runtime::WaitingWorkflowApproval =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::WaitingRichApprovalAuthority>();
+  let _: fn(
+    woml_engine::WaitingRichApprovalAuthority,
+  ) -> woml_engine::runtime::WaitingRichApprovalAuthority = |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::WaitingWorkflowTimer>();
+  let _: fn(woml_engine::WaitingWorkflowTimer) -> woml_engine::runtime::WaitingWorkflowTimer =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::WaitingWorkflowSignal>();
+  let _: fn(woml_engine::WaitingWorkflowSignal) -> woml_engine::runtime::WaitingWorkflowSignal =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::RuntimeExecutionError>();
+  let _: fn(woml_engine::RuntimeExecutionError) -> woml_engine::runtime::RuntimeExecutionError =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::CancelledRunDetails>();
+  let _: fn(woml_engine::CancelledRunDetails) -> woml_engine::runtime::CancelledRunDetails =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::FailedRunDetails>();
+  let _ = std::any::type_name::<woml_engine::runtime::FailedBranchDetails>();
+  let _ = std::any::type_name::<woml_engine::runtime::FailedParallelDetails>();
+  let _: fn(woml_engine::FailedParallelDetails) -> woml_engine::runtime::FailedParallelDetails =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::FailedApprovalDetails>();
+  let _: fn(woml_engine::FailedApprovalDetails) -> woml_engine::runtime::FailedApprovalDetails =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::FailedNotificationDetails>();
+  let _: fn(
+    woml_engine::FailedNotificationDetails,
+  ) -> woml_engine::runtime::FailedNotificationDetails = |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::BranchFailureSite>();
+  let _: fn(woml_engine::BranchFailureSite) -> woml_engine::runtime::BranchFailureSite =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::runtime::ExternalSignalRuntimeOutcome>();
+  let _: fn(
+    woml_engine::ExternalSignalRuntimeOutcome,
+  ) -> woml_engine::runtime::ExternalSignalRuntimeOutcome = |value| value;
+  let _ = std::any::type_name::<dyn woml_engine::runtime::EngineClock>();
+  let _ = woml_engine::runtime::execute_workflow;
+  let _ = woml_engine::runtime::execute_workflow_durable;
+  let _ = woml_engine::runtime::execute_workflow_durable_outcome;
+  let _ = woml_engine::runtime::resume_workflow_durable;
+  let _ = woml_engine::runtime::resume_workflow_durable_outcome;
+  let _ = woml_engine::runtime::resume_workflow_durable_any_outcome;
+  let _ = woml_engine::runtime::execute_admitted_trigger_run_durable;
+  let _ = woml_engine::runtime::execute_reusable_provider_lifecycle_durable;
+  let _ = woml_engine::runtime::recover_durable_runs;
+  let _ = woml_engine::runtime::resume_due_timer_waits_durable;
+  let _ = woml_engine::runtime::admit_external_signal_durable;
+  let _ = woml_engine::runtime::resolve_human_approval_durable;
+  let _ = woml_engine::runtime::resolve_rich_approval_durable;
+  let _ = woml_engine::runtime::settle_approval_timeout_durable;
+  let _ = woml_engine::runtime::EXECUTION_PROGRESS_CONTRACT;
+  let _ = woml_engine::runtime::EXECUTION_PROGRESS_VERSION;
+  let _ = woml_engine::runtime::LIFECYCLE_PROGRESS_PROFILE;
+  let _ = woml_engine::runtime::RUNTIME_POLICY_PROGRESS_PROFILE;
+  let _ = woml_engine::runtime::RUNTIME_OUTCOME_CONTRACT;
+  let _ = woml_engine::runtime::RUNTIME_OUTCOME_VERSION;
+}
