@@ -1,4 +1,4 @@
-# Rust core modularization: RCM0–RCM5 verification
+# Rust core modularization: RCM0–RCM7 verification
 
 This is an internal refactor, not a language, schema, or runtime revision.
 Branch: `refactor/rust-core-modularization`. Baseline source:
@@ -461,3 +461,195 @@ now explains each new owner and why it exists, and its teaching/source routes
 and atlas match these modules. That book remains ignored according to the
 user's existing `.gitignore`; neither that rule nor unrelated roadmaps changed.
 The next extraction is RCM6 (durable opening, schema, and migrations).
+
+## RCM6 and RCM7: durable opening, commits, indexes, and inspection
+
+Baseline: `35ebd561e79f8759483293cd345f82183b0cfbb0`, after the committed
+RCM4/RCM5 work. The [RCM6 baseline](rcm6-baseline.json) freezes the original
+`durable.rs` hash, its public inventories (111 types, two functions, 20
+constants, one trait), and exact hashes of all 19 schema/migration DDL
+literals. Existing API, native export, fixture, and integration-target
+baselines remain unchanged. No dependency, schema, contract, or budget bump
+is part of these phases.
+
+### RCM6 ownership
+
+| Responsibility | Private durable implementation |
+|---|---|
+| Full startup initialization versus prepared request opening | `opening.rs` |
+| Current/historical version markers and exact DDL literals | `schema.rs` |
+| Ordered transactional layout upgrades and marker updates | `migrations.rs` |
+| Historical/current required-object and column checks | `validation.rs` |
+| Stable store errors/conversions/display | `errors.rs` |
+| Typed admission, ownership, notification, approval, policy, wait, lock, correction, inspection, recovery, and run-control records | `records/` |
+
+`DurableEventStore` retains the original connection and `RefCell` projection
+cache in the parent facade. New inherent `impl DurableEventStore` blocks add
+methods to that same type; they are not new repository objects, per-feature
+connections, or transaction owners. Existing public `woml_engine::durable::*`
+names and root re-exports remain available. Private types/helpers required by
+siblings use durable-tree visibility, with no wildcard exports or new public
+implementation modules. Record Serde attributes, variant/field order, errors,
+and private evidence semantics are unchanged.
+
+Startup `open`/`open_in_memory` still call `initialize`. The original order is
+retained: configure the connection, prepare base schema, validate the stored
+version/layout, perform necessary migrations, validate current layout,
+rebuild correction indexes in an immediate transaction, conditionally rebuild
+policy indexes and summaries, then expire scheduler claims. General
+interrupted-run recovery is not part of opening.
+
+`open_ready` still configures the prepared connection and checks the current
+version marker without running DDL, historical validation, migration, index
+rebuild, or interrupted-work classification. Startup readiness is its caller's
+precondition. Both opening paths retain the existing five-second busy timeout
+and foreign-key setup. No SQL literals were moved into external SQL files.
+
+RCM6 compiled and its regression targets ran before RCM7 extraction. The
+selected pre-extraction baseline passed 35 tests. RCM6 passed 57 tests across
+six targets and exposed one unchanged stale-version assertion described below.
+After Cargo stopped at `durable_state_store`, the remaining `locks_and_leases`
+target was run separately; all 17 tests passed.
+
+### RCM7 ownership and boundaries
+
+| Responsibility | Private durable implementation |
+|---|---|
+| Immutable program, module artifacts, and exact run bindings | `definitions.rs` |
+| Run creation and atomic event-batch authority | `events/commits.rs` |
+| Integrity-checked history loading and transaction-borrowing append helpers | `events/history.rs` |
+| Shared historical outcome/lifecycle semantics and warnings | `events/compatibility.rs` |
+| Validated bounded projection caching and rich-review output hydration | `events/cache.rs` |
+| Event-derived summaries | `indexes/run_summaries.rs` |
+| Policy binding, queue, start indexes and rebuild detection | `indexes/policy.rs` |
+| Correction read models, retaining external operator decisions | `indexes/correction.rs` |
+| Bounded versioned run/review/wait/lock/correction reads | `inspection/` |
+
+The original immediate transaction still encloses run/binding checks,
+history loading, candidate state, compatibility expansion, definition/scope
+validation, actual event sequencing, row writes, history validation, summaries,
+and relevant index writes. Commit still precedes cache publication. Low-level
+history helpers borrow the existing caller transaction and do not independently
+commit. Feature-specific commits remain with their original feature authority
+in the parent for RCM8.
+
+Cache freshness still compares event count/sequence and last event identity.
+Tentative append preparation removes the old cached entry; failures cannot
+publish speculative candidate state. Reload validates against the exact
+definition. Rich-approval output hydration still happens on both cache hits
+and misses. Terminal runs remain outside the bounded active cache.
+
+`expand_model_v11_payload` and lifecycle warning reconstruction retain their
+original crate-visible durable-facade paths. The in-memory runtime adapter
+continues using the same compatibility semantics; this code was not hidden
+behind a database-only interface. Both ordinary correction-index maintenance
+and startup rebuild preserve `externally_resolved` operator decisions. Those
+mixed rows were not reclassified as wholly disposable projections.
+
+The parent durable file is now 11,374 lines, down from 18,315. There are 34
+new private production Rust files and one new characterization-test file.
+Feature transactions, recovery, and `DurableDagEngine` intentionally remain
+for RCM8/RCM9; this is not a claim that the whole durable facade is finished.
+Line counts measure organization rather than execution performance.
+
+### Characterization and preservation evidence
+
+The one-time token audit matches all 516 original production durable
+declarations/methods across the parent and 34 private production files. It
+retains attributes, literal contents (including inline SQL), and statement
+order, permitting formatting/trailing commas and documented durable-scoped
+visibility. The existing notification-capability test module is retained;
+new test-only code is outside the production token comparison. No algorithm,
+synchronization, transaction, or cache-publication substitution was needed.
+This supports, rather than replaces, executable tests.
+
+Five new `durable::boundary_tests` characterize:
+
+1. Prepared opening alongside an existing writer without DDL/schema repair.
+   This deliberately damages a test schema to distinguish startup validation
+   from the ready caller's precondition; it is not a supported way to admit
+   an arbitrary damaged production database.
+2. Rejection of old/future markers without changing the marker or migrating.
+3. Rollback of an entire batch when its second payload is invalid, including
+   removal of speculative cache state and reuse of the unconsumed event ID.
+4. A forced summary-write failure after candidate history processing, proving
+   history, summary, sequence/event ID, and cache publication remain coherent.
+5. Rejection of a cached history with equal count but a different last event
+   identity, without letting its fabricated trigger data replace durable truth.
+
+These complement the existing invalid-append, cross-connection refresh,
+failed-migration, admission rollback, rich-review race, correction evidence,
+backup/restore, and retention suites. No assertion, timeout, stack size,
+inspection limit, or performance budget was relaxed.
+
+### Source verifiers and developer navigation
+
+The waits, locks, rich approvals, runtime-ownership, and observability source
+verifiers now use the existing owned-tree Rust reader. Their required and
+forbidden assertions remain intact. Compensation, policy, and streaming-output
+verifiers already read recursively and still pass. These are source/artifact
+contract checks, not evidence that installed-package or platform execution was
+performed locally.
+
+`core_contract_paths` now compiles every original durable type/function/constant
+and the provider trait, checking root/direct-module type identity where the
+root export existed. The Bun contract guard includes durable public inventories
+and exact DDL literal hashes, while preserving prior native names, fixture
+bytes, boxed call sites, and target discovery checks.
+
+The ignored local developer book now follows actual opening, schema,
+definition, commit, cache, index, inspection, and record owners. Chapter 14
+explains who controls each boundary and why it exists; the beginner story,
+architecture map, schema map, reading routes, version references, reviewed
+edition inventory, and source atlas were updated together. Feature/recovery
+work still pending is explicitly distinguished from implemented modules.
+The user's ignore rule and unrelated untracked roadmaps are preserved.
+
+### Verification scope and known baseline assertion
+
+All local Cargo build/test commands run one at a time with one job; test/check
+commands use locked offline dependencies and disabled dev debug/incremental
+output. Durable/process/port tests are serial. The established Clippy command
+retains its existing policy and allowlist. No release build was run.
+
+| Check | Local RCM6/RCM7 result |
+|---|---|
+| Pre-extraction store/correction/restore/presentation selection | 35 passed |
+| RCM6 store/state/migration/contracts/lock/restore selection | 57 passed; 1 unchanged stale-version assertion failed |
+| New opening/transaction/cache characterization | 5 passed |
+| RCM7 store/authority/index/inspection selection (11 targets) | 105 passed |
+| Engine plus native consumer checks | Passed without warnings |
+| Native separation rebuilt against the final engine | 4 passed |
+| Final durable unit filter | 6 passed (5 new boundary tests and the retained capability-token test) |
+| Established engine Clippy policy | Passed; no new allowances |
+| Portable CLI contracts | 17-file shard passed |
+| Source/API/DDL/fixture/boxing/architecture guards | 13 passed |
+| TypeScript and eight affected source release/ownership/observability verifiers | Passed |
+| Rust formatting, token audit, and diff validation | Passed |
+| Ignored developer book and source atlas | Passed; 1,691 files, 77 pages, 3,252 local links |
+
+Selections overlap; do not sum them as distinct tests. RCM7 targets were
+`backup_restore`, `compensation_store`, `core_contract_paths`,
+`durable_event_store`, `locks_and_leases`, `notification_infrastructure`,
+`retention`, `rich_plan_approval_authority`, `run_presentation`,
+`runtime_policy_store`, and `trigger_occurrence`, with `--no-fail-fast` so one
+target could not conceal later coverage.
+
+The RCM6 failure is
+`durable_state_store::store_v12_migrates_transactionally_through_state_v1_to_store_v14`,
+line 110: `assert_eq!(DURABLE_STORE_SCHEMA_VERSION, 15)`. The immediately
+preceding check that the actual migrated version equals the current constant
+passes; the current constant is 20. The exact committed `35ebd56` test has
+that same unconditional assertion, and the committed source defines 20.
+Neither file contained an intervening version fix before this extraction;
+their original contents also match the earlier pre-RCM4 snapshot for this
+comparison. This is direct static proof of a pre-existing assertion, not a
+claim that an archived executable was rerun in this turn. The test remains
+unchanged, was not skipped in its run, and no schema change was used to hide
+it. Its other seven tests, including failed-v12-migration rollback, passed.
+
+Earlier RCM4/RCM5 baseline findings remain documented above. Their three
+specific failing tests were not rerun or fixed as part of these code moves.
+The next implementation phase is RCM8. macOS/Windows, actual-addon export
+loading, installed-package journeys, and full release performance/security
+gates remain independent verification work, not implied passing results.

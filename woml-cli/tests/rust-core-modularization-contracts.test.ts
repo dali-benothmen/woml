@@ -7,12 +7,13 @@ import { expectedNativeExports } from '../scripts/verify-native-exports';
 import baseline from '../../docs/refactoring/rcm0-baseline.json';
 import executionBaseline from '../../docs/refactoring/rcm2-baseline.json';
 import runtimeBaseline from '../../docs/refactoring/rcm4-baseline.json';
+import durableBaseline from '../../docs/refactoring/rcm6-baseline.json';
 
 const root = resolve(import.meta.dir, '../..');
 const hash = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex');
 
 test('contract facades preserve the frozen public type inventories', async () => {
-  for (const [module, contract] of Object.entries({ ...baseline.contracts, ...executionBaseline.contracts })) {
+  for (const [module, contract] of Object.entries({ ...baseline.contracts, ...executionBaseline.contracts, ...durableBaseline.contracts })) {
     const source = await readRustModuleSource(resolve(root, `core/woml-engine/src/${module}.rs`));
     const names = [...source.matchAll(/^pub (?:struct|enum|type) (\w+)/gm)].map(match => match[1]!).sort();
     expect(names).toEqual([...contract.publicTypes].sort());
@@ -24,7 +25,7 @@ test('contract facades preserve the frozen public type inventories', async () =>
 });
 
 test('execution facades preserve their frozen public functions, constants, and traits', async () => {
-  for (const [module, contract] of Object.entries(executionBaseline.contracts)) {
+  for (const [module, contract] of Object.entries({ ...executionBaseline.contracts, ...durableBaseline.contracts })) {
     const source = await readRustModuleSource(resolve(root, `core/woml-engine/src/${module}.rs`));
     const names = (pattern: RegExp): string[] => [...source.matchAll(pattern)].map(match => match[1]!).sort();
     expect(names(/^pub (?:async )?fn (\w+)/gm)).toEqual([...contract.publicFunctions].sort());
@@ -48,6 +49,15 @@ test('runtime extraction preserves intentional boxed invocation and continuation
   // Complements ordinary-stack runtime tests; counting call sites alone is
   // not proof of cancellation, ownership, stack safety, or equivalent futures.
   expect(callees).toEqual(runtimeBaseline.boxedCallees);
+});
+
+test('durable extraction preserves the exact frozen schema and migration DDL literals', async () => {
+  const source = (await readRustModuleSource(resolve(root, 'core/woml-engine/src/durable.rs')))
+    .replaceAll('\r\n', '\n');
+  const ddl = [...source.matchAll(/^(?:pub(?:\([^)]*\))? )?const ((?:CREATE|MIGRATE)_\w+): &str = (r#"[\s\S]*?"#);/gm)]
+    .map(match => ({ name: match[1]!, sha256: hash(match[2]!) }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  expect(ddl).toEqual(durableBaseline.ddl);
 });
 
 test('the reviewed text fixture tree retains its canonical LF bytes', async () => {

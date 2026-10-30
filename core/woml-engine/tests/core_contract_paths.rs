@@ -812,3 +812,397 @@ fn runtime_contract_paths_remain_available() {
   let _ = woml_engine::runtime::RUNTIME_OUTCOME_CONTRACT;
   let _ = woml_engine::runtime::RUNTIME_OUTCOME_VERSION;
 }
+
+// RCM6/RCM7 paths frozen from commit 35ebd56 before durable extraction.
+#[test]
+fn durable_contract_paths_remain_available() {
+  let _ = std::any::type_name::<woml_engine::durable::RuntimeOwnerLease>();
+  let _: fn(woml_engine::RuntimeOwnerLease) -> woml_engine::durable::RuntimeOwnerLease =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunDefinitionBinding>();
+  let _: fn(woml_engine::RunDefinitionBinding) -> woml_engine::durable::RunDefinitionBinding =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::TriggerAdmissionRequest>();
+  let _: fn(woml_engine::TriggerAdmissionRequest) -> woml_engine::durable::TriggerAdmissionRequest =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::TriggerOccurrence>();
+  let _: fn(woml_engine::TriggerOccurrence) -> woml_engine::durable::TriggerOccurrence =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::TriggerAdmissionOutcome>();
+  let _: fn(woml_engine::TriggerAdmissionOutcome) -> woml_engine::durable::TriggerAdmissionOutcome =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ScheduleCursorRegistration>();
+  let _: fn(
+    woml_engine::ScheduleCursorRegistration,
+  ) -> woml_engine::durable::ScheduleCursorRegistration = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ScheduleCursor>();
+  let _: fn(woml_engine::ScheduleCursor) -> woml_engine::durable::ScheduleCursor = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ScheduleCursorRegistrationOutcome>();
+  let _: fn(
+    woml_engine::ScheduleCursorRegistrationOutcome,
+  ) -> woml_engine::durable::ScheduleCursorRegistrationOutcome = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::IntervalCursorRegistration>();
+  let _: fn(
+    woml_engine::IntervalCursorRegistration,
+  ) -> woml_engine::durable::IntervalCursorRegistration = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::IntervalCursor>();
+  let _: fn(woml_engine::IntervalCursor) -> woml_engine::durable::IntervalCursor = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::IntervalCursorRegistrationOutcome>();
+  let _: fn(
+    woml_engine::IntervalCursorRegistrationOutcome,
+  ) -> woml_engine::durable::IntervalCursorRegistrationOutcome = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::TriggerRecoveryWork>();
+  let _: fn(woml_engine::TriggerRecoveryWork) -> woml_engine::durable::TriggerRecoveryWork =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::InternalEventAdmissionRequest>();
+  let _: fn(
+    woml_engine::InternalEventAdmissionRequest,
+  ) -> woml_engine::durable::InternalEventAdmissionRequest = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::InternalEventAdmissionOutcome>();
+  let _: fn(
+    woml_engine::InternalEventAdmissionOutcome,
+  ) -> woml_engine::durable::InternalEventAdmissionOutcome = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::IssuedApprovalToken>();
+  let _: fn(woml_engine::IssuedApprovalToken) -> woml_engine::durable::IssuedApprovalToken =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ApprovalTokenBinding>();
+  let _: fn(woml_engine::ApprovalTokenBinding) -> woml_engine::durable::ApprovalTokenBinding =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::NotificationDeliveryWork>();
+  let _: fn(
+    woml_engine::NotificationDeliveryWork,
+  ) -> woml_engine::durable::NotificationDeliveryWork = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::NotificationProviderDeliveryResult>();
+  let _: fn(
+    woml_engine::NotificationProviderDeliveryResult,
+  ) -> woml_engine::durable::NotificationProviderDeliveryResult = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::NotificationUpdateWork>();
+  let _: fn(woml_engine::NotificationUpdateWork) -> woml_engine::durable::NotificationUpdateWork =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::NotificationProviderUpdateResult>();
+  let _: fn(
+    woml_engine::NotificationProviderUpdateResult,
+  ) -> woml_engine::durable::NotificationProviderUpdateResult = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::NotificationDispatchReport>();
+  let _: fn(
+    woml_engine::NotificationDispatchReport,
+  ) -> woml_engine::durable::NotificationDispatchReport = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ApprovalDecisionOutcomeStatus>();
+  let _: fn(
+    woml_engine::ApprovalDecisionOutcomeStatus,
+  ) -> woml_engine::durable::ApprovalDecisionOutcomeStatus = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ApprovalDecisionOutcome>();
+  let _: fn(woml_engine::ApprovalDecisionOutcome) -> woml_engine::durable::ApprovalDecisionOutcome =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ApprovalTimeoutSettlementStatus>();
+  let _: fn(
+    woml_engine::ApprovalTimeoutSettlementStatus,
+  ) -> woml_engine::durable::ApprovalTimeoutSettlementStatus = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ApprovalTimeoutSettlement>();
+  let _: fn(
+    woml_engine::ApprovalTimeoutSettlement,
+  ) -> woml_engine::durable::ApprovalTimeoutSettlement = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RecoveryReport>();
+  let _: fn(woml_engine::RecoveryReport) -> woml_engine::durable::RecoveryReport = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::InfrastructurePolicyRunBindingV1>();
+  let _: fn(
+    woml_engine::InfrastructurePolicyRunBindingV1,
+  ) -> woml_engine::durable::InfrastructurePolicyRunBindingV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::PublicRunStatus>();
+  let _: fn(woml_engine::PublicRunStatus) -> woml_engine::durable::PublicRunStatus = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunSummaryV1>();
+  let _: fn(woml_engine::RunSummaryV1) -> woml_engine::durable::RunSummaryV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunListV1>();
+  let _: fn(woml_engine::RunListV1) -> woml_engine::durable::RunListV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::PolicyWaitingFor>();
+  let _: fn(woml_engine::PolicyWaitingFor) -> woml_engine::durable::PolicyWaitingFor =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunSummaryV2>();
+  let _: fn(woml_engine::RunSummaryV2) -> woml_engine::durable::RunSummaryV2 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunListV2>();
+  let _: fn(woml_engine::RunListV2) -> woml_engine::durable::RunListV2 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RuntimeObservationV1>();
+  let _: fn(woml_engine::RuntimeObservationV1) -> woml_engine::durable::RuntimeObservationV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionHookV2>();
+  let _: fn(woml_engine::RunInspectionHookV2) -> woml_engine::durable::RunInspectionHookV2 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionCancellationV2>();
+  let _: fn(
+    woml_engine::RunInspectionCancellationV2,
+  ) -> woml_engine::durable::RunInspectionCancellationV2 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionV2>();
+  let _: fn(woml_engine::RunInspectionV2) -> woml_engine::durable::RunInspectionV2 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionPolicyV3>();
+  let _: fn(woml_engine::RunInspectionPolicyV3) -> woml_engine::durable::RunInspectionPolicyV3 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionV3>();
+  let _: fn(woml_engine::RunInspectionV3) -> woml_engine::durable::RunInspectionV3 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::InspectedForkStatusV4>();
+  let _: fn(woml_engine::InspectedForkStatusV4) -> woml_engine::durable::InspectedForkStatusV4 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::InspectedForkJoinModeV4>();
+  let _: fn(woml_engine::InspectedForkJoinModeV4) -> woml_engine::durable::InspectedForkJoinModeV4 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionForkCountsV4>();
+  let _: fn(
+    woml_engine::RunInspectionForkCountsV4,
+  ) -> woml_engine::durable::RunInspectionForkCountsV4 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionForkJoinV4>();
+  let _: fn(woml_engine::RunInspectionForkJoinV4) -> woml_engine::durable::RunInspectionForkJoinV4 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionForkV4>();
+  let _: fn(woml_engine::RunInspectionForkV4) -> woml_engine::durable::RunInspectionForkV4 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionForksV4>();
+  let _: fn(woml_engine::RunInspectionForksV4) -> woml_engine::durable::RunInspectionForksV4 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionV4>();
+  let _: fn(woml_engine::RunInspectionV4) -> woml_engine::durable::RunInspectionV4 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::InspectedReusableKindV5>();
+  let _: fn(woml_engine::InspectedReusableKindV5) -> woml_engine::durable::InspectedReusableKindV5 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::InspectedReusableStatusV5>();
+  let _: fn(
+    woml_engine::InspectedReusableStatusV5,
+  ) -> woml_engine::durable::InspectedReusableStatusV5 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::InspectedReusableLifecycleStatusV5>();
+  let _: fn(
+    woml_engine::InspectedReusableLifecycleStatusV5,
+  ) -> woml_engine::durable::InspectedReusableLifecycleStatusV5 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionReusableItemV5>();
+  let _: fn(
+    woml_engine::RunInspectionReusableItemV5,
+  ) -> woml_engine::durable::RunInspectionReusableItemV5 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionReusableCountsV5>();
+  let _: fn(
+    woml_engine::RunInspectionReusableCountsV5,
+  ) -> woml_engine::durable::RunInspectionReusableCountsV5 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionReusableDefinitionsV5>();
+  let _: fn(
+    woml_engine::RunInspectionReusableDefinitionsV5,
+  ) -> woml_engine::durable::RunInspectionReusableDefinitionsV5 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionV5>();
+  let _: fn(woml_engine::RunInspectionV5) -> woml_engine::durable::RunInspectionV5 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::InspectedForEachStatusV6>();
+  let _: fn(
+    woml_engine::InspectedForEachStatusV6,
+  ) -> woml_engine::durable::InspectedForEachStatusV6 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionForEachCountsV6>();
+  let _: fn(
+    woml_engine::RunInspectionForEachCountsV6,
+  ) -> woml_engine::durable::RunInspectionForEachCountsV6 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionForEachItemV6>();
+  let _: fn(
+    woml_engine::RunInspectionForEachItemV6,
+  ) -> woml_engine::durable::RunInspectionForEachItemV6 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionForEachV6>();
+  let _: fn(woml_engine::RunInspectionForEachV6) -> woml_engine::durable::RunInspectionForEachV6 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionV6>();
+  let _: fn(woml_engine::RunInspectionV6) -> woml_engine::durable::RunInspectionV6 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionRichApprovalV11>();
+  let _: fn(
+    woml_engine::RunInspectionRichApprovalV11,
+  ) -> woml_engine::durable::RunInspectionRichApprovalV11 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionRichApprovalsV11>();
+  let _: fn(
+    woml_engine::RunInspectionRichApprovalsV11,
+  ) -> woml_engine::durable::RunInspectionRichApprovalsV11 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunInspectionV11>();
+  let _: fn(woml_engine::RunInspectionV11) -> woml_engine::durable::RunInspectionV11 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ForkRecoveryBranchV1>();
+  let _: fn(woml_engine::ForkRecoveryBranchV1) -> woml_engine::durable::ForkRecoveryBranchV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ForkRecoveryWorkV1>();
+  let _: fn(woml_engine::ForkRecoveryWorkV1) -> woml_engine::durable::ForkRecoveryWorkV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::SchedulerClaimV1>();
+  let _: fn(woml_engine::SchedulerClaimV1) -> woml_engine::durable::SchedulerClaimV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::DurableWaitRecordV1>();
+  let _: fn(woml_engine::DurableWaitRecordV1) -> woml_engine::durable::DurableWaitRecordV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::InspectedWaitStatusV1>();
+  let _: fn(woml_engine::InspectedWaitStatusV1) -> woml_engine::durable::InspectedWaitStatusV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::InspectedWaitV1>();
+  let _: fn(woml_engine::InspectedWaitV1) -> woml_engine::durable::InspectedWaitV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::WaitInspectionV1>();
+  let _: fn(woml_engine::WaitInspectionV1) -> woml_engine::durable::WaitInspectionV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::CorrectionSagaInspectionV1>();
+  let _: fn(
+    woml_engine::CorrectionSagaInspectionV1,
+  ) -> woml_engine::durable::CorrectionSagaInspectionV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::UnresolvedCorrectionActionV1>();
+  let _: fn(
+    woml_engine::UnresolvedCorrectionActionV1,
+  ) -> woml_engine::durable::UnresolvedCorrectionActionV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::CorrectionInspectionV1>();
+  let _: fn(woml_engine::CorrectionInspectionV1) -> woml_engine::durable::CorrectionInspectionV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::CorrectionRecoveryActionV1>();
+  let _: fn(
+    woml_engine::CorrectionRecoveryActionV1,
+  ) -> woml_engine::durable::CorrectionRecoveryActionV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::CorrectionRecoveryRequestV1>();
+  let _: fn(
+    woml_engine::CorrectionRecoveryRequestV1,
+  ) -> woml_engine::durable::CorrectionRecoveryRequestV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::CorrectionRecoveryStatusV1>();
+  let _: fn(
+    woml_engine::CorrectionRecoveryStatusV1,
+  ) -> woml_engine::durable::CorrectionRecoveryStatusV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::CorrectionRecoveryResultV1>();
+  let _: fn(
+    woml_engine::CorrectionRecoveryResultV1,
+  ) -> woml_engine::durable::CorrectionRecoveryResultV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::CorrectionRecoveryCandidateV1>();
+  let _: fn(
+    woml_engine::CorrectionRecoveryCandidateV1,
+  ) -> woml_engine::durable::CorrectionRecoveryCandidateV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::CorrectionObservationV1>();
+  let _: fn(woml_engine::CorrectionObservationV1) -> woml_engine::durable::CorrectionObservationV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::InspectedLockStatusV1>();
+  let _: fn(woml_engine::InspectedLockStatusV1) -> woml_engine::durable::InspectedLockStatusV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::LockInspectionV1>();
+  let _: fn(woml_engine::LockInspectionV1) -> woml_engine::durable::LockInspectionV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::LockObservationV1>();
+  let _: fn(woml_engine::LockObservationV1) -> woml_engine::durable::LockObservationV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::LockRecoveryKindV1>();
+  let _: fn(woml_engine::LockRecoveryKindV1) -> woml_engine::durable::LockRecoveryKindV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::LockRecoveryCandidateV1>();
+  let _: fn(woml_engine::LockRecoveryCandidateV1) -> woml_engine::durable::LockRecoveryCandidateV1 =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ExternalSignalAdmissionRequest>();
+  let _: fn(
+    woml_engine::ExternalSignalAdmissionRequest,
+  ) -> woml_engine::durable::ExternalSignalAdmissionRequest = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ExternalSignalAdmissionStatus>();
+  let _: fn(
+    woml_engine::ExternalSignalAdmissionStatus,
+  ) -> woml_engine::durable::ExternalSignalAdmissionStatus = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ExternalSignalResolution>();
+  let _: fn(
+    woml_engine::ExternalSignalResolution,
+  ) -> woml_engine::durable::ExternalSignalResolution = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ExternalSignalAdmissionOutcome>();
+  let _: fn(
+    woml_engine::ExternalSignalAdmissionOutcome,
+  ) -> woml_engine::durable::ExternalSignalAdmissionOutcome = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::SignalWaitTimeoutSettlement>();
+  let _: fn(
+    woml_engine::SignalWaitTimeoutSettlement,
+  ) -> woml_engine::durable::SignalWaitTimeoutSettlement = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::TimerWaitSettlement>();
+  let _: fn(woml_engine::TimerWaitSettlement) -> woml_engine::durable::TimerWaitSettlement =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::PolicyClaimWaitReason>();
+  let _: fn(woml_engine::PolicyClaimWaitReason) -> woml_engine::durable::PolicyClaimWaitReason =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::PolicyExecutionClaimResult>();
+  let _: fn(
+    woml_engine::PolicyExecutionClaimResult,
+  ) -> woml_engine::durable::PolicyExecutionClaimResult = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::InspectedBusinessOutcome>();
+  let _: fn(
+    woml_engine::InspectedBusinessOutcome,
+  ) -> woml_engine::durable::InspectedBusinessOutcome = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunCancellationStatus>();
+  let _: fn(woml_engine::RunCancellationStatus) -> woml_engine::durable::RunCancellationStatus =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunTimeoutSettlement>();
+  let _: fn(woml_engine::RunTimeoutSettlement) -> woml_engine::durable::RunTimeoutSettlement =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunCancellationCode>();
+  let _: fn(woml_engine::RunCancellationCode) -> woml_engine::durable::RunCancellationCode =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RunCancellationResult>();
+  let _: fn(woml_engine::RunCancellationResult) -> woml_engine::durable::RunCancellationResult =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::DurableStoreError>();
+  let _: fn(woml_engine::DurableStoreError) -> woml_engine::durable::DurableStoreError =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::DurableEventStore>();
+  let _: fn(woml_engine::DurableEventStore) -> woml_engine::durable::DurableEventStore =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RichApprovalDecisionAdmission>();
+  let _: fn(
+    woml_engine::RichApprovalDecisionAdmission,
+  ) -> woml_engine::durable::RichApprovalDecisionAdmission = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RichApprovalIdentityDecision>();
+  let _: fn(
+    woml_engine::RichApprovalIdentityDecision,
+  ) -> woml_engine::durable::RichApprovalIdentityDecision = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RichApprovalDecisionStatus>();
+  let _: fn(
+    woml_engine::RichApprovalDecisionStatus,
+  ) -> woml_engine::durable::RichApprovalDecisionStatus = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RichApprovalDecisionOutcome>();
+  let _: fn(
+    woml_engine::RichApprovalDecisionOutcome,
+  ) -> woml_engine::durable::RichApprovalDecisionOutcome = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RichApprovalDecisionInspection>();
+  let _: fn(
+    woml_engine::RichApprovalDecisionInspection,
+  ) -> woml_engine::durable::RichApprovalDecisionInspection = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::RichApprovalInspectionV1>();
+  let _: fn(
+    woml_engine::RichApprovalInspectionV1,
+  ) -> woml_engine::durable::RichApprovalInspectionV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::LockLeaseMaintenance>();
+  let _: fn(woml_engine::LockLeaseMaintenance) -> woml_engine::durable::LockLeaseMaintenance =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ProgrammaticLockLease>();
+  let _: fn(woml_engine::ProgrammaticLockLease) -> woml_engine::durable::ProgrammaticLockLease =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ProgrammaticLockAcquireState>();
+  let _: fn(
+    woml_engine::ProgrammaticLockAcquireState,
+  ) -> woml_engine::durable::ProgrammaticLockAcquireState = |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::ProgrammaticLockAcquire>();
+  let _: fn(woml_engine::ProgrammaticLockAcquire) -> woml_engine::durable::ProgrammaticLockAcquire =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::DurableEngineError>();
+  let _: fn(woml_engine::DurableEngineError) -> woml_engine::durable::DurableEngineError =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::StepFailureDisposition>();
+  let _: fn(woml_engine::StepFailureDisposition) -> woml_engine::durable::StepFailureDisposition =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::StepFailureCommit>();
+  let _: fn(woml_engine::StepFailureCommit) -> woml_engine::durable::StepFailureCommit =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::durable::DurableDagEngine>();
+  let _: fn(woml_engine::DurableDagEngine) -> woml_engine::durable::DurableDagEngine =
+    |value| value;
+  let _ = std::any::type_name::<dyn woml_engine::durable::NotificationProviderAdapter>();
+  let _ = woml_engine::durable::derive_lifecycle_hook_invocation_id;
+  let _ = woml_engine::durable::correction_invocation_id;
+  let _ = woml_engine::durable::RUNTIME_POLICY_QUEUE_CEILING;
+  let _ = woml_engine::durable::DURABLE_STORE_SCHEMA_VERSION;
+  let _ = woml_engine::durable::RUN_INSPECTION_RICH_APPROVAL_LIMIT;
+  let _ = woml_engine::durable::CORRECTION_INSPECTION_PROFILE;
+  let _ = woml_engine::durable::CORRECTION_RECOVERY_REQUEST_PROFILE;
+  let _ = woml_engine::durable::CORRECTION_RECOVERY_RESULT_PROFILE;
+  let _ = woml_engine::durable::CORRECTION_OBSERVATION_PROFILE;
+  let _ = woml_engine::durable::CORRECTION_RECOVERY_BATCH_LIMIT;
+  let _ = woml_engine::durable::CORRECTION_UNRESOLVED_STORE_LIMIT;
+  let _ = woml_engine::durable::EXTERNAL_SIGNAL_ADMISSION_PROFILE;
+  let _ = woml_engine::durable::EXTERNAL_SIGNAL_RESULT_PROFILE;
+  let _ = woml_engine::durable::EXTERNAL_SIGNAL_MAX_PAYLOAD_BYTES;
+  let _ = woml_engine::durable::EXTERNAL_SIGNAL_MAX_PAYLOAD_DEPTH;
+  let _ = woml_engine::durable::EXTERNAL_SIGNAL_MAX_EARLY_PER_RUN;
+  let _ = woml_engine::durable::RICH_APPROVAL_INSPECTION_DECISION_LIMIT;
+  let _ = woml_engine::durable::LOCK_WAITERS_PER_KEY_LIMIT;
+  let _ = woml_engine::durable::LOCK_WAITERS_PER_STORE_LIMIT;
+  let _ = woml_engine::durable::LOCK_RECOVERY_BATCH_LIMIT;
+  let _ = woml_engine::durable::MAX_MODULE_ARTIFACT_BYTES;
+  let _ = woml_engine::durable::MAX_MODULE_ARTIFACT_SET_BYTES;
+}
