@@ -1,6 +1,18 @@
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 
+async function readOwnedRustFile(path: string): Promise<string> {
+  const source = await readFile(path, 'utf8');
+  // Owned-tree scanners are deliberately not a Rust module resolver. Fail
+  // closed on alternate implementation locations instead of silently missing
+  // code. include_str!/include_bytes! fixtures remain supported.
+  if (/^\s*#\s*\[\s*(?:path\s*=|cfg_attr\b[^\]]*\bpath\s*=)/mu.test(source)
+      || /\binclude\s*!\s*\(/u.test(source)) {
+    throw new Error(`Rust implementation must remain in its owned module tree: ${path}`);
+  }
+  return source;
+}
+
 /** Read every Rust file in an owned directory, including nested private modules. */
 export async function readRustSources(directory: string): Promise<readonly string[]> {
   const files: string[] = [];
@@ -12,7 +24,7 @@ export async function readRustSources(directory: string): Promise<readonly strin
     } else if (info.isFile() && extname(path) === '.rs') files.push(path);
   }
   await visit(directory);
-  return Promise.all(files.map(file => readFile(file, 'utf8')));
+  return Promise.all(files.map(readOwnedRustFile));
 }
 
 /** Keep source guards covering a stable facade AND its same-named implementation tree. */
@@ -22,7 +34,7 @@ export async function readRustModuleSource(entry: string): Promise<string> {
   if (!info.isFile() || info.isSymbolicLink() || extname(path) !== '.rs') {
     throw new Error(`Expected a regular Rust facade: ${path}`);
   }
-  const sources = [await readFile(path, 'utf8')];
+  const sources = [await readOwnedRustFile(path)];
   const children = join(dirname(path), basename(path, '.rs'));
   try {
     const directory = await lstat(children);

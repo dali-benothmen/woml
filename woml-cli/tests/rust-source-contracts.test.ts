@@ -52,6 +52,26 @@ test('a malformed owned module directory fails closed instead of skipping its so
   await expect(readRustModuleSource(join(root, 'event.rs'))).rejects.toThrow('directory');
 });
 
+test('source guards reject alternate Rust implementation paths in facades and nested children', async () => {
+  const root = await fixture();
+  const entry = join(root, 'event.rs');
+  for (const declaration of [
+    '#[path = "../outside.rs"] mod hidden;',
+    '#[cfg_attr(unix, path = "../outside.rs")] mod hidden;',
+    '#[cfg_attr(\n  unix,\n  path = "../outside.rs"\n)] mod hidden;',
+    'include!("../outside.rs");',
+  ]) {
+    await writeFile(entry, declaration);
+    await expect(readRustModuleSource(entry)).rejects.toThrow('owned module tree');
+    await writeFile(entry, 'mod nested;');
+    await mkdir(join(root, 'event'), { recursive: true });
+    await writeFile(join(root, 'event', 'nested.rs'), declaration);
+    await expect(readRustModuleSource(entry)).rejects.toThrow('owned module tree');
+  }
+  await writeFile(join(root, 'event', 'nested.rs'), 'const FIXTURE: &str = include_str!("reviewed.json");');
+  expect(await readRustModuleSource(entry)).toContain('include_str!');
+});
+
 test('source guards reject symbolic module escapes', async () => {
   if (process.platform === 'win32') return; // Windows link privilege is not assumed.
   const root = await fixture();

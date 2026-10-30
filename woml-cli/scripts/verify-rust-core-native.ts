@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 // RCM13: load real addons, not a Rust mock or a source-only export inventory.
 import assert from 'node:assert/strict';
-import { copyFile, mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { compileWoml, parseWoml } from '@woml/compiler';
 import { compiledDefinitionHash } from '../src/rust-executor';
-import { expectedNativeExports } from './verify-native-exports';
+import { defaultStagedNativePath, expectedNativeExports } from './verify-native-exports';
 
 type Native = Record<string, (...args: unknown[]) => unknown>;
 const root = resolve(import.meta.dir, '../..');
@@ -156,14 +156,25 @@ export async function verifyRustCoreNative(source: string) {
     if (runtimeId !== undefined && native !== undefined) {
       await promise(native.stopWomlWebhookRuntime!(runtimeId));
     }
-    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    try {
+      await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    } catch (error: unknown) {
+      // Windows cannot unlink a loaded DLL. Only tolerate that exact leftover,
+      // not leaked databases/listeners or arbitrary cleanup errors.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (process.platform !== 'win32' || native === undefined
+          || !['EPERM', 'EBUSY', 'EACCES', 'ENOTEMPTY'].includes(code ?? '')) throw error;
+      assert.deepEqual(await readdir(directory), ['candidate.node']);
+      console.warn('RCM native verification: Windows retains the loaded addon copy until runner cleanup.');
+    }
   }
 }
 
 if (import.meta.main) {
   const sources = process.argv.slice(2);
-  assert.ok(sources.length >= 1 && sources.length <= 2,
-    'Usage: verify-rust-core-native.ts <addon> [second-addon-for-comparison]');
+  assert.ok(sources.length <= 2,
+    'Usage: verify-rust-core-native.ts [addon] [second-addon-for-comparison]');
+  if (sources.length === 0) sources.push(defaultStagedNativePath());
   // This also bounds failures in unref'ed callbacks or native lifecycle joins.
   const watchdog = setTimeout(() => {
     console.error('RCM13 real-addon contract watchdog expired.');

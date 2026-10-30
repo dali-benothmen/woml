@@ -1,5 +1,9 @@
 # Rust core modularization: RCM0–RCM13 verification
 
+RCM14 implementation/handoff and current sign-off status are recorded in the
+[final handoff report](rust-core-modularization-handoff.md). Historical phase
+results below retain their original scope; they are not all fresh RCM14 runs.
+
 This is an internal refactor, not a language, schema, or runtime revision.
 Branch: `refactor/rust-core-modularization`. Baseline source:
 `e8a62490fd15c40c152c8440ff12fd2bdb75120f` (WOML 1.1.0).

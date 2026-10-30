@@ -49,11 +49,14 @@ async function prepare(): Promise<LocalReleaseCandidate> {
   );
   const mainRoot = resolve(candidateRoot, 'main');
   const nativeRoot = resolve(candidateRoot, `native-${target}`);
-  const localBinary = resolve(
+  // Test-only override lets resource-constrained local verification package
+  // the freshly reviewed debug addon without overwriting the staged release
+  // binary. CI uses the default freshly built release artifact.
+  const localBinary = process.env.WOML_TEST_NATIVE_ARTIFACT === undefined ? resolve(
     cliRoot,
     'dist',
     localNativeBinaryName(process.platform, process.arch),
-  );
+  ) : resolve(process.env.WOML_TEST_NATIVE_ARTIFACT);
   if (!(await Bun.file(localBinary).exists())) {
     throw new Error(
       `The local release candidate requires ${localBinary}. Run "bun run build" first.`,

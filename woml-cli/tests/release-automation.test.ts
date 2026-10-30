@@ -90,6 +90,27 @@ describe('WOML release automation', () => {
     expect(source).toContain("grep -oE 'GLIBC_[0-9]+(\\.[0-9]+)*'");
   });
 
+  test('checks modularization and the freshly built native interface on every combined platform', async () => {
+    const { document } = await workflow('ci');
+    const combined = document.jobs?.['combined-developer-experience'];
+    expect(combined?.strategy?.matrix).toMatchObject({
+      os: ['ubuntu-24.04', 'macos-15', 'windows-2022'],
+    });
+    const steps = combined?.steps ?? [];
+    const build = steps.findIndex(step => step.name === 'Build the local native and portable release candidates');
+    const verify = steps.findIndex(step => step.run?.includes('test:rust-core-native'));
+    const install = steps.findIndex(step => step.run === 'bun run test:combined-developer-experience-package');
+    expect(build).toBeGreaterThanOrEqual(0);
+    expect(verify).toBeGreaterThan(build);
+    expect(install).toBeGreaterThan(verify);
+    expect(steps[verify]?.run).toContain('test:rust-core-modularization-contracts');
+    const release = await workflow('release');
+    const contracts = release.document.jobs?.validate?.steps?.find(step => step.name === 'Verify release source contracts');
+    expect(contracts?.run).toContain('test:rust-core-native');
+    expect(contracts?.run).toContain('test:rust-core-modularization-contracts');
+    expect(document.jobs?.rust?.steps?.some(step => step.run?.includes('-p woml-native --test separation'))).toBe(true);
+  });
+
   test('clean-installs and executes every platform candidate before collection', async () => {
     const { document, source } = await workflow('release');
     const smoke = await readFile(resolve(repositoryRoot, 'woml-cli/scripts/smoke-release-candidate.ts'), 'utf8');

@@ -11,6 +11,7 @@ import durableBaseline from '../../docs/refactoring/rcm6-baseline.json';
 import transactionBaseline from '../../docs/refactoring/rcm8-baseline.json';
 import capabilityArtifactBaseline from '../../docs/refactoring/rcm10-baseline.json';
 import featureBridgeBaseline from '../../docs/refactoring/rcm12-baseline.json';
+import fixtureBaseline from '../../docs/refactoring/rcm14-fixtures-baseline.json';
 
 const root = resolve(import.meta.dir, '../..');
 const hash = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex');
@@ -150,6 +151,42 @@ function orderedDeclarationHash(source: string, name: string): string {
   throw new Error(`Incomplete frozen declaration ${name}.`);
 }
 
+function publicReexportNames(source: string): string[] {
+  return [...source.matchAll(/^pub\s+use\s+([^;]+);/gm)].flatMap(match => {
+    const tree = match[1]!;
+    if (/\*|\bas\b/u.test(tree)) throw new Error('Review wildcard/aliased public re-export explicitly.');
+    // Current facades use explicit path leaves and grouped leaves, not aliases.
+    const compact = tree.replace(/\s/gu, '');
+    const leaves = [...compact.matchAll(/(?:^|[,{])((?:\w+::)*\w+)(?=[,}]|$)/g)];
+    if (leaves.length === 0) throw new Error(`Unrecognized public re-export: ${tree}`);
+    return leaves.map(leaf => leaf[1]!.split('::').at(-1)!);
+  });
+}
+
+test('owned implementation modules cannot leak through public module or unreviewed re-export paths', async () => {
+  for (const [module, contract] of Object.entries({ ...baseline.contracts, ...executionBaseline.contracts,
+    ...durableBaseline.contracts, ...capabilityArtifactBaseline.contracts, ...featureBridgeBaseline.contracts })) {
+    const entry = resolve(root, 'path' in contract ? contract.path : `core/woml-engine/src/${module}.rs`);
+    const source = await readRustModuleSource(entry);
+    expect(source).not.toMatch(/^pub\s+mod\s/m);
+    const allowed = new Set<string>([
+      ...contract.publicTypes,
+      ...('publicFunctions' in contract ? contract.publicFunctions : []),
+      ...('publicConstants' in contract ? contract.publicConstants : []),
+      ...('publicTraits' in contract ? contract.publicTraits : []),
+      // RCM0 inventoried event types only. These original three public
+      // validators are also pinned by the compile-time contract-path test.
+      ...(module === 'event' ? ['is_approval_request_id', 'is_definition_hash', 'is_notification_delivery_id'] : []),
+    ]);
+    const names = publicReexportNames(source);
+    expect(names.filter(name => !allowed.has(name))).toEqual([]);
+  }
+  expect(publicReexportNames('pub use child::{Record, nested::read};')).toEqual(['Record', 'read']);
+  expect(publicReexportNames('pub use child::implementation;')).toEqual(['implementation']);
+  expect(() => publicReexportNames('pub use child::*;')).toThrow('explicitly');
+  expect(() => publicReexportNames('pub use child::Record as PublicAlias;')).toThrow('explicitly');
+});
+
 test('critical transaction and recovery declarations preserve their ordered tokens', async () => {
   const source = (await readRustModuleSource(resolve(root, 'core/woml-engine/src/durable.rs')))
     .replaceAll('\r\n', '\n');
@@ -219,17 +256,26 @@ test('the reviewed text fixture tree retains its canonical LF bytes', async () =
       const path = resolve(directory, entry.name);
       if (entry.isDirectory()) result.push(...await files(path));
       else if (entry.isFile()) result.push(path);
+      else if (entry.isSymbolicLink()) throw new Error(`Unsafe fixture symlink: ${path}`);
     }
     return result.sort();
   }
   const paths = await files(resolve(root, baseline.fixtureTree.root));
+  const generated = new Set(fixtureBaseline.generatedEditorFiles);
+  const reviewed = paths.filter(path => !generated.has(relative(root, path).replaceAll('\\', '/')));
+  expect(reviewed.map(path => relative(root, path).replaceAll('\\', '/')).sort())
+    .toEqual(fixtureBaseline.files.map(file => file.path).sort());
+  const expected = new Map(fixtureBaseline.files.map(file => [file.path, file.sha256]));
   // Hash canonical slash-separated relative paths so Windows and Unix agree.
-  const entries = await Promise.all(paths.map(async path => {
+  const entries = await Promise.all(reviewed.map(async path => {
     const name = relative(root, path).replaceAll('\\', '/');
     // Git may check text out as CRLF on Windows; freeze content, not autocrlf.
     const text = (await readFile(path, 'utf8')).replaceAll('\r\n', '\n');
+    const expectedHash = expected.get(name);
+    if (expectedHash === undefined) throw new Error(`Unreviewed source fixture: ${name}`);
+    expect(hash(text), name).toBe(expectedHash);
     return `${name}\0${hash(text)}\n`;
   }));
-  expect(paths.length).toBe(baseline.fixtureTree.files);
-  expect(hash(entries.sort().join(''))).toBe(baseline.fixtureTree.sha256);
+  expect(reviewed.length).toBe(fixtureBaseline.files.length);
+  expect(hash(entries.sort().join(''))).toBe(fixtureBaseline.sha256);
 });
