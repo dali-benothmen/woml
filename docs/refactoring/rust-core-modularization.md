@@ -1,4 +1,4 @@
-# Rust core modularization: RCM0–RCM7 verification
+# Rust core modularization: RCM0–RCM9 verification
 
 This is an internal refactor, not a language, schema, or runtime revision.
 Branch: `refactor/rust-core-modularization`. Baseline source:
@@ -653,3 +653,194 @@ specific failing tests were not rerun or fixed as part of these code moves.
 The next implementation phase is RCM8. macOS/Windows, actual-addon export
 loading, installed-package journeys, and full release performance/security
 gates remain independent verification work, not implied passing results.
+
+## RCM8 and RCM9: feature transactions, ordered recovery, and adapters
+
+These phases start from committed RCM6/RCM7 revision
+`6daaff62c4c317338402ae9a3380361688c62e81` on the existing implementation
+branch. The [RCM8 baseline](rcm8-baseline.json) records the owned durable/runtime
+source hashes before extraction and ordered fingerprints for 12 critical
+transaction/recovery declarations. Earlier public API, native-name, fixture,
+DDL, boxing, and target-discovery baselines remain unchanged.
+
+### RCM8: five independently tested transaction checkpoints
+
+`DurableEventStore` remains the only connection/cache owner. The new private
+`durable/transactions/` modules contain inherent methods on that same type;
+they do not construct per-feature stores. A helper taking `&Transaction` still
+borrows its caller's writer transaction. Supporting credential parsing and
+stored timestamp/decision conversion live in `credentials.rs` and
+`record_values.rs`; their algorithms and public errors are unchanged.
+
+The following map identifies affected families, not a claim that every listed
+table is written on every call. Common event append helpers also maintain the
+existing run-summary, policy, and correction indexes at their original boundary.
+
+| Checkpoint and owner | Tables and event responsibilities | Validation and commit/rollback boundary |
+|---|---|---|
+| 1. `transactions/admission.rs`, `schedules.rs`, `intervals.rs`, `workflow_calls.rs` | Run/definition binding, trigger occurrences, internal-event deliveries, schedule/interval cursors, child-call links, admission/initial history, policy queue bindings. | Exact occurrence/payload/definition/parent identity, call depth and cycle checks, and cursor compare/update stay in their original immediate writer transactions. Clock callers share `admit_trigger_occurrence_in_transaction`; a late cursor/link error rolls back the proposed admission rather than committing a detached run. Duplicate/conflict results retain their original identities. |
+| 2. `ownership.rs`, `policy.rs`, `infrastructure_policy.rs` | Runtime owner/routes, scheduler claims, queue/start records, bound policy bundles/evidence, and applicable execution-start facts. | Exact owner lease, current claim, policy hash, concurrency, rate and FIFO eligibility remain checked before the original updates/commit. Bundle/evidence readers do not gain admission authority. Failed validation/write leaves the proposed transaction uncommitted; no new connection or independent policy commit was introduced. |
+| 3. `approvals.rs`, `rich_approvals.rs`, `notifications/{delivery,updates,approval}.rs` | Approval credentials, notification capabilities/intents/outcomes, review evidence, reviewer votes, quorum, artifact pins, decision and message-update facts. | Exact request/token/decision identity, expiry, reviewer/evidence/quorum checks and single terminal winner are retained. Request-plus-intents and decision-plus-updates/pin changes stay within their original boundaries. Cache publication/invalidation still follows commit; late credential/vote/pin failures cannot leave an accepted partial decision. Provider I/O is not claimed to be atomic with SQLite. |
+| 4. `waits.rs`, `signals.rs`, `locks/{queue,leases,programmatic,scope}.rs` | Durable waits, early-signal/idempotency receipts, lock waiters/resources and fencing high-water; wait-resolution and lock lifecycle facts. | Exact active execution/correlation/payload and lease/fence/scope validation remain unchanged. Wait registration consumes eligible early signals in one transaction. Lock expiry and successor grant share the caller's transaction, including facts for different runs. Queue/fence exhaustion fails closed. Late stale release deliberately commits expiry/successor transfer before returning its rejection; it must not be rewritten into unconditional error rollback. |
+| 5. `correction.rs`, `run_control/{identity,cancellation,outcomes,timeouts}.rs` | Audited correction/operator decisions, interruption/outcome/deadline/cancellation facts and affected wait/index state. | Bound run/action/request identity, correction eligibility and primary failure rules remain intact. Forward success plus compensation registration still uses the same grouped writer append through the DAG adapter. Cancellation and timeout use the original shared helpers/transactions; helper extraction cannot commit half a terminal or corrective transition. |
+
+Each checkpoint compiled and ran its relevant tests **before** the next
+family moved. No transaction was narrowed to one run where it previously
+changed several runs. In particular, `grant_oldest_lock_waiter` and
+`expire_lock_owner` still use their caller's transaction and preserve the
+fencing high-water conditional update. `locks/leases.rs` retains the explicit
+commit-before-stale-release-error branch, covered by the late-release test.
+
+| Checkpoint | Targets | Result |
+|---|---|---|
+| Pre-extraction baseline | `backup_restore`, `compensation_store`, `durable_wait_runtime`, `locks_and_leases`, `notification_infrastructure`, `rich_plan_approval_authority`, `runtime_policy_store`, `trigger_occurrence` | 84 passed |
+| 1. Admission/clocks/child links | `interval_runtime`, `schedule_runtime`, `trigger_occurrence`, `workflow_call_admission` | 29 passed; 1 unchanged stale-version assertion |
+| 2. Ownership/policy | `infrastructure_policy_authority`, `runtime_ownership`, `runtime_policy_store` | 21 passed; 1 unchanged stale-version assertion |
+| 3. Review/notification | `lifecycle_notifications`, `notification_infrastructure`, `rich_plan_approval_authority` | 22 passed |
+| 4. Wait/signal/lock | `durable_wait_runtime`, `locks_and_leases` | 30 passed |
+| 5. Correction/run control | `cancellation_runtime`, `compensation_runtime`, `compensation_store`, `workflow_timeouts` | 28 passed |
+
+These are 130 passing checkpoint tests and two baseline assertions, not a
+claim that every historical test is green. Selections overlap other baseline
+and final runs and must not be summed as distinct coverage.
+
+### RCM9: move recovery intact, then separate support and adapters
+
+The first RCM9 checkpoint moved recovery with its helpers intact into
+`durable/recovery.rs`. Before splitting helpers, `compensation_store`,
+`durable_event_store`, `durable_state_hardening`, and
+`notification_infrastructure` passed 33 tests. The state-hardening suite's
+ignored worker entrypoint is deliberately invoked in four child processes
+by its parent concurrency case; those helper processes passed too.
+
+Only then were these private responsibilities separated:
+
+- `recovery.rs`: the ordered per-run algorithm, report aggregation,
+  ownership-scoped child-call recovery, and call-index reconciliation.
+- `recovery/state_mutation.rs`: immutable managed-state mutation proof.
+- `recovery/interruption.rs`: existing interrupted/failure payload helpers.
+- `recovery/for_each.rs`: shared iteration-failure settlement, also used by
+  timeout handling through the caller's transaction.
+- `recovery/queries.rs`: existing bounded discovery of undispatched, correction,
+  lock and fork work.
+- `dag_adapter.rs`: `DurableDagEngine`, durable errors and failure dispositions,
+  bound execution methods, grouped commits and retry/deferred-failure behavior.
+- `integrity.rs`: the existing store integrity audit, not a new startup repair.
+- `runtime/engine_adapter/{mod,in_memory,durable}.rs`: the existing internal
+  trait and its two implementations. Public runtime entrypoints remain in
+  `runtime.rs`; the scoped iteration adapter remains with its coordinator.
+
+`recover_run` retains its immediate transaction and branch order: bound
+definition/history validation and folding; corrective interruption/manual or
+resumable state; open iterations; lifecycle obligations; waiting notification
+sends; bounded known-message updates; non-running exits; managed-operation
+proof/failure; interrupted attempts; fork/parallel state; pending retries;
+latest-attempt failure; justified terminal settlement or resumable work.
+Version checks and early returns remain part of that algorithm. The module
+split does not authorize each helper to run its own recovery loop.
+
+Managed-state proof is deliberately narrow. The original stable operation
+key, supported mutation operation, key/input digests, result contract/version,
+mutation result/version validation, and domain-separated canonical receipt
+digest must match. The operation result's encoded-byte digest remains a
+different hash input. A verified receipt may settle the operation; it does not
+prove that the containing interrupted script completed or is safe to replay.
+Unknown notification sends remain non-retryable/ambiguous, while updates of
+an already known message retain their bounded retry contract. Remote dispatch
+keeps its separate authority and ambiguity/reconciliation rules. Local child
+recovery remains scoped to the supplied owned target definitions rather than
+interrupting every other live process's children.
+
+### Characterization, preservation guards, and navigation
+
+The new boundary test
+`failed_recovery_write_rolls_back_interruption_and_retries_idempotently`
+injects an SQLite error at the second proposed recovery event. It verifies
+that history and projection remain unchanged, removes the fault, checks one
+interruption/terminal repair, then confirms another recovery adds no events.
+All seven durable unit checks pass, including the six boundary tests and the
+retained capability-token parser test.
+
+The final one-time ordered token audits match all **516 original durable**
+and **357 original runtime** declarations/methods across their owned trees.
+They retain attributes, literals/SQL and statement order; formatting, trailing
+commas and the documented private visibility routes are the allowed changes.
+The persistent Bun guard also freezes 12 critical declarations against the
+new baseline, including `recover_run`, state proof, lock expiry/grant/release,
+admission, rich review, wait registration, cancellation and timeout settlement.
+It distinguishes store methods from same-named DAG adapter methods and includes
+a negative mutation of the state proof's domain separator. These guards
+support executable tests; they do not prove algorithms correct by themselves.
+
+The durable facade is now 181 physical lines (including its retained test)
+instead of 11,374 at this phase's starting checkpoint; `runtime.rs` is 1,045
+lines after extraction. Recovery remains a cohesive ordered coordinator, not
+arbitrarily split to meet a line target. Public Rust paths and native export
+names, schema/event/protocol versions, inline SQL, synchronized ownership,
+future boxing, secret boundaries, limits and timeouts did not change.
+
+The codebase-documenter workflow guided updates to the ignored local book:
+architecture and scheduler/adapter chapters, transactions/recovery chapters,
+schema and reading maps, responsibilities/coverage, beginner story and source
+atlas. They explain caller ownership and proof versus replay rather than only
+listing relocated filenames. Edition metadata identifies RCM0–RCM9 as a
+working-tree overlay. The user's ignore rule and unrelated roadmaps remain
+untouched; the book was not force-added.
+
+### Local verification and remaining baseline failures
+
+All Rust builds are serial, one Cargo command at a time and one build job,
+with dev debug/incremental disabled. Test/check commands use locked offline
+dependencies and serial durable/process tests. The established Clippy policy
+was retained without new allowances. No release build was run.
+
+| Check | RCM8/RCM9 result |
+|---|---|
+| Five RCM8 checkpoints | 130 passed; 2 unchanged stale-version assertions |
+| Recovery moved intact before helper split | 33 passed |
+| Broader final recovery/adapter selection, 13 targets | 88 passed; 1 known parallel-recovery failure |
+| Durable unit filter, including injected recovery rollback | 7 passed |
+| Runtime foundation and infrastructure-policy unit filter | 15 passed |
+| Native separation rebuilt against the final engine | 4 passed; build without warnings |
+| Public contracts, DDL/fixtures/boxing, recursive-reader and architecture guards | 14 passed |
+| Established engine Clippy policy | Passed, no new allowances |
+| Portable CLI contracts | 17-file shard passed |
+| TypeScript check and eight affected source verifiers | Passed |
+| Ordered durable/runtime preservation audits and Rust formatting | Passed |
+| Ignored developer book and regenerated atlas | Passed; 1,731 source files, 77 pages, 3,364 local links |
+
+The broader final selection was `core_contract_paths`, `dag_engine`,
+`module_recovery`, `workflow_call_recovery`, `fork_recovery_runtime`,
+`parallel_recovery`, `for_each_recovery`, `compensation_runtime`,
+`remote_dispatch_authority`, `backup_restore`, `retention`, `approval_runtime`,
+and `approval_resolution`, using `--no-fail-fast` so one target would not
+conceal later results.
+
+Two RCM8 selections found unchanged assertions:
+
+1. `workflow_call_admission::admission_creates_one_truthfully_bound_child_and_reuses_it`,
+   line 216, requires `DURABLE_STORE_SCHEMA_VERSION == 15` although it is 20.
+2. `runtime_ownership::store_v14_migrates_transactionally_from_v13`, line 68,
+   has the same unconditional assertion. Its preceding comparison of the
+   actual migrated marker to the current constant passes; migration rollback
+   coverage passes too.
+
+The exact committed `6daaff6` tests contain those assertions and its schema
+constant is already 20. This is direct static evidence, not a claim that an
+archived executable was rerun in this turn. Both tests remain unchanged and
+were executed, not skipped. No schema bump or loosened assertion hides them.
+
+The final broader run reproduces the previously documented
+`parallel_recovery::wait_all_resumes_pending_siblings_after_a_recorded_failure_then_fails_the_group`
+failure: resumed `fieldData` completion does not match its durable child
+outcomes. Earlier independently established baseline failures remain recorded
+in their own sections; this refactor does not fix them or claim fully green CI.
+One cancellation checkpoint also emitted a Bun 1.3.14 child-host segmentation
+fault diagnostic during cancellation; the Rust test and command passed. No
+host version or timing policy was changed to suppress that diagnostic.
+
+Source verifier output describes configured release/platform contracts, not
+executed platform coverage. macOS/Windows, actual-addon export loading,
+installed-package journeys and full performance/security release gates remain
+unrun locally for these phases. No commit or push was made. The next planned
+implementation phase is RCM10, capability authority and process supervision.

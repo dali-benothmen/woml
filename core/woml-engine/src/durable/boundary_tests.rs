@@ -256,3 +256,50 @@ fn equal_event_count_does_not_make_a_different_history_cache_valid() {
     Some("evt_store_boundary_start")
   );
 }
+
+#[test]
+fn failed_recovery_write_rolls_back_interruption_and_retries_idempotently() {
+  let mut store = running_store();
+  store
+    .append_payload(RUN, "evt_recovery_attempt", Utc::now(), attempt_started())
+    .unwrap();
+  let before = store.events(RUN).unwrap();
+  let projection = store.projection(RUN).unwrap();
+  store
+    .connection
+    .execute_batch(
+      "CREATE TRIGGER rcm_reject_recovery BEFORE INSERT ON woml_run_events
+     WHEN NEW.sequence = 4
+     BEGIN SELECT RAISE(ABORT, 'injected recovery failure'); END;",
+    )
+    .unwrap();
+
+  // Recovery can write the interrupted attempt before deciding the run. A
+  // late failure must roll both back, rather than leave half a recovered run.
+  assert!(matches!(
+    store.recover_interrupted_runs(),
+    Err(DurableStoreError::Sqlite(_))
+  ));
+  assert_eq!(store.events(RUN).unwrap(), before);
+  assert_eq!(store.projection(RUN).unwrap(), projection);
+
+  store
+    .connection
+    .execute_batch("DROP TRIGGER rcm_reject_recovery;")
+    .unwrap();
+  let report = store.recover_interrupted_runs().unwrap();
+  assert_eq!(report.recovered_runs, 1);
+  assert_eq!(report.interrupted_attempts, 1);
+  let recovered = store.events(RUN).unwrap();
+  assert_eq!(recovered.len(), 4);
+  assert!(matches!(
+    recovered[2].payload,
+    RunEventPayload::StepAttemptFailed(_)
+  ));
+  assert!(matches!(
+    recovered[3].payload,
+    RunEventPayload::RunFailed(_)
+  ));
+  assert_eq!(store.recover_interrupted_runs().unwrap().recovered_runs, 0);
+  assert_eq!(store.events(RUN).unwrap(), recovered);
+}

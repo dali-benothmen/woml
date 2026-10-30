@@ -1,0 +1,360 @@
+{
+  "baseRevision": "6daaff62c4c317338402ae9a3380361688c62e81",
+  "description": "Pre-RCM8/RCM9 owned durable/runtime source hashes and critical ordered transaction/recovery declaration token fingerprints. Earlier API, DDL, fixture, boxing and native-export baselines remain frozen.",
+  "files": [
+    {
+      "path": "core/woml-engine/src/durable.rs",
+      "sha256": "c647fa6ee46ed27c8cfd5cd9f34bd90e7fe79f5f1970465b89ae9404a8ec1740"
+    },
+    {
+      "path": "core/woml-engine/src/durable/boundary_tests.rs",
+      "sha256": "b2b9ad8d5177a8bf2d06fab67d93d1bda3be28df8aca8396ba39bd781309073d"
+    },
+    {
+      "path": "core/woml-engine/src/durable/definitions.rs",
+      "sha256": "a793393fa470c42a6401f82246caefce33da8d4b5b41b66a45f2ea4817ba53db"
+    },
+    {
+      "path": "core/woml-engine/src/durable/errors.rs",
+      "sha256": "9d01a7e2b7afc64345590fd68683ec0becd54a1760e0f5f6a6fc4146a9955026"
+    },
+    {
+      "path": "core/woml-engine/src/durable/events/cache.rs",
+      "sha256": "50f5a8db2932ce0063f4f419716ee406008a2f94143899ec92cf20a9b72c53c6"
+    },
+    {
+      "path": "core/woml-engine/src/durable/events/commits.rs",
+      "sha256": "a7a7f23dc3602471cc29fc1744efdac4a7e07515f44b7cafc897ed3792562e5e"
+    },
+    {
+      "path": "core/woml-engine/src/durable/events/compatibility.rs",
+      "sha256": "aeac574638653e7f001f560ca5798d8b1a1b2fe112f79d8815fea631b1209b3b"
+    },
+    {
+      "path": "core/woml-engine/src/durable/events/history.rs",
+      "sha256": "7901e35290b77ad2978505f90fedcca64fb9ebc44bc239a64221bcb3a21d6e02"
+    },
+    {
+      "path": "core/woml-engine/src/durable/events/mod.rs",
+      "sha256": "7cfef11d3b0a2ebf3bd766adc37ec4991fb99426f4faedbababbe93e281441a1"
+    },
+    {
+      "path": "core/woml-engine/src/durable/indexes/correction.rs",
+      "sha256": "5525c9dfd43a33b0705533bf944519a34c431364d2851cb7693b84cb67e5b961"
+    },
+    {
+      "path": "core/woml-engine/src/durable/indexes/mod.rs",
+      "sha256": "339ccb43fe62cca312381079a0b3c82f86340e8dd27fa1d26d4677d71dfb0473"
+    },
+    {
+      "path": "core/woml-engine/src/durable/indexes/policy.rs",
+      "sha256": "3bf24591d82409c194eb43224e10add0fc15c3c73eeef4d825dccea95680b914"
+    },
+    {
+      "path": "core/woml-engine/src/durable/indexes/run_summaries.rs",
+      "sha256": "451a0b985938c001e634b542a9e0f401a4c5cf790d9315f58810c5f65b638d56"
+    },
+    {
+      "path": "core/woml-engine/src/durable/inspection/approvals.rs",
+      "sha256": "38c0c523dcb87b13fb68730bbd9397ff9165fc89c1dcd46962eaf9bfc453229e"
+    },
+    {
+      "path": "core/woml-engine/src/durable/inspection/correction.rs",
+      "sha256": "ba6f372872818561aef103e11b8c3dbcb29993d3e95f79cf9818429b4813e61b"
+    },
+    {
+      "path": "core/woml-engine/src/durable/inspection/locks.rs",
+      "sha256": "d044e940b2e0c06c8a09d2949bfd0de9c131627ebeb15d19f73666e73906f96d"
+    },
+    {
+      "path": "core/woml-engine/src/durable/inspection/mod.rs",
+      "sha256": "6c36ddbd65e50b883110633a93f419c7fa975df6f10410e95ecdc6c70ca1e92f"
+    },
+    {
+      "path": "core/woml-engine/src/durable/inspection/runs.rs",
+      "sha256": "a8cabdb3e89f0664646938c874de29eb6bb1f1d9c706854c97db7a7b14208a3f"
+    },
+    {
+      "path": "core/woml-engine/src/durable/inspection/waits.rs",
+      "sha256": "8058eefa1d0f46f0655990a5c4a1800a8a33971135152502a391e81e4a0b3e62"
+    },
+    {
+      "path": "core/woml-engine/src/durable/migrations.rs",
+      "sha256": "b3ac438a90f759d41d4e84703438c28ace07519905d0f487154960bb2784d323"
+    },
+    {
+      "path": "core/woml-engine/src/durable/opening.rs",
+      "sha256": "ec402e1c5373471766c5f94821d314bbe96a558bc958e2971f49a38f6cb18fd6"
+    },
+    {
+      "path": "core/woml-engine/src/durable/records/admission.rs",
+      "sha256": "f9d694b3e6d96c6a066bb737fce34ee1a0d0ac2f4d36a9729b63057e776dcb6e"
+    },
+    {
+      "path": "core/woml-engine/src/durable/records/approvals.rs",
+      "sha256": "c671cd406dc60fa7a9f14fc7d852d68463c550a373f0d5dd41ec6111e7e6da27"
+    },
+    {
+      "path": "core/woml-engine/src/durable/records/correction.rs",
+      "sha256": "13ee73d0e345f23515da7b028291abff92d4d4e4e8460f887846f4723b5630ec"
+    },
+    {
+      "path": "core/woml-engine/src/durable/records/infrastructure_policy.rs",
+      "sha256": "88affd9aa52cc912ff7dcb749b816e6c163d9db441c162db2a83fb8069f4d351"
+    },
+    {
+      "path": "core/woml-engine/src/durable/records/inspection.rs",
+      "sha256": "17a614768a7c9eca40e67629d3b4d6422ac2454fb04f8c39aaa8d4572ae832ab"
+    },
+    {
+      "path": "core/woml-engine/src/durable/records/locks.rs",
+      "sha256": "424f06f819642152411f8a71cc3fb155c269e14d1882d157378a86107d04f09c"
+    },
+    {
+      "path": "core/woml-engine/src/durable/records/mod.rs",
+      "sha256": "b41be5432e19102a020f3fbfb8b9193cd1b7340838f6c578611e82bc62daf936"
+    },
+    {
+      "path": "core/woml-engine/src/durable/records/notifications.rs",
+      "sha256": "7b012a74928b9431e2c042e21d54c65c62a71a44417196da9e9ac37a01da5dbd"
+    },
+    {
+      "path": "core/woml-engine/src/durable/records/ownership.rs",
+      "sha256": "5b55ce9b07da1d0a41a5f5c47955dbb1314b90d31cdfb0da873f2fed2e72e233"
+    },
+    {
+      "path": "core/woml-engine/src/durable/records/policy.rs",
+      "sha256": "fea79fe74f06d30391121cffa3e4823960e8fed859586c2fe5d9dc1d899d5c48"
+    },
+    {
+      "path": "core/woml-engine/src/durable/records/recovery.rs",
+      "sha256": "0f5419eb020995e7ebcb26b45eeeff03a1b89f9ae87d23d49d1edb381a25f9ba"
+    },
+    {
+      "path": "core/woml-engine/src/durable/records/run_control.rs",
+      "sha256": "0220307a5cafdf3ccb46e8e4fb5f89cf21edcb94d7643f75978f79d3fb49e8af"
+    },
+    {
+      "path": "core/woml-engine/src/durable/records/waits.rs",
+      "sha256": "e98efc258999e4a9cb08fb0377fe2645387942a7a5ef70547b7e801a80d9a764"
+    },
+    {
+      "path": "core/woml-engine/src/durable/schema.rs",
+      "sha256": "db3a92a7fe15b5cd78defa63e3014f0774409b0f3e2371e17a1e2ab92fccca6e"
+    },
+    {
+      "path": "core/woml-engine/src/durable/validation.rs",
+      "sha256": "de5841bf59a008aa84bcd0940bb298c4ababe937ffd657a5da1c1a3fc0739208"
+    },
+    {
+      "path": "core/woml-engine/src/runtime.rs",
+      "sha256": "39e79d8fcf6dde59f72a9f804394428bbaf13f9f4794a03bd5557dab85bcfb68"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/cancellation.rs",
+      "sha256": "24ce5ec4971a04153623774a80b0f6095ac1cd93c5a7dee638f11cb7237209b1"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/cleanup.rs",
+      "sha256": "5feccf5b146ed91ab2ed65ebc8e6c10fe3f2bccab2e22da29ee3f6e0882d9ebc"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/clock.rs",
+      "sha256": "562ab3184de2bdf083d0f574630e62393528e757e69e1c1e0da3d78a4d8df0f4"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/composition.rs",
+      "sha256": "b927d796015748279c425578182713f0a5af1dcbb63470cf115429b85e3e21e4"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/context.rs",
+      "sha256": "b097e1ac2dd3559c0f0f081325e25a378228b2af490d9e95493053add1012f1b"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/control_flow/branches.rs",
+      "sha256": "6403f0f2306d9de442312cda5b82578683312aedece0384d26c649bba1ecf91f"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/control_flow/for_each/context.rs",
+      "sha256": "25e4947f5d81455aebdec2281c31f1eace6d38eddb5d2e9fa6e4387c6fb49afd"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/control_flow/for_each/coordinator.rs",
+      "sha256": "38ae992685158e787ebb05b5759a95a7e643a03ef46fd6ba8d24b102ea58114c"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/control_flow/for_each/mod.rs",
+      "sha256": "3a272bfeef7ce9a0bf4f17a5684867f434659bdc4a9d6df43b36d04e46c4d8d5"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/control_flow/for_each/script.rs",
+      "sha256": "ee8f85cc2ddad82dc98819264e4d8fa05a92690992d6cf40bbb315481d8e4f56"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/control_flow/for_each/shared.rs",
+      "sha256": "07fd0e892e1fdd42bc87c75bcdfdbfe14b4429ac421a561a078766fc96883a00"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/control_flow/forks.rs",
+      "sha256": "2db9df94840165fa212463bcb65d1fe4e83573f955f936e0a0ef2331e9e7588d"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/control_flow/mod.rs",
+      "sha256": "0dd4ed0853e7f380e466699d5220a77e4ef8bd961fa4cf9430fa66d90adf55a7"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/control_flow/parallel.rs",
+      "sha256": "67b4163695d1aca2ca62648da7d686bd82d8b6d0130f31abf5010d6aad1ac36b"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/control_flow/waits.rs",
+      "sha256": "21ad998e6f12ed5a50ff7e886183179eae5c7c880552a2621f274d80f6f786d5"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/correction/execution.rs",
+      "sha256": "8815712229f197fceba9145ab15a52e6bad140a404043f23e1e1506877957d4c"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/correction/mod.rs",
+      "sha256": "6288fda4e520bb60ac526ae46c0151ef065c808aac148c57e53398a9ab0be005"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/correction/registration.rs",
+      "sha256": "60eb22540e2515d020be4fa0f1615e233ba28dd14906ac9b14255807d8fc0bfc"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/correction/saga.rs",
+      "sha256": "cf1eb4552d58c7c06a0352ddf6d7967b3f648335051228602c5513460f77955b"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/errors.rs",
+      "sha256": "1590427ff0d61f899ca404f41f3be93ce0d63dcc042206dd202fc9ea949fea6f"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/failure.rs",
+      "sha256": "ef47e89a34b10e4860de4c0975a75b35aa4ba2c1b77ae9fa576c64828ee26229"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/lifecycle/iteration.rs",
+      "sha256": "1bbe45499592a7e4d952bcaf2c9e4ac47db003e6ea2662218751e23a9bdf3277"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/lifecycle/mod.rs",
+      "sha256": "c2a4ada33cc40f5572e8fd80ff72b0d3f8616e408d57656a20a4abc71cd73d42"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/lifecycle/notifications.rs",
+      "sha256": "18f727d73580b7598177def6adc4811e22b1fb47f3571efa92be2dd8478e4517"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/lifecycle/reusable.rs",
+      "sha256": "1454cbfc906adab3c9d91512aabb5f7b13e1b46648090e0dae3e56d53d3966fc"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/lifecycle/steps.rs",
+      "sha256": "43b86259537b560e17c4f4def9116ef0ef8c7024b3a3073a8570d9a2ca2bbd9b"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/lifecycle/workflow.rs",
+      "sha256": "cfc263dfe2f346fc52a69e0a76c8e35bc9051c087dc847226ef380d8aef621fb"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/modules.rs",
+      "sha256": "15e3220067e473e8add402dda4bc00151ff4764d484483a7b5aa90ed2f08d470"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/options.rs",
+      "sha256": "3f630165135c6f4a9725bdd4c219325a7c951335abd27e9c7d2379ec524352c0"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/outcomes.rs",
+      "sha256": "6e1d11cf7344336a50341aac3709918b8c1faec0c1b4e290614857c26774c4e8"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/progress.rs",
+      "sha256": "952c959bdd6d7eafb6c02c9b0398bf36788282b37cd5b449bad10753c10937b6"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/scheduling/locks.rs",
+      "sha256": "f1b31ea71d55b29e8dd00a286cc3e39b040751430cb856c04ee1a8f8ffec6617"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/scheduling/mod.rs",
+      "sha256": "f15d990a08905027b9accc6a54b89d76c69013ba6ed07010c884775772ef0d9e"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/scheduling/policy.rs",
+      "sha256": "cd2df57a27db2236c91ea5286c0776b2efaf543a116ba2259c29b39a8039ed44"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/scheduling/run_loop.rs",
+      "sha256": "edc81eec06f203b0a484a18e22b771e136e38c35b006cd1ab7d6ed2fcac3640c"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/scheduling/timeouts.rs",
+      "sha256": "faff11aa8dabfb9b42d37a49b6cff646a9dc1e36ec7b33c590fbebe9fde65af3"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/script_execution.rs",
+      "sha256": "35347244d3d674c7d5882716c857f180f20454070e1d438c203e11e64f106934"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/script_host_pool.rs",
+      "sha256": "da6c4d762cbef5d1dffe7ce5bc3311bdf89d6107212db42dff18885c204267b2"
+    },
+    {
+      "path": "core/woml-engine/src/runtime/tests.rs",
+      "sha256": "4e801baee0b17817039b611136b7ff9b8bf540265b6536b0bca60a760fd4c105"
+    }
+  ],
+  "criticalDeclarations": [
+    {
+      "name": "recover_run",
+      "sha256": "ad6435da9ed666cc740c7ecf808905f9311df138870ff793b79982033bd93fd1"
+    },
+    {
+      "name": "release_lock_atomically_scoped",
+      "sha256": "1f6a387428c951168c862a614ecd8bde56d4ed4117b776d400e990ce5e6418d8"
+    },
+    {
+      "name": "grant_oldest_lock_waiter",
+      "sha256": "790461cc05cd6232931019e68090fa33d84de58e74c8ee277e141eff93d8baaa"
+    },
+    {
+      "name": "expire_lock_owner",
+      "sha256": "e2bcd1bc19e9c67a59089245828a42909898a8f8f2624211ed880fcc9429b0f6"
+    },
+    {
+      "name": "recovered_state_mutation_settlement",
+      "sha256": "1bcf3a305c7320a6b41b4faa2e0ce69e36769254aa88020c61c4eb3a6ce82ab2"
+    },
+    {
+      "name": "admit_trigger_occurrence_in_transaction",
+      "sha256": "92b6a7425cd57eb6672f420eef19b6ec3284931c4e704f73afedd57ce648d161"
+    },
+    {
+      "name": "admit_workflow_call",
+      "sha256": "d909c608c9a4a03a992d2df8ab284f22059bf7d6cd6be21bf59a2b995b681434"
+    },
+    {
+      "name": "record_rich_approval_decision",
+      "sha256": "a0decc300fb77d8950168263ae9c0dc8e4e55af6f09d66fdfdd82406b241c86f"
+    },
+    {
+      "name": "register_durable_wait_atomically",
+      "sha256": "5afca44faa552e6461ae7e1c1badfdb70b40af6da8813137c69e12d59c6d8a80"
+    },
+    {
+      "name": "request_approval_atomically",
+      "sha256": "540b5fb069d61fd2e91603edb12a71e78dc4fdc775cf12db3281fccf1dad9da2"
+    },
+    {
+      "name": "request_run_cancellation",
+      "sha256": "1dfeb34d253d97587e5061658dc9a7b328458a1f54a434272e40173d1340cb28"
+    },
+    {
+      "name": "settle_run_timeout",
+      "sha256": "20dfc9ce82d363a9c97df46c73635a5be3cbaba54384366e04f8e9453a3c81ab"
+    }
+  ]
+}

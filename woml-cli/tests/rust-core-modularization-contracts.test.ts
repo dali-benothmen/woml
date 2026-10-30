@@ -8,9 +8,49 @@ import baseline from '../../docs/refactoring/rcm0-baseline.json';
 import executionBaseline from '../../docs/refactoring/rcm2-baseline.json';
 import runtimeBaseline from '../../docs/refactoring/rcm4-baseline.json';
 import durableBaseline from '../../docs/refactoring/rcm6-baseline.json';
+import transactionBaseline from '../../docs/refactoring/rcm8-baseline.json';
 
 const root = resolve(import.meta.dir, '../..');
 const hash = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex');
+
+function orderedDeclarationHash(source: string, name: string): string {
+  const matches = [...source.matchAll(new RegExp(`^(?:  )?(?:pub(?:\\([^)]*\\))? )?fn ${name}\\b`, 'gm'))];
+  const match = matches.find(candidate => {
+    if (!candidate[0].startsWith('  ')) return true;
+    // Store and DAG adapter can expose the same method name. Compare the
+    // original owning implementation, not whichever file sorts first.
+    return [...source.slice(0, candidate.index).matchAll(/^impl[^\n]*/gm)].at(-1)?.[0]
+      === 'impl DurableEventStore {';
+  });
+  if (match === undefined) throw new Error(`Missing frozen declaration ${name}.`);
+  const tokens = source.slice(match.index)
+    .replace(/\bpub\((?:super|in crate::durable)\)\s*/g, '')
+    .match(/r#*"[\s\S]*?"#*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])'|\/\/[^\n]*|\/\*[\s\S]*?\*\/|[^\s]/g)!
+    .filter(token => !token.startsWith('//') && !token.startsWith('/*'));
+  let depth = 0;
+  for (let index = 0; index < tokens.length; index++) {
+    if (tokens[index] === '{') depth++;
+    if (tokens[index] === '}' && --depth === 0) {
+      const body = tokens.slice(0, index + 1);
+      return hash(body.filter((token, position) =>
+        !(token === ',' && [')', ']', '}'].includes(body[position + 1]!))).join('\0'));
+    }
+  }
+  throw new Error(`Incomplete frozen declaration ${name}.`);
+}
+
+test('critical transaction and recovery declarations preserve their ordered tokens', async () => {
+  const source = (await readRustModuleSource(resolve(root, 'core/woml-engine/src/durable.rs')))
+    .replaceAll('\r\n', '\n');
+  for (const declaration of transactionBaseline.criticalDeclarations) {
+    expect(orderedDeclarationHash(source, declaration.name)).toBe(declaration.sha256);
+  }
+  // This is a refactor-only guard, not an algorithm test or a perpetual ban on
+  // reviewed behavior changes. Executable contention/recovery tests remain required.
+  const name = 'recovered_state_mutation_settlement';
+  const altered = source.replace('woml.state-result\\0v1\\0', 'woml.state-result\\0v2\\0');
+  expect(orderedDeclarationHash(altered, name)).not.toBe(orderedDeclarationHash(source, name));
+});
 
 test('contract facades preserve the frozen public type inventories', async () => {
   for (const [module, contract] of Object.entries({ ...baseline.contracts, ...executionBaseline.contracts, ...durableBaseline.contracts })) {
