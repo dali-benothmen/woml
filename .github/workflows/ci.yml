@@ -179,6 +179,7 @@ jobs:
           cargo test --config profile.dev.debug=0
           --config profile.dev.incremental=false -j 1 --locked
           -p woml-engine
+          --test core_contract_paths
           --test dag_engine
           --test durable_event_store
           --test script_host_protocol
