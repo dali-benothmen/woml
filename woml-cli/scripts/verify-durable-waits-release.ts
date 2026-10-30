@@ -62,7 +62,7 @@ for (const schemaName of [
 
 const implementation = await Promise.all([
   readRustModuleSource(resolve(repositoryRoot, 'core/woml-engine/src/durable.rs')),
-  readFile(resolve(repositoryRoot, 'core/woml-engine/src/webhook.rs'), 'utf8'),
+  readRustModuleSource(resolve(repositoryRoot, 'core/woml-engine/src/webhook.rs')),
   readFile(resolve(repositoryRoot, 'core/woml-engine/src/backup.rs'), 'utf8'),
   readFile(resolve(repositoryRoot, 'woml-cli/src/cli.ts'), 'utf8'),
 ]);

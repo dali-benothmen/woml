@@ -10,6 +10,7 @@ import runtimeBaseline from '../../docs/refactoring/rcm4-baseline.json';
 import durableBaseline from '../../docs/refactoring/rcm6-baseline.json';
 import transactionBaseline from '../../docs/refactoring/rcm8-baseline.json';
 import capabilityArtifactBaseline from '../../docs/refactoring/rcm10-baseline.json';
+import featureBridgeBaseline from '../../docs/refactoring/rcm12-baseline.json';
 
 const root = resolve(import.meta.dir, '../..');
 const hash = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex');
@@ -19,12 +20,12 @@ function declarationFingerprints(source: string): { name: string; sha256: string
   const metadata = (text: string): boolean => !text.replace(/\/\/[^\n]*/g, '')
     .replace(/#\[[\s\S]*?\]/g, '').trim();
   const canonical = (text: string): string => {
-    const tokens = (text.replace(/\bpub\((?:super|in crate::(?:capability|process|artifacts))\)\s*/g, '')
+    const tokens = (text.replace(/\bpub\((?:super|in crate::[a-z_]+)\)\s*/g, '')
       .match(/r#*"[\s\S]*?"#*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])'|\/\/[^\n]*|\/\*[\s\S]*?\*\/|[^\s]/g) ?? [])
       .filter(token => !token.startsWith('//') && !token.startsWith('/*'));
     return tokens.filter((token, index) => !(token === ',' && [')', ']', '}'].includes(tokens[index + 1]!))).join('\0');
   };
-  const heads = [...clean.matchAll(/^(?:(?:pub(?:\(crate\)|\(in crate::(?:capability|process|artifacts)\))?) )?(?:async )?(struct|enum|trait|type|const|fn|mod) (\w+)|^(?:unsafe )?impl[^\n]*/gm)];
+  const heads = [...clean.matchAll(/^(?:(?:pub(?:\([^)]*\))?) )?(?:(?:async|const) )?(struct|enum|trait|type|const|static|fn|mod) (\w+)|^(?:unsafe )?impl[^\n]*/gm)];
   const starts = heads.map(match => {
     const start = clean.lastIndexOf('\n\n', match.index) + 2;
     return metadata(clean.slice(start, match.index)) ? start : match.index!;
@@ -34,7 +35,7 @@ function declarationFingerprints(source: string): { name: string; sha256: string
     const text = clean.slice(starts[index], starts[index + 1] ?? clean.length).trimEnd();
     if (head[1] !== undefined) return [{ name: `${head[1]} ${head[2]}`, sha256: hash(canonical(text)) }];
     const owner = text.slice(0, text.indexOf('{')).trim();
-    const methods = [...text.matchAll(/^  (?:pub(?:\([^)]*\))? )?(?:async )?fn (\w+)/gm)];
+    const methods = [...text.matchAll(/^  (?:pub(?:\([^)]*\))? )?(?:(?:async|const) )?fn (\w+)/gm)];
     if (methods.length === 0) return [{ name: owner, sha256: hash(canonical(text)) }];
     const bounds = methods.map(match => {
       const start = Math.max(text.lastIndexOf('\n\n', match.index) + 2, text.indexOf('\n') + 1);
@@ -45,7 +46,7 @@ function declarationFingerprints(source: string): { name: string; sha256: string
   });
 }
 
-test('capability, process, and artifact extraction preserves every ordered production declaration', async () => {
+test('extracted engine and bridge families preserve every ordered production declaration', async () => {
   async function productionFiles(directory: string): Promise<string[]> {
     const paths: string[] = [];
     for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -59,10 +60,10 @@ test('capability, process, and artifact extraction preserves every ordered produ
   }
   const sort = (items: { name: string; sha256: string }[]): string[] =>
     items.map(item => `${item.name}:${item.sha256}`).sort();
-  for (const [module, contract] of Object.entries(capabilityArtifactBaseline.contracts)) {
-    const entry = resolve(root, `core/woml-engine/src/${module}.rs`);
-    // The artifact checkpoint follows capability/process; an untouched facade
-    // has no child directory yet. Its frozen inline test module is excluded.
+  for (const [module, contract] of Object.entries({ ...capabilityArtifactBaseline.contracts, ...featureBridgeBaseline.contracts })) {
+    const entry = resolve(root, 'path' in contract ? contract.path : `core/woml-engine/src/${module}.rs`);
+    // At intermediate checkpoints an untouched facade may not have a child
+    // directory yet. Frozen inline test modules are checked separately.
     const files = [entry, ...await productionFiles(entry.slice(0, -3)).catch(error => {
       if (error?.code === 'ENOENT') return [];
       throw error;
@@ -73,7 +74,18 @@ test('capability, process, and artifact extraction preserves every ordered produ
   }
 });
 
-test('relocated process and artifact tests retain assertions, fixtures, and platform cases', async () => {
+test('the reviewed cohesive families remain unchanged during RCM12 and RCM13', async () => {
+  for (const retained of featureBridgeBaseline.retained) {
+    expect(hash((await readFile(resolve(root, retained.path), 'utf8')).replaceAll('\r\n', '\n')))
+      .toBe(retained.sha256);
+  }
+  const bridge = await readFile(resolve(root, featureBridgeBaseline.contracts.bridge.path), 'utf8');
+  const names = [...bridge.matchAll(/^pub (?:async )?fn (\w+)/gm)].map(match => match[1]!).sort();
+  expect(names).toEqual(featureBridgeBaseline.contracts.bridge.publicFunctions);
+  expect([...bridge.matchAll(/^#\[napi(?:\(|\])/gm)].length).toBe(names.length);
+});
+
+test('relocated process, artifact, and ingress tests retain assertions, fixtures, and platform cases', async () => {
   async function testSources(path: string): Promise<string[]> {
     if (path.endsWith('.rs')) return [await readFile(path, 'utf8')];
     const sources: string[] = [];
@@ -85,7 +97,7 @@ test('relocated process and artifact tests retain assertions, fixtures, and plat
     }
     return sources;
   }
-  for (const module of ['process', 'artifacts'] as const) {
+  for (const module of ['process', 'artifacts', 'webhook'] as const) {
     const directory = resolve(root, `core/woml-engine/src/${module}`);
     let sources: string[];
     try {
@@ -106,7 +118,9 @@ test('relocated process and artifact tests retain assertions, fixtures, and plat
       source.replaceAll('\r\n', '\n').replace(/"(?:\.\.\/)+woml\//g, '"REPOSITORY/woml/')));
     const sort = (items: { name: string; sha256: string }[]): string[] =>
       items.map(item => `${item.name}:${item.sha256}`).sort();
-    expect(sort(actual)).toEqual(sort(capabilityArtifactBaseline.contracts[module].testDeclarations));
+    const contract = module === 'webhook' ? featureBridgeBaseline.contracts.webhook
+      : capabilityArtifactBaseline.contracts[module];
+    expect(sort(actual)).toEqual(sort(contract.testDeclarations));
   }
 });
 
@@ -150,20 +164,21 @@ test('critical transaction and recovery declarations preserve their ordered toke
 });
 
 test('contract facades preserve the frozen public type inventories', async () => {
-  for (const [module, contract] of Object.entries({ ...baseline.contracts, ...executionBaseline.contracts, ...durableBaseline.contracts, ...capabilityArtifactBaseline.contracts })) {
-    const source = await readRustModuleSource(resolve(root, `core/woml-engine/src/${module}.rs`));
+  for (const [module, contract] of Object.entries({ ...baseline.contracts, ...executionBaseline.contracts, ...durableBaseline.contracts, ...capabilityArtifactBaseline.contracts, ...featureBridgeBaseline.contracts })) {
+    const entry = resolve(root, 'path' in contract ? contract.path : `core/woml-engine/src/${module}.rs`);
+    const source = await readRustModuleSource(entry);
     const names = [...source.matchAll(/^pub (?:struct|enum|type) (\w+)/gm)].map(match => match[1]!).sort();
     expect(names).toEqual([...contract.publicTypes].sort());
     expect(new Set(names).size).toBe(names.length);
-    const facade = await readFile(resolve(root, `core/woml-engine/src/${module}.rs`), 'utf8');
+    const facade = await readFile(entry, 'utf8');
     expect(facade).not.toMatch(/pub\s+mod\s/);
     expect(facade).not.toMatch(/pub\s+use\s+[^;]*\*/);
   }
 });
 
 test('execution facades preserve their frozen public functions, constants, and traits', async () => {
-  for (const [module, contract] of Object.entries({ ...executionBaseline.contracts, ...durableBaseline.contracts, ...capabilityArtifactBaseline.contracts })) {
-    const source = await readRustModuleSource(resolve(root, `core/woml-engine/src/${module}.rs`));
+  for (const [module, contract] of Object.entries({ ...executionBaseline.contracts, ...durableBaseline.contracts, ...capabilityArtifactBaseline.contracts, ...featureBridgeBaseline.contracts })) {
+    const source = await readRustModuleSource(resolve(root, 'path' in contract ? contract.path : `core/woml-engine/src/${module}.rs`));
     const names = (pattern: RegExp): string[] => [...source.matchAll(pattern)].map(match => match[1]!).sort();
     expect(names(/^pub (?:async )?fn (\w+)/gm)).toEqual([...contract.publicFunctions].sort());
     expect(names(/^pub const (\w+)/gm)).toEqual([...contract.publicConstants].sort());

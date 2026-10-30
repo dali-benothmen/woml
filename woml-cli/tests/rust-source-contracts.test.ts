@@ -39,6 +39,10 @@ test('native separation catches a prohibited dependency hidden in a child module
   expect(nativeAdapterSourceViolations(source)).toContain('crate-local legacy module');
   expect(nativeAdapterSourceViolations('use models::Workflow;')).toContain('legacy module models');
   expect(nativeAdapterSourceViolations('use woml_engine::RunEvent;')).toEqual([]);
+  expect(nativeAdapterSourceViolations('use super::super::models::Workflow;')).toContain('legacy module models');
+  expect(nativeAdapterSourceViolations(
+    'use woml_engine::RunEvent; use super::configuration::runtime_options; use super::errors::native_execution_error;'
+  )).toEqual([]);
 });
 
 test('a malformed owned module directory fails closed instead of skipping its source', async () => {

@@ -86,7 +86,8 @@ fn assert_adapter_sources(adapter: &str) {
 
   for module in LEGACY_MODULES {
     assert!(
-      !adapter.contains(&format!("use {module}::")),
+      !adapter.contains(&format!("use {module}::"))
+        && !adapter.contains(&format!("super::{module}::")),
       "The extracted adapter imports legacy module {module}."
     );
   }
@@ -106,6 +107,19 @@ fn native_adapter_guard_rejects_a_hidden_private_module_dependency() {
   ]
   .join("\n");
   assert_adapter_sources(&sources);
+}
+
+#[test]
+fn native_adapter_guard_allows_private_bridge_owners() {
+  assert_adapter_sources(
+    "use woml_engine::RunEvent; use super::configuration::runtime_options; use super::errors::native_execution_error;",
+  );
+}
+
+#[test]
+#[should_panic(expected = "legacy module models")]
+fn native_adapter_guard_rejects_a_parent_relative_legacy_dependency() {
+  assert_adapter_sources("use woml_engine::RunEvent; use super::super::models::Workflow;");
 }
 
 #[test]

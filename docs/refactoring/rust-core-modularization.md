@@ -1,4 +1,4 @@
-# Rust core modularization: RCM0–RCM11 verification
+# Rust core modularization: RCM0–RCM13 verification
 
 This is an internal refactor, not a language, schema, or runtime revision.
 Branch: `refactor/rust-core-modularization`. Baseline source:
@@ -56,8 +56,9 @@ deterministic order and rejects symlinks. Negative tests hide forbidden
 content in a nested child. Native checks scan the whole source directory.
 These are source guards, not a complete Rust module resolver; keep private
 implementation inside its owned directory and review unusual path attributes.
-The native `crate::` prohibition is retained; legitimate native-local import
-changes, if needed, belong to reviewed RCM13 guard work.
+The native `crate::` prohibition is retained. RCM13 uses legitimate private
+`super::` helper imports; both guards explicitly allow these and reject
+parent-relative legacy imports too. All private source files remain scanned.
 
 Preserve Cargo's top-level integration entrypoints and CLI shard discovery.
 Important unit filters include `process::tests` and `artifacts::tests`;
@@ -1000,4 +1001,201 @@ failures documented above remain untouched; these phases do not fix them or
 claim the whole CI matrix is green. No timeout, output/resource limit,
 performance budget, test assertion or Clippy allowance was relaxed. No commit
 or push was made. The next implementation phase is RCM12, the remaining
-feature-family ownership audit.
+feature-family ownership audit. (This is the RCM11 handoff; see the completed
+RCM12/RCM13 checkpoint below for the current next step.)
+
+## RCM12: remaining-family ownership audit
+
+These phases start from `b43f129` on the existing refactor branch. The
+[pre-extraction baseline](rcm12-baseline.json) freezes 410 production
+declarations/methods across six families, their public inventories, the original
+webhook tests and 35 explicitly retained source files. Literal contents,
+attributes, SQL and statement order are included. The guard normalizes only
+comments, formatting/trailing commas and documented family-private visibility.
+Earlier schema, fixture, API, boxed-future and native-name baselines are not
+replaced or regenerated to accept a changed implementation.
+
+Before extraction, the selected remote/notification/webhook baseline passed
+52 tests. After the RCM12 engine checkpoint, the expanded selection passed
+75 tests, including authenticated mTLS loopback, worker cancellation and terminal
+redelivery, output deduplication, dispatch recovery/ambiguity, event fan-out,
+schedule/interval admission, webhook contention and notification recovery.
+
+### Extracted ownership
+
+| Stable entry | Private owners and why |
+|---|---|
+| `remote_worker_journal.rs` | `contracts`, `schema`, `persistence`, `preparation`, `secrets`, `artifacts`, `execution`, `identity`: separate journal evidence, permission/integrity preparation and live attempt supervision. |
+| `remote_dispatch.rs` | `contracts`, `schema`, `identity`, `validation`, `transactions`: coordinator transitions stay on the same `DurableEventStore` connection, not a new feature repository. |
+| `remote_coordinator_server.rs` | Parent owns listener, stop/join and connection accounting; `contracts`, `connection`, `http`, `tls` separate bounds, authenticated routing, framing and trust loading. |
+| `webhook.rs` | Parent owns prepare/activate/stop. Children own shared `state`, `contracts`, `preparation`, `authentication`, `responses`, `admission`, `signals`, `events`, `whatsapp`, `schedules`, `intervals`, `routing`, `waits`, and `dispatch`. Original authentication cases retain `webhook::tests` discovery. |
+| `notification_runtime.rs` | `contracts`, `journey`, `builtin`, `custom`, `retry`, `diagnostics`: outbox orchestration stays distinct from transport hosts and provider-specific message/result adaptation. |
+
+Journal acceptance still precedes acknowledgement; start remains immediately
+before the execute frame. Terminal replay precedes drain rejection. Validation
+and authority intersection remain before acceptance, secret values resolve at
+the worker, and unknown started effects remain ambiguous. Capacity guards and
+Drop behavior retain their original owners and ordering.
+
+Dispatch transaction bodies remain together with their exact identity checks,
+event append, dispatch/output-sequence writes, audit and commit. No per-feature
+connection or generic transaction framework was introduced. Worker facts do
+not authorize retries or downstream scheduling independently of the coordinator.
+
+Accepted coordinator sockets still explicitly become blocking under the same
+read/write deadlines. Certificate-derived identity, message limits, HTTP/TLS
+response flush/close, listener shutdown and connection Drop accounting are
+unchanged. Ingress preparation/activation retains its admission gate, routing
+registration/rollback, targeted recovery and bounded stop. Schedule/interval
+producers are distinct from DAG eligibility. Provider adaptation retains
+ambiguous-send/error classification and cannot manufacture a human decision.
+
+### Explicit retain-as-is decisions
+
+All 35 files below are hash-pinned to the pre-RCM12 baseline. Retaining a file
+is an ownership decision, not a promise that it will never benefit from future
+work. A meaningful new boundary requires its own evidence and review.
+
+| Retained modules | Existing responsibility and rationale |
+|---|---|
+| `remote_protocol`, `remote_coordinator`, `remote_transport`, `remote_execution`, `remote_worker`, `target_registry` | Versioned wire contracts, authenticated sessions, offer/terminal transport, output ingestion, worker configuration and target registry already have distinct owners. They remain separate from journal persistence/execution and HTTP/TLS. |
+| `notification_host`, `custom_notification_host`, `notification_protocol`, `custom_notification_provider_protocol` | Host supervision and two explicit framed protocols are cohesive boundaries. Do not merge them with the journey or messaging capabilities. |
+| `http`, `database`, `database_postgres`, `storage`, `cache`, `durable_state` | Separate capability handlers, storage adapters and mutation authority already exist. SQLite and PostgreSQL differences and state mutation proof deserve explicit APIs, not a new generic service layer. |
+| `infrastructure_policy`, `infrastructure_policy_runtime` | Contract/trust preparation and executable evaluation/evidence are already distinct. Further splitting would scatter the deny/authority decision without a new consumer boundary. |
+| `operational_output` | One separate bounded output-store authority owns sequences, coalescing, retention and gap receipts. Keep its transaction semantics together; do not fold it into workflow events. |
+| `telemetry`, `telemetry_propagation` | Safe signal generation and inbound/outbound propagation already have separate boundaries. Export is observation, not workflow authority. |
+| `presentation` | One bounded read-model/presentation vocabulary belongs together; rendering cannot settle runs. Its size alone does not justify splitting every record family. |
+| `backup`, `retention` | Supported snapshot/restore and governed collection already have separate owners, inventories and maintenance leases. Preserve their mixed evidence/coordination protection rules. |
+| `events_service`, `workflow_calls`, `schedule`, `interval` | Internal publication, child-call coordination and two clock semantics are distinct capabilities. Trigger-host adapters moved; these underlying contracts and authorities did not. |
+| `telegram`, `discord`, `whatsapp` | Provider-specific messaging capabilities remain distinct from ingress callbacks and notification transports. Their differences are meaningful, not duplicate boilerplate to erase. |
+| `locks`, `rich_approval`, `host`, `performance` | Lease contracts/authority, review authority, supervised script-host protocol and opt-in profiling are separate focused modules. Do not extract them into a miscellaneous shared utility layer. |
+
+## RCM13: private native bridge owners, frozen JavaScript doors
+
+All 68 original `#[napi]` attributes, argument lists and export bodies remain
+in `core/woml-native/src/bridge.rs`. It is still approximately 2,675 lines
+by design: relocating exports would add generated-interface risk without
+being needed to expose the helper responsibilities.
+
+| Private owner | Responsibility |
+|---|---|
+| `configuration.rs` | Runtime options, modules, secret maps, process/artifact/reviewer authority and infrastructure-policy conversion. |
+| `contracts.rs` | Native request/response, registration, outcome and inspection JSON records with unchanged Serde attributes. |
+| `errors.rs` | Existing structured error envelopes, safe classifications and N-API conversion. |
+| `progress.rs` | Ordinary callbacks, output wakeup coalescing, enabled telemetry and original lifetime/atomic rules. |
+| `registries.rs` | Single webhook and remote-coordinator registries and their exact resource owners. |
+| `remote.rs` | Adapter preparation of one remote attempt, delegated to engine verification/authority. |
+| `validation.rs` | Existing definition-binding checks, manual rejection encoding and output cursor validation. |
+
+Imports in the parent remain private; child helpers use `pub(super)` only
+within the bridge tree. No private helper becomes an external Rust or N-API
+API. The engine-only dependency boundary remains unchanged.
+
+Ordinary progress retains queue size zero (unbounded) and `Blocking` delivery;
+output wakeups retain one `NonBlocking` slot, `fetch_max`, compare/exchange and
+reset ordering; enabled telemetry retains its bounded 1,024-slot `NonBlocking`
+lane. Existing `unref` calls remain. Do not describe every callback lane as
+interchangeable best-effort delivery or silently change its backpressure.
+
+There is still exactly one `WEBHOOK_RUNTIMES` map and one `REMOTE_COORDINATORS`
+map. Webhook stop removes the registered owner before signalling and joins
+through `spawn_blocking`. Remote stop retains explicit shutdown and server
+Drop. Startup audits, ownership acquisition, preparation, activation, heartbeat
+and release keep their original order. The new files do not own detached copies
+of channels, connections, transports or lifetime registries.
+
+Both native separation guards scan every nested Rust source, permit the
+legitimate private `super::` imports and reject parent-relative legacy imports
+as well as the original forbidden dependencies. Negative nested-module tests
+remain, and Rust adds positive private-owner and negative parent-legacy cases.
+Waits and atomic-activation source verifiers now read the owned trees rather
+than facade text alone, without dropping marker/privacy assertions.
+
+### Actual addon and installed-package evidence
+
+A single-job **debug** addon was built after the RCM12 checkpoint and before
+the bridge move, copied to a unique temporary location, then rebuilt after
+RCM13. [verify-rust-core-native.ts](../../woml-cli/scripts/verify-rust-core-native.ts)
+loads real addons and optionally compares both:
+
+```bash
+bun woml-cli/scripts/verify-rust-core-native.ts <before.node> <rebuilt-library>
+```
+
+Both passed identically: exact 68 names, function types and observable `.length`,
+ordinary async execution/rejection, durable sync inspection/error envelopes,
+synchronous callback-API decode failure, Promise-returning durable execution,
+lifecycle progress, coalesced operational wakeups, waiting outcomes, prepared
+ingress returning 503, activation admitting 202, trigger/telemetry callbacks,
+stop removing ownership, and rebinding the same address/store. N-API reports
+`.length === 0` for these functions; **that alone does not prove positional
+argument compatibility**. Frozen source signatures/bodies and actual positional
+invocations provide the complementary evidence. Not every export's full
+business workflow is exercised by this harness.
+
+Fresh portable/native npm candidates were staged under a unique temporary
+directory using the normal packaging/sealing/load-test helpers and the rebuilt
+debug addon, without overwriting the existing staged addon or publishing.
+The existing `smoke-release-candidate.ts` passed its clean installed Linux
+journey, including real workflow/process/durable-wait behavior. The full
+architecture-separation verifier also passed. Its default addon check uses
+the existing staged path; the dedicated comparison and temporary candidate
+above are the checks proving the newly rebuilt binary.
+
+This is not an optimized-release performance result or Windows/macOS
+certification. Full platform/native-architecture/package/budget gates remain
+RCM14 work. No dependency, protocol/schema, package allowlist, resource limit,
+performance budget or existing assertion was relaxed.
+
+### Separate unchanged release-verifier failure
+
+`verify-production-triggers-release.ts` passes its T5–T13 checks, then its
+transitive retry verifier fails RI7 because `examples/retryWorkflow.woml`
+does not exactly match `woml/tests/fixtures/retry.woml`. Both files and
+`verify-retry-release.ts` are byte-for-byte unchanged from `b43f129`:
+
+| File | Pre-refactor/current SHA-256 |
+|---|---|
+| Product retry example | `4e5812cef003b1f46c033a1c873cb7936459ec06ccb56a9554173518d4a9fb91` |
+| Frozen retry fixture | `6ad7eba956c9996f66c14bd7dba2e427e72a926564b02fbce8974faf9130f375` |
+| Retry verifier | `d70b607decd91b73da09398097411c7cdab554b9b79f9e151ecf5a21728f1849` |
+
+This input mismatch is not a Rust relocation regression. It remains visible,
+as do the earlier baseline failures documented above; do not silently update
+a golden fixture or weaken equality as part of this refactor.
+
+The codebase-documenter workflow guided updated native, ingress, notification
+and remote reading routes, callback/lifetime explanations, architecture/schema
+maps, beginner story, edition metadata and per-file atlas roles. The book's
+existing ignore rule remains unchanged, and unrelated untracked roadmaps are
+not part of this work. No commit or push was made. Next: **RCM14**.
+
+### RCM12/RCM13 verification summary
+
+All Cargo commands ran one at a time with `-j 1`, `--locked --offline`, dev
+debug information and incremental compilation disabled; durable/port/process
+tests ran serially. Debug addons were built deliberately instead of starting
+an expensive optimized release build on the developer machine.
+
+| Check | Local result |
+|---|---|
+| Before extraction: worker protocol/attempt, dispatch/transport/mTLS, webhook and notifications | 52 passed |
+| RCM12 checkpoint: above plus event, schedule, interval, lifecycle notification and custom-provider protocol | 75 passed across 12 targets |
+| Final service/policy/output/backup/retention/public-path selection | 56 passed across 8 targets, including 13 public-path and all 17 output-store budget cases |
+| Original `webhook::tests` filter after relocation | Exactly 2 tests discovered and passed |
+| Rebuilt native separation and parent-relative negative checks | 6 passed without compiler warnings |
+| Frozen production/test/API/DDL/fixture/boxing/native/source-reader/architecture unit guards | 17 passed |
+| Actual before/after debug addons | Exact 68-export surface and selected positional sync/async/error/callback/lifecycle contracts passed identically |
+| Fresh temporary Linux portable/native installed candidate | Existing release-candidate smoke passed with the rebuilt debug addon |
+| Complete architecture-separation verifier | Passed; see the addon provenance distinction above |
+| Portable CLI contract shard | All 17 files passed; 138 test files remain assigned to bounded shards |
+| TypeScript, exact rebuilt-addon export verifier | Passed |
+| Affected waits/activation/ownership/observation/policy/streaming/review/correction source verifiers | 8 passed with original assertions |
+| Production-trigger verifier | Its T5–T13 checks passed; transitive RI7 retry-example mismatch remains an unchanged baseline failure |
+| Established Clippy policy applied to both engine and native libraries | Passed; no new allowances |
+| Rust formatting and diff hygiene | Passed |
+| Ignored developer book and regenerated atlas | Passed; 1,837 source files, 77 pages, 3,626 local links |
+
+Selections overlap and are not counts of distinct tests. Optimized release,
+the complete runtime operations/package matrix, Windows/macOS, all native
+architectures and final full-release budgets remain independent RCM14 gates.

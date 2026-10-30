@@ -1420,3 +1420,187 @@ fn artifacts_contract_paths_remain_available() {
     woml_engine::artifacts::verify_artifact_backup(path, source)
   };
 }
+
+#[test]
+fn remote_ingress_and_notification_contract_paths_remain_available() {
+  let _ =
+    std::any::type_name::<woml_engine::remote_worker_journal::EnvironmentRemoteSecretProvider>();
+  let _: fn(
+    woml_engine::EnvironmentRemoteSecretProvider,
+  ) -> woml_engine::remote_worker_journal::EnvironmentRemoteSecretProvider = |value| value;
+  let _ = std::any::type_name::<woml_engine::remote_worker_journal::PreparedRemoteDispatchV1>();
+  let _: fn(
+    woml_engine::PreparedRemoteDispatchV1,
+  ) -> woml_engine::remote_worker_journal::PreparedRemoteDispatchV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::remote_worker_journal::RemoteWorkerAttemptRuntimeV1>();
+  let _: fn(
+    woml_engine::RemoteWorkerAttemptRuntimeV1,
+  ) -> woml_engine::remote_worker_journal::RemoteWorkerAttemptRuntimeV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::remote_worker_journal::RemoteWorkerAuthorityV1>();
+  let _: fn(
+    woml_engine::RemoteWorkerAuthorityV1,
+  ) -> woml_engine::remote_worker_journal::RemoteWorkerAuthorityV1 = |value| value;
+  let _ =
+    std::any::type_name::<woml_engine::remote_worker_journal::RemoteWorkerCancellationTokenV1>();
+  let _: fn(
+    woml_engine::RemoteWorkerCancellationTokenV1,
+  ) -> woml_engine::remote_worker_journal::RemoteWorkerCancellationTokenV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::remote_worker_journal::RemoteWorkerError>();
+  let _: fn(
+    woml_engine::RemoteWorkerError,
+  ) -> woml_engine::remote_worker_journal::RemoteWorkerError = |value| value;
+  let _ = std::any::type_name::<woml_engine::remote_worker_journal::RemoteWorkerTerminalV1>();
+  let _: fn(
+    woml_engine::RemoteWorkerTerminalV1,
+  ) -> woml_engine::remote_worker_journal::RemoteWorkerTerminalV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::remote_worker_journal::ResolvedRemoteSecretProvider>();
+  let _: fn(
+    woml_engine::ResolvedRemoteSecretProvider,
+  ) -> woml_engine::remote_worker_journal::ResolvedRemoteSecretProvider = |value| value;
+  let _ = std::any::type_name::<woml_engine::remote_worker_journal::WorkerAttemptRecordV1>();
+  let _: fn(
+    woml_engine::WorkerAttemptRecordV1,
+  ) -> woml_engine::remote_worker_journal::WorkerAttemptRecordV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::remote_worker_journal::WorkerAttemptStateV1>();
+  let _: fn(
+    woml_engine::WorkerAttemptStateV1,
+  ) -> woml_engine::remote_worker_journal::WorkerAttemptStateV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::remote_worker_journal::WorkerJournalV1>();
+  let _: fn(woml_engine::WorkerJournalV1) -> woml_engine::remote_worker_journal::WorkerJournalV1 =
+    |value| value;
+  let _ = std::any::type_name::<dyn woml_engine::remote_worker_journal::RemoteSecretProvider>();
+  let _ = woml_engine::remote_worker_journal::REMOTE_CANCELLATION_CONFIRMATION_TIMEOUT_MS;
+  let _ = woml_engine::remote_worker_journal::WORKER_JOURNAL_RECOVERY_LIMIT;
+  let _ = woml_engine::remote_worker_journal::WORKER_JOURNAL_SCHEMA_VERSION;
+  let _ = woml_engine::remote_worker_journal::prepare_remote_dispatch;
+  let _ = woml_engine::remote_worker_journal::verify_remote_artifact_transfer;
+  let _ = std::any::type_name::<woml_engine::remote_dispatch::RemoteDispatchError>();
+  let _: fn(woml_engine::RemoteDispatchError) -> woml_engine::remote_dispatch::RemoteDispatchError =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::remote_dispatch::RemoteDispatchInspectionV1>();
+  let _: fn(
+    woml_engine::RemoteDispatchInspectionV1,
+  ) -> woml_engine::remote_dispatch::RemoteDispatchInspectionV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::remote_dispatch::RemoteDispatchRecordV1>();
+  let _: fn(
+    woml_engine::RemoteDispatchRecordV1,
+  ) -> woml_engine::remote_dispatch::RemoteDispatchRecordV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::remote_dispatch::RemoteDispatchRequestV1>();
+  let _: fn(
+    woml_engine::RemoteDispatchRequestV1,
+  ) -> woml_engine::remote_dispatch::RemoteDispatchRequestV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::remote_dispatch::RemoteDispatchResolutionV1>();
+  let _: fn(
+    woml_engine::RemoteDispatchResolutionV1,
+  ) -> woml_engine::remote_dispatch::RemoteDispatchResolutionV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::remote_dispatch::RemoteDispatchStateV1>();
+  let _: fn(
+    woml_engine::RemoteDispatchStateV1,
+  ) -> woml_engine::remote_dispatch::RemoteDispatchStateV1 = |value| value;
+  let _ = std::any::type_name::<woml_engine::remote_dispatch::RemoteOutputBindingV1>();
+  let _: fn(
+    woml_engine::RemoteOutputBindingV1,
+  ) -> woml_engine::remote_dispatch::RemoteOutputBindingV1 = |value| value;
+  let _ = woml_engine::remote_dispatch::REMOTE_DISPATCH_HEARTBEAT_MAX_BYTES;
+  let _ = woml_engine::remote_dispatch::REMOTE_DISPATCH_RECOVERY_BATCH_LIMIT;
+  let _ = woml_engine::remote_dispatch::derive_remote_dispatch_id;
+  let _ =
+    std::any::type_name::<woml_engine::remote_coordinator_server::RemoteCoordinatorServerError>();
+  let _: fn(
+    woml_engine::RemoteCoordinatorServerError,
+  ) -> woml_engine::remote_coordinator_server::RemoteCoordinatorServerError = |value| value;
+  let _ =
+    std::any::type_name::<woml_engine::remote_coordinator_server::RemoteCoordinatorServerV1>();
+  let _: fn(
+    woml_engine::RemoteCoordinatorServerV1,
+  ) -> woml_engine::remote_coordinator_server::RemoteCoordinatorServerV1 = |value| value;
+  let _ =
+    std::any::type_name::<woml_engine::remote_coordinator_server::RemoteCoordinatorTlsOptionsV1>();
+  let _: fn(
+    woml_engine::RemoteCoordinatorTlsOptionsV1,
+  ) -> woml_engine::remote_coordinator_server::RemoteCoordinatorTlsOptionsV1 = |value| value;
+  let _ = woml_engine::remote_coordinator_server::REMOTE_COORDINATOR_IO_TIMEOUT_SECONDS;
+  let _ = woml_engine::remote_coordinator_server::REMOTE_COORDINATOR_MAX_CONNECTIONS;
+  let _ = woml_engine::remote_coordinator_server::REMOTE_COORDINATOR_MAX_CONNECTIONS_PER_SECOND;
+  let _ = woml_engine::remote_coordinator_server::REMOTE_COORDINATOR_MAX_HEADER_BYTES;
+  let _ = std::any::type_name::<woml_engine::webhook::ExternalTriggerAdmissionCommand>();
+  let _: fn(
+    woml_engine::ExternalTriggerAdmissionCommand,
+  ) -> woml_engine::webhook::ExternalTriggerAdmissionCommand = |value| value;
+  let _ = std::any::type_name::<woml_engine::webhook::ExternalTriggerAdmissionReceiver>();
+  let _: fn(
+    woml_engine::ExternalTriggerAdmissionReceiver,
+  ) -> woml_engine::webhook::ExternalTriggerAdmissionReceiver = |value| value;
+  let _ = std::any::type_name::<woml_engine::webhook::TriggerProgress>();
+  let _: fn(woml_engine::TriggerProgress) -> woml_engine::webhook::TriggerProgress = |value| value;
+  let _ = std::any::type_name::<woml_engine::webhook::TriggerProgressReporter>();
+  let _: fn(woml_engine::TriggerProgressReporter) -> woml_engine::webhook::TriggerProgressReporter =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::webhook::WebhookDefinitionRegistration>();
+  let _: fn(
+    woml_engine::WebhookDefinitionRegistration,
+  ) -> woml_engine::webhook::WebhookDefinitionRegistration = |value| value;
+  let _ = std::any::type_name::<woml_engine::webhook::WebhookRuntimeError>();
+  let _: fn(woml_engine::WebhookRuntimeError) -> woml_engine::webhook::WebhookRuntimeError =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::webhook::WomlWebhookServer>();
+  let _: fn(woml_engine::WomlWebhookServer) -> woml_engine::webhook::WomlWebhookServer =
+    |value| value;
+  let _ = std::any::type_name::<woml_engine::webhook::WomlWebhookServerConfig>();
+  let _: fn(woml_engine::WomlWebhookServerConfig) -> woml_engine::webhook::WomlWebhookServerConfig =
+    |value| value;
+  let _ = woml_engine::webhook::COMMUNICATION_PROVIDER_MAX_BATCH_ITEMS;
+  let _ = woml_engine::webhook::COMMUNICATION_PROVIDER_MAX_MESSAGE_BYTES;
+  let _ = woml_engine::webhook::EVENT_MAX_SUBSCRIBERS;
+  let _ = woml_engine::webhook::TRIGGER_PROGRESS_CONTRACT;
+  let _ = woml_engine::webhook::TRIGGER_PROGRESS_CONTRACT_VERSION;
+  let _ = woml_engine::webhook::WEBHOOK_MAX_BODY_BYTES;
+  let _ = woml_engine::webhook::WHATSAPP_CALLBACK_PATH;
+  let _ =
+    std::any::type_name::<woml_engine::notification_runtime::CustomNotificationJourneyOptions>();
+  let _: fn(
+    woml_engine::CustomNotificationJourneyOptions,
+  ) -> woml_engine::notification_runtime::CustomNotificationJourneyOptions = |value| value;
+  let _ =
+    std::any::type_name::<woml_engine::notification_runtime::NotificationDeliveryDiagnostic>();
+  let _: fn(
+    woml_engine::NotificationDeliveryDiagnostic,
+  ) -> woml_engine::notification_runtime::NotificationDeliveryDiagnostic = |value| value;
+  let _ =
+    std::any::type_name::<woml_engine::notification_runtime::NotificationJourneyDiagnostics>();
+  let _: fn(
+    woml_engine::NotificationJourneyDiagnostics,
+  ) -> woml_engine::notification_runtime::NotificationJourneyDiagnostics = |value| value;
+  let _ = std::any::type_name::<woml_engine::notification_runtime::NotificationJourneyError>();
+  let _: fn(
+    woml_engine::NotificationJourneyError,
+  ) -> woml_engine::notification_runtime::NotificationJourneyError = |value| value;
+  let _ = std::any::type_name::<woml_engine::notification_runtime::NotificationJourneyResult>();
+  let _: fn(
+    woml_engine::NotificationJourneyResult,
+  ) -> woml_engine::notification_runtime::NotificationJourneyResult = |value| value;
+  let _ = woml_engine::notification_runtime::NOTIFICATION_JOURNEY_DIAGNOSTICS_VERSION;
+  // impl Trait path parameters are checked through uncalled typed closures;
+  // this compile-only contract test must not start a provider journey.
+  let _ = |path: std::path::PathBuf, host: woml_engine::NotificationHostProcessOptions| {
+    std::mem::drop(
+      woml_engine::notification_runtime::run_notification_provider_journey(
+        path,
+        "",
+        host,
+        std::time::Duration::ZERO,
+      ),
+    );
+  };
+  let _ = |path: std::path::PathBuf, host: woml_engine::NotificationHostProcessOptions| {
+    std::mem::drop(
+      woml_engine::notification_runtime::run_notification_provider_journey_with_custom(
+        path,
+        "",
+        host,
+        std::time::Duration::ZERO,
+        None,
+      ),
+    );
+  };
+}

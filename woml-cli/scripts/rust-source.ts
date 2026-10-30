@@ -47,7 +47,9 @@ export function nativeAdapterSourceViolations(source: string): readonly string[]
     'error', 'job', 'models', 'state', 'step_orchestrator', 'trigger_executor',
     'triggers', 'webhook_server', 'workflow_state_machine',
   ]) {
-    if (source.includes(`use ${module}::`)) violations.push(`legacy module ${module}`);
+    if (source.includes(`use ${module}::`) || source.includes(`super::${module}::`)) {
+      violations.push(`legacy module ${module}`);
+    }
   }
   return violations;
 }
