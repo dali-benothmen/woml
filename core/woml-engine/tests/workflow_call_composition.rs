@@ -73,6 +73,9 @@ impl LocalJsonServer {
       while !thread_stop.load(Ordering::Relaxed) {
         match listener.accept() {
           Ok((stream, _)) => {
+            // Deliberately reproduce BSD/Winsock inheritance on Linux too.
+            // The synchronous responder must establish its own socket mode.
+            stream.set_nonblocking(true).unwrap();
             thread::spawn(move || respond(stream));
           }
           Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -105,8 +108,15 @@ impl Drop for LocalJsonServer {
 }
 
 fn respond(mut stream: TcpStream) {
-  let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-  let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+  // Accepted sockets inherit nonblocking mode on BSD/Winsock, unlike Linux.
+  // A read timeout does not turn a nonblocking socket into a blocking one.
+  stream.set_nonblocking(false).unwrap();
+  stream
+    .set_read_timeout(Some(Duration::from_secs(2)))
+    .unwrap();
+  stream
+    .set_write_timeout(Some(Duration::from_secs(2)))
+    .unwrap();
   if read_fixture_request_head(&mut stream).is_err() {
     return;
   }
@@ -198,6 +208,46 @@ fn fixture_http_server_rejects_a_truncated_request() {
     bytes.is_empty(),
     "a partial HTTP head must not receive a successful response"
   );
+}
+
+#[test]
+fn fixture_http_server_waits_for_input_on_an_inherited_nonblocking_socket() {
+  let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+  let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+  client
+    .set_read_timeout(Some(Duration::from_secs(2)))
+    .unwrap();
+  let (mut server, _) = listener.accept().unwrap();
+  server.set_nonblocking(true).unwrap();
+  // No request bytes have been sent. Prove the platform-independent injection
+  // actually creates the WouldBlock condition that killed CI connections.
+  assert_eq!(
+    server.read(&mut [0_u8; 1]).unwrap_err().kind(),
+    std::io::ErrorKind::WouldBlock
+  );
+  let (started, ready) = std::sync::mpsc::channel();
+  let (finished, done) = std::sync::mpsc::channel();
+  let response = thread::spawn(move || {
+    started.send(()).unwrap();
+    respond(server);
+    finished.send(()).unwrap();
+  });
+  ready.recv_timeout(Duration::from_secs(2)).unwrap();
+  assert!(
+    matches!(
+      done.recv_timeout(Duration::from_millis(100)),
+      Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    ),
+    "the responder must wait for request bytes, not close on WouldBlock"
+  );
+  client
+    .write_all(b"GET /data HTTP/1.1\r\nHost: localhost\r\n\r\n")
+    .unwrap();
+  let mut bytes = Vec::new();
+  client.read_to_end(&mut bytes).unwrap();
+  response.join().unwrap();
+  assert!(bytes.starts_with(b"HTTP/1.1 200 OK\r\n"));
+  assert!(bytes.ends_with(br#"{"customer":"Alex"}"#));
 }
 
 fn host_options() -> Option<ScriptHostProcessOptions> {

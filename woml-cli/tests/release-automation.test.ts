@@ -127,6 +127,10 @@ describe('WOML release automation', () => {
     }
     expect(step?.run).toContain('-j 1 --locked');
     expect(step?.run).toContain('--test-threads=1');
+    const storage = job?.steps?.find(candidate => candidate.run?.includes('--lib storage::tests'));
+    expect(storage?.['working-directory']).toBe('core');
+    expect(storage?.run).toContain('-j 1 --locked');
+    expect(storage?.run).toContain('--test-threads=1');
   });
 
   test('checks modularization and the freshly built native interface on every combined platform', async () => {

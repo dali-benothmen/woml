@@ -41,6 +41,13 @@
       "sha256": "87018a122c18c70632b8bdcbe3fe9e5ac19fc14a6df3b882c6aac5de50077f9b",
       "reason": "F03: add exactly six StateService operations to the trusted adapter coverage with bounded action/scope/key-digest facts and an opaque key target; values remain excluded and unsupported operations fail closed.",
       "regression": "core/woml-engine/tests/state_policy/mod.rs"
+    },
+    {
+      "path": "core/woml-engine/src/storage.rs",
+      "originalSha256": "269a7a5f031e2b6f38dc6f0684d4fdb7d29516583d9cac4a05d097caedb84344",
+      "sha256": "fe2eba7f7b8f1d719d709f4b2f09e0b68045e1c4fb1740800b8e79895547fbf3",
+      "reason": "Portable managed storage: preserve file-content syncing before atomic publication and Unix directory fsync, while avoiding unsupported regular-file directory opens on Windows, matching the local artifact backend.",
+      "regression": "core/woml-engine/src/storage.rs"
     }
   ],
   "declarationRepairs": {

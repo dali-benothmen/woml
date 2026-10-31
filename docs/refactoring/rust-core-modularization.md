@@ -1333,3 +1333,40 @@ without new exemptions; the progress mutex now has a lexical scope ending
 before asynchronous server shutdown. Documentation/example checks, formatting,
 and diff checks pass. macOS/Windows CI and full release validation remain
 separate from this Linux evidence.
+
+### Follow-up diagnosis of the remaining platform failures
+
+The next macOS/Windows CI logs identified the middle child's actual failures:
+native/managed HTTP transport errors, and a Windows `storage.put` failure.
+The earlier framing correction did not establish the accepted socket's mode.
+BSD/Winsock may inherit a nonblocking listener's socket mode, unlike Linux;
+a read timeout does not change that mode. The fixture now explicitly enables
+nonblocking mode on accepted sockets on every platform, so Linux reproduces the
+same condition, and the synchronous responder must reset them to blocking mode.
+Before that reset was added, the full nested journey failed locally with the
+same `WOML_HTTP_TRANSPORT_FAILED` child error as CI. An additional raw-socket
+regression proves the injected `WouldBlock` condition and requires the responder
+to wait for request bytes instead of closing the connection.
+
+Storage also unconditionally opened a directory as a regular file for
+`sync_all`, including Windows, after publishing an object. That platform error
+could report a failure even though rename had succeeded. The storage helper
+now matches the existing artifact backend: Unix directory syncing remains
+unchanged, while other platforms retain file-content flushing before atomic
+publication without attempting the unsupported directory open. The platform
+durability distinction is documented in the
+[Storage v1 protocol](../protocols/storage-v1.md#local-safety-and-limits).
+The original storage snapshot remains unchanged; the explicit compatibility
+repair record pins this behavioral repair and its publication/reopen/delete
+tests. The correction matrix now runs all managed-storage unit tests serially
+on Linux, macOS, and Windows, without weakening their assertions or adding
+lint exemptions. Native platform execution still requires the CI rerun.
+
+This correction passes 35 selected Rust tests locally: nine storage units,
+two storage integrations, six cancellation cases, fourteen compensation cases,
+and four composition/HTTP-fixture cases. The forced-nonblocking full journey
+fails before the socket-mode reset and passes afterwards. The 33 source/CI
+contract tests, TypeScript checking, the established Clippy policy applied to
+the library and affected integrations, documentation/example validation,
+formatting, and diff checks also pass. No optimized native rebuild or native
+macOS/Windows execution is claimed by these Linux checks.
