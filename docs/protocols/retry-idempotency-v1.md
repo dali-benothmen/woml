@@ -6,6 +6,37 @@ Bun host, durable recovery, CLI diagnostics, hardening, and packaging gates.
 The normative compiled contract is
 `docs/schemas/compiled-workflow-model.v6.schema.json`.
 
+## Historical fixture and public example
+
+The historical [retry source](../../woml/tests/fixtures/retry.woml) and
+[compiled Model v6](../../woml/tests/fixtures/retry.compiled.v6.json) remain
+frozen. The [public example](../../examples/retryWorkflow.woml) uses the current
+authoring conventions instead: workflow metadata version `1.0.0` rather than
+`0.1`, and `context.payload.name` rather than the historical
+`context.trigger.name` compatibility alias. A workflow's metadata version is
+not its compiled model schema version; both sources still compile to Model v6.
+
+The [RI7 verifier](../../woml-cli/scripts/verify-retry-release.ts) first checks
+that the historical source still compiles exactly to its frozen model. It then
+requires the public source to equal that historical source with **only those
+two explicit substitutions**, allowing CRLF/LF line-ending differences. It also
+compiles the public source. It does not ignore scripts, metadata, triggers,
+graph structure, attempt limits, or backoff settings, and it does not rewrite
+fixtures. Even other presentation edits require explicit review.
+
+For a lightweight regression run from `woml-cli`:
+
+```bash
+bun test tests/retry-release-contracts.test.ts tests/retry-contracts.test.ts --max-concurrency=1
+```
+
+These tests also execute the retry and transitive production-trigger source
+verifiers in isolated subprocesses. Only the shared N6 native-build/full-suite
+dependency is stubbed, and reaching that dependency is asserted. This is not
+full release certification: `bun run test:retries` and
+`bun run test:production-triggers` still run the unchanged shared native build,
+frontend/Rust/CLI suites, and secret scan without a bypass.
+
 ## Authoring contract
 
 Retry is a `<step>` attribute. WOML has no `<retry>` element.

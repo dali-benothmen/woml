@@ -1168,6 +1168,19 @@ This input mismatch is not a Rust relocation regression. It remains visible,
 as do the earlier baseline failures documented above; do not silently update
 a golden fixture or weaken equality as part of this refactor.
 
+**Post-refactor follow-up (F05, 2026-10-31):** The raw equality mismatch was
+subsequently repaired on `fix/runtime-lifecycle-and-policy-correctness`, not as
+part of the mechanical refactor. Both source files and the historical compiled
+fixture remain unchanged. RI7 now verifies the frozen model and permits only
+the two reviewed public-source migrations (metadata version `0.1` to `1.0.0`
+and `context.trigger.name` to `context.payload.name`), plus platform line
+endings. The retry and complete production-trigger source chains pass isolated
+regressions, with only their heavyweight shared N6 build/test suite stubbed.
+This does not certify the default full release gates. See the
+[retry contract decision](../protocols/retry-idempotency-v1.md#historical-fixture-and-public-example).
+The hashes above and the verification summary below describe the original
+RCM12/RCM13 checkpoint, not a new full-release result.
+
 The codebase-documenter workflow guided updated native, ingress, notification
 and remote reading routes, callback/lifetime explanations, architecture/schema
 maps, beginner story, edition metadata and per-file atlas roles. The book's
