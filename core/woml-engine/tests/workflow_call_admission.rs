@@ -17,6 +17,8 @@ use woml_engine::{
   DURABLE_STORE_SCHEMA_VERSION, RUN_EVENT_SCHEMA_VERSION_V10, RUN_EVENT_SCHEMA_VERSION_V9,
 };
 
+mod workflow_call_compatibility;
+
 const PARENT_MODEL: &str =
   include_str!("../../../woml/tests/fixtures/workflow-calls/request-risk.compiled.v8.json");
 const CHILD_MODEL: &str =

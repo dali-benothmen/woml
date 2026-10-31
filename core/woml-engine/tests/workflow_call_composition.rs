@@ -134,6 +134,9 @@ fn host_options() -> Option<ScriptHostProcessOptions> {
 
 fn caller_model(workflow_id: &str, source: &str) -> CompiledWorkflowDefinition {
   let mut value: Value = serde_json::from_str(CALLER_MODEL).unwrap();
+  // Match CLI activation: triggered definitions use Model v11 so a called
+  // child has truthful workflow-call ingress instead of a fabricated trigger.
+  value["schemaVersion"] = json!(11);
   value["workflowId"] = json!(workflow_id);
   value["graph"]["nodes"][0]["inputs"]["fields"]["source"]["value"] = json!(source);
   serde_json::from_value(value).unwrap()
@@ -141,13 +144,21 @@ fn caller_model(workflow_id: &str, source: &str) -> CompiledWorkflowDefinition {
 
 fn fixture_model(source: &str) -> CompiledWorkflowDefinition {
   let mut value: Value = serde_json::from_str(source).unwrap();
-  value["schemaVersion"] = json!(7);
+  value["schemaVersion"] = json!(11);
+  for node in value["graph"]["nodes"].as_array_mut().unwrap() {
+    if node["handler"] == "runtime.script" && node.get("scriptRuntime").is_none() {
+      node["scriptRuntime"] = json!({
+        "bindingVersion": 1,
+        "bindings": ["context", "attempt", "services", "secrets"],
+        "requiredSecrets": []
+      });
+    }
+  }
   serde_json::from_value(value).unwrap()
 }
 
 fn retry_model() -> CompiledWorkflowDefinition {
-  let mut value: Value = serde_json::from_str(RETRY_MODEL).unwrap();
-  value["schemaVersion"] = json!(7);
+  let mut value = serde_json::to_value(fixture_model(RETRY_MODEL)).unwrap();
   value["graph"]["nodes"][1]["retryPolicy"]["backoff"]["initialDelayMs"] = json!(1);
   value["graph"]["nodes"][1]["retryPolicy"]["backoff"]["maximumDelayMs"] = json!(1);
   value["graph"]["nodes"][1]["inputs"]["fields"]["source"]["value"] = json!(
@@ -257,7 +268,7 @@ async fn nested_cross_process_calls_compose_with_branch_and_parallel_targets() {
         services.cache.get("wc6:record")
       ]);
       const emitted = await services.events.emit("order.created", {{ orderId: "wc6-order" }});
-      const review = await services.workflows.call('review-content', {{}});
+      const review = await services.workflows.call('review-content', {{}}, {{ name: 'review' }});
       const field = await services.workflows.call('field-report', {{}});
       const retry = await services.workflows.call('retry-demo', {{ name: 'Alex' }});
       return {{
@@ -342,6 +353,20 @@ async fn nested_cross_process_calls_compose_with_branch_and_parallel_targets() {
     .child_calls
     .iter()
     .all(|call| call.depth == 2));
+  for child in &middle_relations.child_calls {
+    let projection = store.projection(&child.child_run_id).unwrap();
+    assert_eq!(projection.status, RunStatus::Succeeded);
+    assert_eq!(projection.event_schema_version, Some(10));
+    assert_eq!(
+      store
+        .workflow_call_relations_for_run(&child.child_run_id)
+        .unwrap()
+        .parent_call
+        .unwrap()
+        .parent_run_id,
+      middle_run_id
+    );
+  }
 
   let messages = call_progress.lock().unwrap();
   assert_eq!(

@@ -76,7 +76,8 @@ fn config(
     database_path: database.path().to_path_buf(),
     registrations,
     startup_manual_triggers,
-    execution: RuntimeExecutionOptions::new(host, 2_000),
+    // Allow both cold hosts to start; routing is not a startup benchmark.
+    execution: RuntimeExecutionOptions::new(host, 10_000),
     progress_reporter: progress_reporter
       .map(|messages| Arc::new(move |message| messages.lock().unwrap().push(message)) as _),
   }

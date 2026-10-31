@@ -317,6 +317,17 @@ jobs:
           --test lifecycle_runtime --test lifecycle_authority
           --test cancellation_runtime --test runtime_policy_store --test capability_authority
           -- --test-threads=1
+      - name: Test nested workflow calls, parent deadlines, and child reattachment serially
+        working-directory: core
+        run: >-
+          cargo test --config profile.dev.debug=0
+          --config profile.dev.incremental=false -j 1 --locked
+          -p woml-engine --test policy_scheduler
+          --test workflow_call_admission --test workflow_call_execution
+          --test workflow_call_recovery --test workflow_call_routing
+          --test workflow_call_composition --test workflow_call_release
+          --test script_host_protocol --test services_script_host_v4
+          -- --test-threads=1
       - name: Failure diagnostics
         if: failure()
         run: |

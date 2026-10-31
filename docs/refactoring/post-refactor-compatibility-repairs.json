@@ -29,6 +29,13 @@
       "regression": "core/woml-engine/tests/state_policy/mod.rs"
     },
     {
+      "path": "core/woml-engine/src/host.rs",
+      "originalSha256": "452307c73a13c2e9fe292f90b2dd24a4b786d83d2fd7bd469d579c7e4918c1aa",
+      "sha256": "e4d7022680dbfac1a305507526d4b35284099d5d742b9032e0e52124c935bbe9",
+      "reason": "F04: cancel outstanding managed calls and await their bounded authority settlement before publishing invocation completion; preserve immediate cancellation signalling and suppress late Worker responses.",
+      "regression": "core/woml-engine/tests/policy_scheduler.rs"
+    },
+    {
       "path": "core/woml-engine/src/infrastructure_policy_runtime.rs",
       "originalSha256": "b867023a56cffadd6b6cfc8b51a6415ab1550bb8cd80364a211edcfaba6242d4",
       "sha256": "87018a122c18c70632b8bdcbe3fe9e5ac19fc14a6df3b882c6aac5de50077f9b",

@@ -485,6 +485,60 @@ async fn retry_delay_releases_then_reacquires_the_workflow_slot() {
 
 #[tokio::test]
 async fn synchronous_workflow_call_releases_then_reacquires_the_parent_slot() {
+  synchronous_workflow_call_case(10_000, false).await;
+}
+
+#[tokio::test]
+async fn a_parent_deadline_settles_without_replaying_or_cancelling_its_admitted_child() {
+  synchronous_workflow_call_case(2_000, true).await;
+}
+
+// Hold the child until its parent settles. This exercises a real in-flight call
+// at the parent deadline without depending on child startup speed or a sleep.
+struct ParentSettlementProbe(std::path::PathBuf);
+
+impl woml_engine::CapabilityHandler for ParentSettlementProbe {
+  fn descriptor(&self) -> woml_engine::CapabilityDescriptor {
+    woml_engine::CapabilityDescriptor {
+      capability: "test".into(),
+      operation: "control".into(),
+      input_contract_version: 1,
+      result_contract_version: 1,
+      effect: woml_engine::CapabilityEffect::Read,
+      supports_cancellation: true,
+      supports_provider_idempotency: false,
+    }
+  }
+
+  fn execute(
+    &self,
+    _: Value,
+    cancellation: woml_engine::CapabilityCancellationToken,
+  ) -> futures_util::future::BoxFuture<'static, Result<Value, woml_engine::CapabilityFailure>> {
+    let path = self.0.clone();
+    Box::pin(async move {
+      loop {
+        let parent = DurableEventStore::open(&path)
+          .unwrap()
+          .list_runs_v2(10)
+          .unwrap()
+          .runs
+          .into_iter()
+          .find(|run| run.workflow_id == "request-risk")
+          .unwrap();
+        if parent.status == RunStatus::Failed.into() {
+          return Ok(serde_json::json!({"score": 90}));
+        }
+        tokio::select! {
+          _ = cancellation.cancelled() => panic!("parent deadline cancelled the independent child"),
+          _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+      }
+    })
+  }
+}
+
+async fn synchronous_workflow_call_case(script_timeout_ms: u64, expect_timeout: bool) {
   let bun_available = std::process::Command::new("bun")
     .arg("--version")
     .output()
@@ -528,7 +582,12 @@ async fn synchronous_workflow_call_releases_then_reacquires_the_parent_slot() {
     }
   });
   child_value["graph"]["nodes"][0]["inputs"]["fields"]["source"]["value"] = Value::String(
-    "await new Promise(resolve => setTimeout(resolve, 600)); return { score: 90 };".to_string(),
+    if expect_timeout {
+      "return await services.test.control({});"
+    } else {
+      "await new Promise(resolve => setTimeout(resolve, 600)); return { score: 90 };"
+    }
+    .to_string(),
   );
   let child: CompiledWorkflowDefinition = serde_json::from_value(child_value).unwrap();
   let host =
@@ -542,8 +601,14 @@ async fn synchronous_workflow_call_releases_then_reacquires_the_parent_slot() {
   drop(store);
   let options = RuntimeExecutionOptions::new(
     ScriptHostProcessOptions::new(std::path::PathBuf::from("bun"), host),
-    2_000,
+    script_timeout_ms,
   );
+  if expect_timeout {
+    options
+      .capability_registry
+      .register(Arc::new(ParentSettlementProbe(database.0.clone())))
+      .unwrap();
+  }
   options
     .capability_registry
     .register(Arc::new(
@@ -558,7 +623,7 @@ async fn synchronous_workflow_call_releases_then_reacquires_the_parent_slot() {
     options,
     state_path.clone(),
   ));
-  let deadline = Instant::now() + Duration::from_secs(10);
+  let deadline = Instant::now() + Duration::from_secs(20);
   let run_id = loop {
     if let Ok(store) = DurableEventStore::open(&state_path) {
       if let Some(run) = store
@@ -578,7 +643,9 @@ async fn synchronous_workflow_call_releases_then_reacquires_the_parent_slot() {
   loop {
     let store = DurableEventStore::open(&database.0).unwrap();
     let projection = store.projection(&run_id).unwrap();
-    if projection.status == RunStatus::Succeeded {
+    if projection.status == RunStatus::Succeeded
+      || (expect_timeout && projection.status == RunStatus::Failed)
+    {
       break;
     }
     assert_ne!(
@@ -587,6 +654,12 @@ async fn synchronous_workflow_call_releases_then_reacquires_the_parent_slot() {
       "parent failed: {:?}",
       store.events(&run_id).unwrap()
     );
+    if execution.is_finished() {
+      panic!(
+        "parent task ended before durable settlement: {:?}",
+        execution.await.unwrap()
+      );
+    }
     let child_admitted: bool = rusqlite::Connection::open(&database.0)
       .unwrap()
       .query_row(
@@ -611,9 +684,80 @@ async fn synchronous_workflow_call_releases_then_reacquires_the_parent_slot() {
     );
     actix_web::rt::time::sleep(Duration::from_millis(10)).await;
   }
-  assert!(observed_suspended_slot);
-  let result = execution.await.unwrap().unwrap();
-  assert_eq!(result.result, serde_json::json!({ "score": 90 }));
+  if expect_timeout {
+    let error = execution.await.unwrap().unwrap_err();
+    assert!(
+      matches!(error, RuntimeExecutionError::RunFailed(ref details) if details.code == "WOML_SCRIPT_TIMEOUT"),
+      "{error:?}"
+    );
+    let events = DurableEventStore::open(&state_path)
+      .unwrap()
+      .events(&run_id)
+      .unwrap();
+    let operation_terminal = events
+      .iter()
+      .position(|event| {
+        matches!(
+          event.payload,
+          RunEventPayload::OperationFailed(_) | RunEventPayload::OperationSucceeded(_)
+        )
+      })
+      .unwrap();
+    let attempt_terminal = events
+      .iter()
+      .position(|event| matches!(event.payload, RunEventPayload::StepAttemptFailed(_)))
+      .unwrap();
+    assert!(operation_terminal < attempt_terminal);
+    let child_run_id = DurableEventStore::open(&state_path)
+      .unwrap()
+      .workflow_call_relations_for_run(&run_id)
+      .unwrap()
+      .child_calls[0]
+      .child_run_id
+      .clone();
+    loop {
+      let store = DurableEventStore::open(&state_path).unwrap();
+      let child = store.projection(&child_run_id).unwrap();
+      if child.status == RunStatus::Succeeded {
+        break;
+      }
+      assert_ne!(
+        child.status,
+        RunStatus::Failed,
+        "independent child failed: {child:?}"
+      );
+      assert!(
+        Instant::now() < deadline,
+        "independent child did not finish"
+      );
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let store = DurableEventStore::open(&state_path).unwrap();
+    assert_eq!(
+      store
+        .workflow_call_relations_for_run(&run_id)
+        .unwrap()
+        .child_calls
+        .len(),
+      1
+    );
+    assert_eq!(
+      store
+        .active_policy_claim_count("request-risk", Utc::now())
+        .unwrap(),
+      0
+    );
+    assert!(store
+      .projection(&run_id)
+      .unwrap()
+      .operations
+      .values()
+      .all(|operation| !matches!(operation.status, woml_engine::OperationStatus::Started)));
+  } else {
+    assert!(observed_suspended_slot);
+    let result = execution.await.unwrap().unwrap();
+    assert_eq!(result.result, serde_json::json!({ "score": 90 }));
+  }
 }
 
 #[tokio::test]

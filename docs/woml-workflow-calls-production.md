@@ -1,9 +1,11 @@
 # Operating Durable Workflow Calls
 
-Workflow Calls v1 is publishable for one machine. A parent may call a child in
-the same `woml run` process or in another local process that uses the exact same
-persistent state database. Cross-machine and multi-tenant routing are not part
-of this profile.
+Workflow Calls v1 is local to one machine and durable state namespace. The
+current CLI activates the parent and child in one `woml run` process. The Rust
+routing protocol can connect separately registered runtimes, but does not
+override the CLI's single persistence-authority requirement. Cross-machine and
+multi-tenant workflow-call routing are not part of this profile; remote attempt
+execution is a separate capability.
 
 ## Deployment shape
 
@@ -13,18 +15,18 @@ The simplest and preferred deployment activates related definitions together:
 woml run workflows/ --state /var/lib/woml/state.sqlite
 ```
 
-Separate processes are useful when workflows need independent lifecycle or
-resource boundaries:
+Explicit files can form the same deployment:
 
 ```bash
-woml run child.woml --state /var/lib/woml/state.sqlite
-woml run parent.woml --state /var/lib/woml/state.sqlite
+woml run parent.woml child.woml --state /var/lib/woml/state.sqlite
 ```
 
 Every callable workflow ID has exactly one live owner. WOML rejects duplicate
-ownership instead of load-balancing ambiguously. Both processes must run on the
-same machine, use the same state path, and have access to the project-local
-routing key WOML creates beside that state database.
+ownership instead of load-balancing ambiguously. Starting another CLI runtime
+against this store is rejected with `WOML_DEPLOYMENT_ALREADY_RUNNING`, even if
+its workflow IDs differ. Do not disable ownership checks to run a child.
+Embedded Rust routing runtimes must share the exact state namespace and private
+routing key, register exact target hashes, and respect ownership leases.
 
 ## Security boundary
 
@@ -87,10 +89,12 @@ bun run build
 bun run benchmark:workflow-calls
 ```
 
-The report compares sequential and concurrent calls in one runtime with calls
-to another local process. Measurement begins inside the parent script, so CLI
-startup and compilation are excluded. It is an observational baseline, not a
-fixed latency promise or a pass/fail threshold.
+The historical report compares sequential and concurrent calls with an older
+multi-process CLI deployment shape. Its cross-process driver is not proof that
+the current CLI permits two persistence authorities; review that driver against
+the deployment rules above before using its results. Measurement begins inside
+the parent script, so startup and compilation are excluded. It is observational,
+not a fixed latency promise or a pass/fail threshold.
 
 ## Release gate
 

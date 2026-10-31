@@ -1249,3 +1249,34 @@ The `state_policy` regressions are part of the existing
 Policies matrix runs them serially on Linux, macOS, and Windows. The correction
 matrix also exercises StateService policy decisions during compensation and
 cleanup. Local Linux results do not certify those other platform results.
+
+## Post-merge F04: nested workflow calls and parent completion
+
+The nested-call failure was reproduced, then separated into invalid activation
+setup and a real runtime ordering defect. The Rust composition test registered
+raw Model v7/v8 targets, whose events cannot represent workflow-call ingress.
+Its helpers now mirror CLI activation with Model v11 and required script
+bindings; historical fixtures and event validators are unchanged.
+
+A separate short-deadline regression reproduced the parent-left-Running issue:
+the Script Host completion cancelled the managed call but did not wait for its
+durable terminal event. The attempt-failure validator correctly rejected that
+ordering. The host now tracks per-call settlement acknowledgements, signals
+cancellation immediately, and waits without holding its shared transport mutex
+before publishing completion. The ten-second barrier fails closed on expiry or
+lost acknowledgement. It does not relax active-operation guards, assume external
+rollback, or replay uncertain work.
+
+Child duplicate validation also used an Event v11-only check for every
+policy-managed model. It now requires the event version selected by the stored
+definition, retaining the complete identity and history validation. The
+admission transaction and its atomic ordering are unchanged.
+
+The [repair record](post-refactor-compatibility-repairs.json) pins the exact
+reviewed host replacement against its original retained-file hash; no refactor
+baseline is regenerated. Regression targets cover nested branch/parallel/retry
+composition, retry/transport reattachment, modern child admission after reopening,
+policy-slot release/resume, explicit parent deadlines with an independent child,
+and concurrent/lost host settlement acknowledgements. The existing correction
+matrix runs workflow-call, policy-scheduler, and host integration targets serially
+on Linux, macOS, and Windows. Local results do not certify the remote platforms.

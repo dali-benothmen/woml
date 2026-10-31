@@ -112,6 +112,23 @@ describe('WOML release automation', () => {
     expect(baseline?.run).toContain('--test lifecycle_runtime');
   });
 
+  test('runs nested-call and host-settlement regressions serially on every correction platform', async () => {
+    const { document } = await workflow('ci');
+    const job = document.jobs?.['compensation-correction'];
+    expect(job?.strategy?.matrix).toMatchObject({
+      os: ['ubuntu-24.04', 'macos-15', 'windows-2022'],
+    });
+    const step = job?.steps?.find(candidate => candidate.run?.includes('--test workflow_call_composition'));
+    expect(step?.['working-directory']).toBe('core');
+    for (const target of ['policy_scheduler', 'workflow_call_admission', 'workflow_call_execution',
+      'workflow_call_recovery', 'workflow_call_routing', 'workflow_call_composition',
+      'workflow_call_release', 'script_host_protocol', 'services_script_host_v4']) {
+      expect(step?.run).toContain(`--test ${target}`);
+    }
+    expect(step?.run).toContain('-j 1 --locked');
+    expect(step?.run).toContain('--test-threads=1');
+  });
+
   test('checks modularization and the freshly built native interface on every combined platform', async () => {
     const { document } = await workflow('ci');
     const combined = document.jobs?.['combined-developer-experience'];

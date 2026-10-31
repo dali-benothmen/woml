@@ -27,6 +27,13 @@ use crate::{
 const HEADER_PREFIX: &str = "Content-Length: ";
 const MAX_HEADER_BYTES: usize = 128;
 
+// Covers the registry's bounded cancellation cleanup and durable settlement.
+// Expiry fails the host closed; it is never proof that an effect did not occur.
+const CAPABILITY_SETTLEMENT_GRACE: Duration = Duration::from_secs(10);
+
+#[cfg(test)]
+mod tests;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptHostProcessOptions {
   pub bun_executable: PathBuf,
@@ -93,8 +100,14 @@ impl std::fmt::Debug for PendingInvocation {
 #[derive(Debug, Default)]
 struct SharedState {
   pending: HashMap<String, PendingInvocation>,
-  active_calls: HashMap<(String, String), CapabilityCancellationToken>,
+  active_calls: HashMap<(String, String), ActiveCapabilityCall>,
   terminal_error: Option<ScriptHostClientError>,
+}
+
+#[derive(Debug)]
+struct ActiveCapabilityCall {
+  cancellation: CapabilityCancellationToken,
+  settled: oneshot::Receiver<()>,
 }
 
 pub struct ScriptHostClient {
@@ -358,10 +371,17 @@ impl ScriptHostClient {
     message: CancelMessage<'_>,
   ) -> Result<(), ScriptHostClientError> {
     let invocation_id = message.invocation_id;
-    if let Some(pending) = self.shared.lock().await.pending.get_mut(invocation_id) {
-      pending.cancellation_requested = true;
+    {
+      let mut shared = self.shared.lock().await;
+      if let Some(pending) = shared.pending.get_mut(invocation_id) {
+        pending.cancellation_requested = true;
+      }
+      for ((active_invocation, _), call) in &shared.active_calls {
+        if active_invocation == invocation_id {
+          call.cancellation.cancel();
+        }
+      }
     }
-    cancel_invocation_calls(&self.shared, invocation_id).await;
     if let Err(error) = self.write_message(&message).await {
       fail_all(&self.shared, error.clone()).await;
       return Err(error);
@@ -563,7 +583,10 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
             return;
           }
         }
-        cancel_invocation_calls(&shared, &message.invocation_id).await;
+        if let Err(error) = cancel_invocation_calls(&shared, &message.invocation_id).await {
+          fail_all(&shared, error).await;
+          return;
+        }
         let sender = {
           let mut state = shared.lock().await;
           state.pending.remove(&message.invocation_id)
@@ -771,6 +794,7 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
         }
         let key = (message.invocation_id.clone(), message.call_id.clone());
         let cancellation = CapabilityCancellationToken::default();
+        let (settled, settlement) = oneshot::channel();
         let call_authority = {
           let mut state = shared.lock().await;
           let Some(authority) = state
@@ -791,7 +815,13 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
           };
           if state
             .active_calls
-            .insert(key.clone(), cancellation.clone())
+            .insert(
+              key.clone(),
+              ActiveCapabilityCall {
+                cancellation: cancellation.clone(),
+                settled: settlement,
+              },
+            )
             .is_some()
           {
             drop(state);
@@ -832,7 +862,18 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
               false,
             ),
           };
-          let should_send = call_shared.lock().await.active_calls.remove(&key).is_some();
+          let should_send = {
+            let mut shared = call_shared.lock().await;
+            let active = shared.active_calls.remove(&key).is_some();
+            active
+              && shared
+                .pending
+                .get(&call.invocation_id)
+                .is_some_and(|pending| !pending.cancellation_requested)
+          };
+          // Authority execution returns only after its durable terminal commit.
+          // A cancelled Worker must not settle its attempt ahead of that commit.
+          let _ = settled.send(());
           if should_send {
             if let Err(error) =
               write_serialized_message(&call_stdin, &CapabilityResultMessage::new(&result)).await
@@ -912,7 +953,10 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
   }
 }
 
-async fn cancel_invocation_calls(shared: &Arc<Mutex<SharedState>>, invocation_id: &str) {
+async fn cancel_invocation_calls(
+  shared: &Arc<Mutex<SharedState>>,
+  invocation_id: &str,
+) -> Result<(), ScriptHostClientError> {
   let calls = {
     let mut state = shared.lock().await;
     let keys = state
@@ -926,9 +970,27 @@ async fn cancel_invocation_calls(shared: &Arc<Mutex<SharedState>>, invocation_id
       .filter_map(|key| state.active_calls.remove(&key))
       .collect::<Vec<_>>()
   };
-  for call in calls {
-    call.cancel();
+  for call in &calls {
+    call.cancellation.cancel();
   }
+  // Never hold SharedState while handlers cancel and commit. Remove transport
+  // ownership first so their late responses cannot target the completed Worker.
+  timeout(CAPABILITY_SETTLEMENT_GRACE, async {
+    for call in calls {
+      call.settled.await.map_err(|_| {
+        ScriptHostClientError::HostCrashed(
+          "a managed capability ended without acknowledging settlement".to_string(),
+        )
+      })?;
+    }
+    Ok(())
+  })
+  .await
+  .map_err(|_| {
+    ScriptHostClientError::HostCrashed(
+      "managed capability settlement exceeded its completion grace".to_string(),
+    )
+  })?
 }
 
 async fn write_serialized_message<T: Serialize>(
@@ -973,7 +1035,7 @@ async fn fail_all(shared: &Arc<Mutex<SharedState>>, error: ScriptHostClientError
     )
   };
   for (_, call) in active_calls {
-    call.cancel();
+    call.cancellation.cancel();
   }
   for (_, pending) in pending {
     if let Some(authority) = &pending.authority {

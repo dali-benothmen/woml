@@ -88,7 +88,10 @@ async fn run_case(
       WebhookDefinitionRegistration::new(model(CHILD_MODEL, Some(child_source)), CHILD_HASH),
     ],
     startup_manual_triggers: BTreeMap::from([("request-risk".to_string(), "start".to_string())]),
-    execution: RuntimeExecutionOptions::new(host, 2_000).with_workflow_call_progress_reporter(
+    // This tests composition, not cold-start latency. Deliberate call timeouts
+    // below retain their own short deadlines; parent deadline coverage is in
+    // policy_scheduler with a child held until the parent settles.
+    execution: RuntimeExecutionOptions::new(host, 10_000).with_workflow_call_progress_reporter(
       Arc::new(move |message| captured_call_progress.lock().unwrap().push(message)),
     ),
     progress_reporter: Some(Arc::new(move |message| {

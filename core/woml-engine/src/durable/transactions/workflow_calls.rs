@@ -303,7 +303,8 @@ fn validate_workflow_call_child(
         && valid_ingress
     }
     RunEventPayload::RunAdmitted(admitted) => {
-      first.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V11
+      first.event_schema_version == run_event_schema_version_for_model(workflow.schema_version)
+        && first.event_schema_version >= RUN_EVENT_SCHEMA_VERSION_V11
         && admitted.payload == *expected_trigger
         && admitted.trigger.id == "workflow-call"
         && admitted.trigger.handler == "trigger.event"
