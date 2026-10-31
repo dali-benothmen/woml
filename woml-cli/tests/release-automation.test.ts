@@ -90,6 +90,28 @@ describe('WOML release automation', () => {
     expect(source).toContain("grep -oE 'GLIBC_[0-9]+(\\.[0-9]+)*'");
   });
 
+  test('runs policy lifecycle regressions serially on every correction platform', async () => {
+    const { document } = await workflow('ci');
+    const correction = document.jobs?.['compensation-correction'];
+    expect(correction?.strategy?.matrix).toMatchObject({
+      os: ['ubuntu-24.04', 'macos-15', 'windows-2022'],
+    });
+    const step = correction?.steps?.find(candidate =>
+      candidate.run?.includes('--test lifecycle_runtime'));
+    expect(step?.['working-directory']).toBe('core');
+    for (const target of [
+      'lifecycle_runtime', 'lifecycle_authority', 'cancellation_runtime',
+      'runtime_policy_store',
+    ]) {
+      expect(step?.run).toContain(`--test ${target}`);
+    }
+    expect(step?.run).toContain('-j 1 --locked');
+    expect(step?.run).toContain('--test-threads=1');
+    const baseline = document.jobs?.rust?.steps?.find(candidate =>
+      candidate.name === 'Test durable engine baseline serially');
+    expect(baseline?.run).toContain('--test lifecycle_runtime');
+  });
+
   test('checks modularization and the freshly built native interface on every combined platform', async () => {
     const { document } = await workflow('ci');
     const combined = document.jobs?.['combined-developer-experience'];

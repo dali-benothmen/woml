@@ -84,7 +84,7 @@ and approval arms.
 
 | Hook | Runs when |
 |---|---|
-| `on-start` | The run is durably admitted, before the business DAG starts. |
+| `on-start` | Durable execution begins, after any policy queueing and before the business DAG starts. |
 | `on-step-start` | A logical step begins, before its first attempt. |
 | `on-step-success` | A logical step eventually succeeds, including after retries. |
 | `on-step-failure` | A logical step exhausts its allowed attempts. |
@@ -97,6 +97,19 @@ and approval arms.
 Step hooks observe logical steps, not individual retry attempts. A step that
 fails twice and succeeds on its third attempt produces one start, one success,
 and one complete hook. `lifecycle.step.attempts` reports the attempt count.
+
+For policy-managed workflows, admission first records a queued run. Its first
+execution claim commits `run_execution_started` and the canonical start-hook
+request together. The hook settles before business steps execute; merely
+waiting in the policy queue does not execute it. Reacquiring capacity after a
+wait or restart does not request the hook again. Cancellation before the first
+execution claim does not start it; an already-requested pre-outcome action is
+settled according to the existing cancellation rules.
+
+Start-hook failures remain observer warnings, not a business-validation gate.
+Put checks that must prevent business execution in ordinary workflow steps.
+Historical streams already containing an execution-start event are not
+rewritten or automatically backfilled with a new start hook during upgrade.
 
 ## Lifecycle script binding
 

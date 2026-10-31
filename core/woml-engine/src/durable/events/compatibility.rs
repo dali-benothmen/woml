@@ -137,8 +137,11 @@ pub(crate) fn expand_model_v11_payload(
     ))
   }
 
-  let payload = if let RunEventPayload::RunStarted(data) = payload {
-    let mut payloads = vec![RunEventPayload::RunStarted(data)];
+  let payload = if matches!(
+    &payload,
+    RunEventPayload::RunStarted(_) | RunEventPayload::RunExecutionStarted(_)
+  ) {
+    let mut payloads = vec![payload];
     if let Some(hook) =
       workflow.lifecycle_hook_for_event(crate::model::LifecycleEventName::RunStart)
     {

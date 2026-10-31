@@ -604,7 +604,10 @@ pub(crate) fn validate_event_history_against_definition(
           .get(index.wrapping_sub(1))
           .is_some_and(|previous| match data.event {
             crate::LifecycleEventName::RunStart => {
-              matches!(previous.payload, RunEventPayload::RunStarted(_))
+              matches!(
+                previous.payload,
+                RunEventPayload::RunStarted(_) | RunEventPayload::RunExecutionStarted(_)
+              )
             }
             crate::LifecycleEventName::RunCancel => matches!(
               previous.payload,
