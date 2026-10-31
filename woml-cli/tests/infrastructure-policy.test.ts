@@ -307,6 +307,24 @@ describe('Infrastructure Policy v1 foundation', () => {
     expect(threatModel.invariants.length).toBeGreaterThanOrEqual(10);
   });
 
+  test('analyzes StateService setIfAbsent using the canonical policy operation', () => {
+    const policy = prepareInfrastructurePolicy({
+      contract: 'woml.infrastructure-policy', contractVersion: 1,
+      id: 'state-analysis', version: '1', environment: 'production',
+      defaults: { read: 'deny', 'idempotent-write': 'deny', 'unsafe-write': 'deny' },
+      rules: [
+        { id: 'state-reads', match: { capabilities: ['state'], operations: ['get'] }, decision: 'allow' },
+        { id: 'stop-initialization', match: { capabilities: ['state'], operations: ['set_if_absent'] }, decision: 'deny' },
+      ],
+    });
+    const results = analyzeInfrastructurePolicySource(policy.bundle, 'state-workflow',
+      'services.state.setIfAbsent("private-key", {}, { name: "initialize" }); services.state.get("private-key");');
+    expect(results.map(result => [result.operation, result.status])).toEqual([
+      ['get', 'allowed'], ['set_if_absent', 'denied'],
+    ]);
+    expect(JSON.stringify(results)).not.toContain('private-key');
+  });
+
   test('classifies definite allow, deny, requirements, and dynamic operations conservatively', () => {
     const base = {
       contract: 'woml.infrastructure-policy',

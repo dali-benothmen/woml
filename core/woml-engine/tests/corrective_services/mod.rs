@@ -245,3 +245,81 @@ async fn cleanup_can_use_a_callback_scoped_lease_without_borrowing_a_forward_att
     .values()
     .all(|operation| matches!(operation.status, OperationStatus::Succeeded { .. })));
 }
+
+#[tokio::test]
+async fn compensation_and_cleanup_state_calls_obey_the_admitted_infrastructure_policy() {
+  use woml_engine::{
+    prepare_infrastructure_policy, InfrastructurePolicyExecutionModeV1, InfrastructurePolicyTrustV1,
+  };
+  for decision in ["allow", "deny"] {
+    let Some(options) = runtime_options() else {
+      return;
+    };
+    let directory = TestDirectory::new();
+    let database = directory.0.join("state.sqlite");
+    let mut workflow = two_effect_failure_model();
+    for saga in workflow.graph.sagas.as_mut().unwrap() {
+      for action in saga.compensations.iter_mut().chain(&mut saga.cleanup) {
+        let woml_engine::model::ValueExpression::Object { fields } = &mut action.node.inputs else {
+          unreachable!()
+        };
+        fields.insert("source".into(), woml_engine::model::ValueExpression::Literal {
+          value: json!("await services.state.increment('private-correction-count', 1, { name: 'corrective-count' }); return { corrected: true };"),
+        });
+      }
+    }
+    let policy = prepare_infrastructure_policy(serde_json::from_value(json!({
+      "contract": "woml.infrastructure-policy", "contractVersion": 1,
+      "id": "corrective-state", "version": "1", "environment": "test",
+      "defaults": { "read": decision, "idempotent-write": decision, "unsafe-write": decision }, "rules": []
+    })).unwrap(), &InfrastructurePolicyTrustV1::default()).unwrap();
+    let error = execute_workflow_durable(
+      workflow,
+      HASH.into(),
+      Map::new(),
+      options.with_infrastructure_policy(policy),
+      database.clone(),
+    )
+    .await
+    .unwrap_err();
+    let RuntimeExecutionError::RunFailed(details) = error else {
+      panic!("expected original deployment failure")
+    };
+    assert_eq!(details.node_id.as_deref(), Some("verifyDeployment"));
+    let projection = DurableEventStore::open(&database)
+      .unwrap()
+      .projection(&details.events[0].run_id)
+      .unwrap();
+    assert_eq!(projection.infrastructure_policy_decisions.len(), 3);
+    assert_eq!(
+      projection
+        .infrastructure_policy_decisions
+        .iter()
+        .filter(|record| record.decision.operation.execution_mode
+          == InfrastructurePolicyExecutionModeV1::Compensation)
+        .count(),
+      2
+    );
+    assert_eq!(
+      projection
+        .infrastructure_policy_decisions
+        .iter()
+        .filter(|record| record.decision.operation.execution_mode
+          == InfrastructurePolicyExecutionModeV1::Cleanup)
+        .count(),
+      1
+    );
+    assert_eq!(
+      projection.operations.len(),
+      if decision == "allow" { 3 } else { 0 }
+    );
+    assert!(projection
+      .operations
+      .values()
+      .all(|operation| operation.capability == "state"
+        && matches!(operation.status, OperationStatus::Succeeded { .. })));
+    assert!(!serde_json::to_string(&details.events)
+      .unwrap()
+      .contains("private-correction-count"));
+  }
+}

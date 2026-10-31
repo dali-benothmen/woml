@@ -20,6 +20,22 @@
       "regression": "core/woml-engine/tests/lifecycle_authority.rs"
     }
   },
+  "retainedRepairs": [
+    {
+      "path": "core/woml-engine/src/durable_state.rs",
+      "originalSha256": "26533a54ae40fa53467c9ed9309a08a135c794ccc5ab6f820911bf4991bd28cc",
+      "sha256": "cba9319cf332c5b9617d963ff37f490819a9b4002b6986a6f7923fa4b61698df",
+      "reason": "F03: expose crate-private pure State v1 key validation to the policy adapter without changing state mutation, scope, receipt, quota, or store semantics.",
+      "regression": "core/woml-engine/tests/state_policy/mod.rs"
+    },
+    {
+      "path": "core/woml-engine/src/infrastructure_policy_runtime.rs",
+      "originalSha256": "b867023a56cffadd6b6cfc8b51a6415ab1550bb8cd80364a211edcfaba6242d4",
+      "sha256": "87018a122c18c70632b8bdcbe3fe9e5ac19fc14a6df3b882c6aac5de50077f9b",
+      "reason": "F03: add exactly six StateService operations to the trusted adapter coverage with bounded action/scope/key-digest facts and an opaque key target; values remain excluded and unsupported operations fail closed.",
+      "regression": "core/woml-engine/tests/state_policy/mod.rs"
+    }
+  ],
   "declarationRepairs": {
     "capability": [
       {

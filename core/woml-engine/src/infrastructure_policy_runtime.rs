@@ -202,6 +202,10 @@ pub fn infrastructure_policy_descriptor_coverage(
         "cache",
         "get" | "set" | "delete" | "has" | "increment" | "set_if_absent"
       )
+      | (
+        "state",
+        "get" | "has" | "set" | "delete" | "increment" | "set_if_absent"
+      )
       | ("events", "emit")
       | ("workflows", "call" | "start")
       | ("artifacts", "put" | "head" | "materialize")
@@ -284,6 +288,17 @@ pub fn adapt_infrastructure_policy_metadata(
         metadata.logical_target = Some(opaque_target("cache", &key));
         insert_fact(&mut metadata, "keyDigest", Some(digest))?;
       }
+    }
+    ("state", operation) => {
+      let key = crate::durable_state::validated_policy_key(input, operation)?;
+      metadata.logical_target = Some(opaque_target("state", &key));
+      insert_fact(&mut metadata, "action", Some(operation.to_string()))?;
+      insert_fact(&mut metadata, "scopeClass", Some("workflow".to_string()))?;
+      insert_fact(
+        &mut metadata,
+        "keyDigest",
+        Some(digest_text("state-key", &key)),
+      )?;
     }
     ("events", "emit") => {
       let event_name = string_at(input, "/input/name");
@@ -373,6 +388,15 @@ fn validate_adapter_completeness(
     }
     ("storage", "list") => metadata.facts.contains_key("action"),
     ("storage", _) | ("cache", _) => metadata.logical_target.is_some(),
+    ("state", _) => {
+      metadata.logical_target.is_some()
+        && metadata.facts.contains_key("action")
+        && metadata.facts.contains_key("keyDigest")
+        && metadata
+          .facts
+          .get("scopeClass")
+          .is_some_and(|scope| scope == "workflow")
+    }
     ("events", "emit") | ("workflows", "call" | "start") => metadata.logical_target.is_some(),
     ("artifacts", _) | ("locks", _) | ("telegram" | "discord" | "whatsapp", "send") => {
       metadata.logical_target.is_some()

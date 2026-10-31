@@ -45,6 +45,30 @@ Cancellation and workflow deadlines prevent work that has not entered its
 transaction. Once a mutation transaction commits, WOML reports or recovers that
 committed outcome; cancellation does not roll it back.
 
+## Infrastructure policies
+
+When a run has an admitted infrastructure policy, all six StateService methods
+are checked before their managed operation starts. `get` and `has` are reads;
+`set`, `delete`, `increment`, and `setIfAbsent` are idempotent writes. In policy
+rules, use `capabilities: ["state"]` and the operation name `set_if_absent` for
+the JavaScript method `setIfAbsent`.
+
+Rust validates the State v1 request and supplies only the action, workflow scope
+class, key digest, and opaque key target to the policy evaluator. It does not
+forward raw keys, values, amounts, or version preconditions as policy facts.
+Hashes are correlation identifiers, not encryption. State itself still lives
+in the same workflow-scoped store, including its private keys and values.
+
+An allow never bypasses state limits, version checks, stable mutation naming,
+or deduplication. Denies, unmet evidence requirements, and emergency denies stop
+the operation before a mutation. Compensation and cleanup use the same policy
+gate with their own engine-owned corrective execution mode. State is not
+implicitly exempt from policy because it is local or durable.
+
+See [Infrastructure Policies v1](infrastructure-policies-v1.md#durable-stateservice-coverage)
+for descriptor details and upgrade behavior. Do not return private state values
+from scripts merely because policy decision metadata excludes them.
+
 ## Local security
 
 On Unix, WOML hardens the SQLite file to owner read/write permissions (`0600`)

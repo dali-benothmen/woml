@@ -1227,3 +1227,25 @@ recovery. F03 policy-adapter support is not added by this fix.
 
 The correction CI matrix also runs `capability_authority` on Linux, macOS, and
 Windows. Local execution does not certify those remote platform results.
+
+## Post-merge F03: StateService infrastructure-policy adapter
+
+This behavioral repair adds the six existing State v1 operations to the trusted
+policy adapter list. It does not alter the original modularization snapshots.
+The [compatibility repair record](post-refactor-compatibility-repairs.json)
+explicitly pins the reviewed replacements for the retained `durable_state.rs`
+and `infrastructure_policy_runtime.rs` files, including their original hashes
+and regression path. Every other retained-file hash and the public API, schema,
+transaction, fixture, and native-export guards stay in force.
+
+The adapter shares the State v1 parser and produces bounded operation/scope
+facts and hashed key identifiers, never state values. Reads and idempotent
+writes retain their handler-owned effects. Policy allow/deny, required evidence,
+and emergency overlays run through the existing authority; state scoping,
+mutation receipts, version checks, and quotas remain unchanged.
+
+The `state_policy` regressions are part of the existing
+`infrastructure_policy_authority` integration target, so the Infrastructure
+Policies matrix runs them serially on Linux, macOS, and Windows. The correction
+matrix also exercises StateService policy decisions during compensation and
+cleanup. Local Linux results do not certify those other platform results.

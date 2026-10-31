@@ -116,10 +116,22 @@ test('extracted engine and bridge declarations preserve baselines with explicit 
   ]);
 });
 
-test('the reviewed cohesive families remain unchanged during RCM12 and RCM13', async () => {
+test('the reviewed cohesive families retain their baselines with explicit behavioral repairs', async () => {
+  const repairs = compatibilityRepairs.retainedRepairs;
+  expect(new Set(repairs.map(repair => repair.path)).size).toBe(repairs.length);
+  expect(repairs.map(repair => repair.path).sort()).toEqual([
+    'core/woml-engine/src/durable_state.rs',
+    'core/woml-engine/src/infrastructure_policy_runtime.rs',
+  ]);
   for (const retained of featureBridgeBaseline.retained) {
+    const repair = repairs.find(candidate => candidate.path === retained.path);
+    if (repair !== undefined) {
+      expect(repair.originalSha256).toBe(retained.sha256);
+      expect(repair.reason).toContain('F03:');
+      expect((await readFile(resolve(root, repair.regression), 'utf8')).length).toBeGreaterThan(0);
+    }
     expect(hash((await readFile(resolve(root, retained.path), 'utf8')).replaceAll('\r\n', '\n')))
-      .toBe(retained.sha256);
+      .toBe(repair?.sha256 ?? retained.sha256);
   }
   const bridge = await readFile(resolve(root, featureBridgeBaseline.contracts.bridge.path), 'utf8');
   const names = [...bridge.matchAll(/^pub (?:async )?fn (\w+)/gm)].map(match => match[1]!).sort();

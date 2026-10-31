@@ -804,6 +804,18 @@ impl DurableStateStore {
   }
 }
 
+/// Pure State v1 validation shared with the policy adapter. Never expose the
+/// value, mutation arguments, or an author-supplied scope as policy metadata.
+pub(crate) fn validated_policy_key(
+  input: &Value,
+  expected_operation: &str,
+) -> Result<String, CapabilityFailure> {
+  let parsed = parse_request(input, expected_operation).map_err(state_failure)?;
+  state_key(&parsed.input)
+    .map(str::to_string)
+    .map_err(state_failure)
+}
+
 fn parse_request(
   input: &Value,
   expected_operation: &str,
