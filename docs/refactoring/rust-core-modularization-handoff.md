@@ -268,3 +268,24 @@ denied. That is not Windows execution or a full engine build. The full Windows
 engine/test cross-check stops in ring's build script because this Linux machine
 lacks MSVC C/archive tools (`lib.exe`); the Windows CI build and runtime suites
 must still be rerun.
+
+## Windows verifier cleanup ordering repair
+
+After the Windows engine compiled, the real-addon verifier failed its cleanup
+assertion with the loaded `candidate.node` and several runtime data files still
+present. Recursive directory removal can stop on the DLL lock before visiting
+its siblings; those untouched files are not by themselves proof of leaked
+database handles.
+
+The verifier now explicitly removes every non-addon entry first, propagating
+database/artifact removal failures. It then removes the directory and retains
+the existing narrow Windows exception only when a loaded addon is the sole
+remaining entry. Unexpected errors, an addon that was never loaded, and new
+runtime files appearing during final removal still fail verification.
+
+Five regression tests use real temporary files and injected Windows-style
+removal failures, and run in the dedicated modularization-contract CI command.
+The existing Linux debug addon also passed all 68 export checks and the real
+sync/async/error/callback, activation, telemetry, shutdown and rebind journey.
+No Rust rebuild or Windows runtime execution is claimed for this cleanup fix;
+Windows CI must confirm the native loaded-DLL behavior on its runner.

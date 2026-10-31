@@ -30,6 +30,34 @@ async function eventually(check: () => boolean, label: string): Promise<void> {
   }
 }
 
+export async function cleanupNativeVerificationDirectory(
+  directory: string,
+  addonLoaded: boolean,
+  options: {
+    platform?: NodeJS.Platform;
+    remove?: (path: string, options: { recursive: true; force: true; maxRetries: number; retryDelay: number }) => Promise<void>;
+  } = {},
+): Promise<void> {
+  const remove = options.remove ?? rm;
+  const removal = { recursive: true, force: true, maxRetries: 10, retryDelay: 50 } as const;
+  // Recursive rm may stop at candidate.node on Windows before visiting any
+  // siblings. Remove runtime data first so a locked DLL cannot hide an actual
+  // database/artifact cleanup failure or leave untouched files looking leaked.
+  for (const entry of await readdir(directory)) {
+    if (entry !== 'candidate.node') await remove(join(directory, entry), removal);
+  }
+  try {
+    await remove(directory, removal);
+  } catch (error: unknown) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if ((options.platform ?? process.platform) !== 'win32' || !addonLoaded
+      || !['EPERM', 'EBUSY', 'EACCES', 'ENOTEMPTY'].includes(code ?? '')) throw error;
+    // Continue to tolerate only the exact loaded DLL, never other leftovers.
+    assert.deepEqual(await readdir(directory), ['candidate.node']);
+    console.warn('RCM native verification: Windows retains the loaded addon copy until runner cleanup.');
+  }
+}
+
 export async function verifyRustCoreNative(source: string) {
   const directory = await mkdtemp(join(tmpdir(), 'woml-rcm13-addon-'));
   const addon = join(directory, 'candidate.node');
@@ -156,17 +184,7 @@ export async function verifyRustCoreNative(source: string) {
     if (runtimeId !== undefined && native !== undefined) {
       await promise(native.stopWomlWebhookRuntime!(runtimeId));
     }
-    try {
-      await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
-    } catch (error: unknown) {
-      // Windows cannot unlink a loaded DLL. Only tolerate that exact leftover,
-      // not leaked databases/listeners or arbitrary cleanup errors.
-      const code = (error as NodeJS.ErrnoException).code;
-      if (process.platform !== 'win32' || native === undefined
-          || !['EPERM', 'EBUSY', 'EACCES', 'ENOTEMPTY'].includes(code ?? '')) throw error;
-      assert.deepEqual(await readdir(directory), ['candidate.node']);
-      console.warn('RCM native verification: Windows retains the loaded addon copy until runner cleanup.');
-    }
+    await cleanupNativeVerificationDirectory(directory, native !== undefined);
   }
 }
 
