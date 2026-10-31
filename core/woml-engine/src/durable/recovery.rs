@@ -230,6 +230,60 @@ impl DurableEventStore {
         }
         let now = Utc::now();
         for (saga_id, action_id, action_kind, attempt) in &active_corrections {
+          let invocation_id =
+            crate::durable::correction_invocation_id(run_id, saga_id, action_id, *attempt);
+          // Settle operation facts before closing their owning attempt. Even a
+          // proven state mutation cannot prove that the whole script finished.
+          for operation in projection.operations.values().filter(|operation| {
+            operation.identity.invocation_id == invocation_id
+              && operation.status == crate::projection::OperationStatus::Started
+          }) {
+            let payload = if let Some(settlement) =
+              recovered_state_mutation_settlement(&transaction, operation)?
+            {
+              RunEventPayload::OperationSucceeded(OperationSucceededData {
+                node_id: operation.node_id.clone(),
+                attempt_number: operation.attempt_number,
+                invocation_id: invocation_id.clone(),
+                call_id: operation.identity.call_id.clone(),
+                operation_key: operation.operation_key.clone(),
+                capability: operation.capability.clone(),
+                operation: operation.operation.clone(),
+                execution_mode: operation.execution_mode,
+                metadata: settlement.metadata,
+                duration_ms: 0.0,
+                result_bytes: settlement.result_bytes,
+                result_digest: settlement.result_digest,
+              })
+            } else {
+              RunEventPayload::OperationFailed(OperationFailedData {
+                node_id: operation.node_id.clone(),
+                attempt_number: operation.attempt_number,
+                invocation_id: invocation_id.clone(),
+                call_id: operation.identity.call_id.clone(),
+                operation_key: operation.operation_key.clone(),
+                capability: operation.capability.clone(),
+                operation: operation.operation.clone(),
+                execution_mode: operation.execution_mode,
+                metadata: interrupted_operation_metadata(operation),
+                duration_ms: 0.0,
+                failure: interrupted_operation_failure(
+                  operation,
+                  operation.execution_mode == crate::OperationExecutionMode::Observed,
+                  false,
+                ),
+              })
+            };
+            append_to_history(
+              &transaction,
+              &mut events,
+              run_id,
+              generated_event_id(),
+              now,
+              event_schema_version,
+              payload,
+            )?;
+          }
           append_to_history(
             &transaction,
             &mut events,

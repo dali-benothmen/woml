@@ -100,6 +100,22 @@ as proof that its script did or did not finish.
 Self-calls and indirect calls to a workflow already present in hidden lineage
 fail with `WOML_WORKFLOW_CALL_CYCLE`. The maximum lineage depth remains 32.
 
+Child reattachment validates the admission event version selected by the exact
+stored definition, including policy-managed Model v12 and later. It does not
+require every policy child to have Event v11. Payload, call key, definition,
+lineage, trigger identity, and complete history checks still apply, and a
+different payload cannot reuse the same child identity.
+
+At invocation completion, the Rust Script Host client cancels outstanding
+managed calls and waits for their authority tasks before publishing completion
+to the executor. This prevents a timed-out parent attempt from settling ahead
+of its workflow-call operation. Cancellation signalling remains immediate;
+the barrier does not hold the shared transport mutex or forward late results
+to a completed Worker. The completion wait is bounded to ten seconds; a lost
+acknowledgement or exhausted wait fails the host closed, not as proof of success
+or proof that an external effect did not occur. Existing capability cancellation
+limits, durable validation, ambiguity, and recovery rules remain in force.
+
 The durable call index is a transactional uniqueness/routing index. Parent
 operation history and child run history remain authoritative and the index
 never stores a competing result.
@@ -115,6 +131,11 @@ session credential automatically; it is not a workflow secret or public API.
 file selected by those operands is deduplicated and validated before the set is
 activated as one runtime unit. Directory traversal is intentionally
 non-recursive in v1. Duplicate workflow IDs fail startup.
+
+Current CLI deployment ownership additionally permits only one persistence
+authority for a state store. Register parent and child in that single activation;
+starting a second CLI against it fails with `WOML_DEPLOYMENT_ALREADY_RUNNING`.
+The lower-level local routing protocol below does not waive that check.
 
 Each local process registers its workflow IDs, exact definition hashes,
 runtime ID, random loopback endpoint, session-credential hash, and renewable
@@ -133,6 +154,13 @@ child's durable terminal event.
 Exactly one live owner may register a workflow ID. The selected child is pinned
 to the owner's exact definition hash. Cross-machine routing and tenant service
 identity are deferred to Production Runtime.
+
+Embedded Rust runtimes must activate call-compatible definitions. The CLI
+promotes older triggered frontend models to Model v11 with the required Script
+Runtime bindings before registering definitions; it does not rewrite existing
+stored models or histories. Activating a raw Model v7/v8 fixture as a child skips
+that step: its Event v7/v8 contract cannot represent workflow-call ingress.
+Do not fabricate a source trigger or relax event validation to make it callable.
 
 ## Progress and run inspection
 

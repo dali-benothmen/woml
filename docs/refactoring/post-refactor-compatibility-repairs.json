@@ -1,6 +1,12 @@
 {
   "profile": "woml.post-refactor-compatibility-repairs/v1",
   "repairs": {
+    "recover_run": {
+      "originalSha256": "ad6435da9ed666cc740c7ecf808905f9311df138870ff793b79982033bd93fd1",
+      "sha256": "f9126ecd1e795eecf0b38e38e8b5ec1022257c64cf8359821f9054861c9ea36f",
+      "reason": "F02: settle operations owned by interrupted corrective attempts before closing those attempts in the same recovery transaction; a committed mutation does not prove script success.",
+      "regression": "core/woml-engine/tests/correction_authority/mod.rs"
+    },
     "register_durable_wait_atomically": {
       "originalSha256": "5afca44faa552e6461ae7e1c1badfdb70b40af6da8813137c69e12d59c6d8a80",
       "sha256": "5ad8a8808f6ee9200691bb8ac6c17250e82592e8878c1ba99ee4c3e66f359feb",
@@ -13,5 +19,67 @@
       "reason": "Permit existing cancellation authority for supported Model v21; transaction ordering is unchanged.",
       "regression": "core/woml-engine/tests/lifecycle_authority.rs"
     }
+  },
+  "retainedRepairs": [
+    {
+      "path": "core/woml-engine/src/durable_state.rs",
+      "originalSha256": "26533a54ae40fa53467c9ed9309a08a135c794ccc5ab6f820911bf4991bd28cc",
+      "sha256": "cba9319cf332c5b9617d963ff37f490819a9b4002b6986a6f7923fa4b61698df",
+      "reason": "F03: expose crate-private pure State v1 key validation to the policy adapter without changing state mutation, scope, receipt, quota, or store semantics.",
+      "regression": "core/woml-engine/tests/state_policy/mod.rs"
+    },
+    {
+      "path": "core/woml-engine/src/host.rs",
+      "originalSha256": "452307c73a13c2e9fe292f90b2dd24a4b786d83d2fd7bd469d579c7e4918c1aa",
+      "sha256": "e4d7022680dbfac1a305507526d4b35284099d5d742b9032e0e52124c935bbe9",
+      "reason": "F04: cancel outstanding managed calls and await their bounded authority settlement before publishing invocation completion; preserve immediate cancellation signalling and suppress late Worker responses.",
+      "regression": "core/woml-engine/tests/policy_scheduler.rs"
+    },
+    {
+      "path": "core/woml-engine/src/infrastructure_policy_runtime.rs",
+      "originalSha256": "b867023a56cffadd6b6cfc8b51a6415ab1550bb8cd80364a211edcfaba6242d4",
+      "sha256": "87018a122c18c70632b8bdcbe3fe9e5ac19fc14a6df3b882c6aac5de50077f9b",
+      "reason": "F03: add exactly six StateService operations to the trusted adapter coverage with bounded action/scope/key-digest facts and an opaque key target; values remain excluded and unsupported operations fail closed.",
+      "regression": "core/woml-engine/tests/state_policy/mod.rs"
+    },
+    {
+      "path": "core/woml-engine/src/storage.rs",
+      "originalSha256": "269a7a5f031e2b6f38dc6f0684d4fdb7d29516583d9cac4a05d097caedb84344",
+      "sha256": "fe2eba7f7b8f1d719d709f4b2f09e0b68045e1c4fb1740800b8e79895547fbf3",
+      "reason": "Portable managed storage: preserve file-content syncing before atomic publication and Unix directory fsync, while avoiding unsupported regular-file directory opens on Windows, matching the local artifact backend.",
+      "regression": "core/woml-engine/src/storage.rs"
+    }
+  ],
+  "declarationRepairs": {
+    "capability": [
+      {
+        "name": "fn corrective_attempt_key",
+        "originalSha256": null,
+        "sha256": "82a0525c755d1a4e248d5bfcd2b561ee3013a818a9104e10c53d995400017c91",
+        "reason": "F02: derive the existing corrective key only for an exact active durable correction identity.",
+        "regression": "core/woml-engine/tests/correction_authority/mod.rs"
+      },
+      {
+        "name": "fn operational_invocation_is_active",
+        "originalSha256": "abae976a932742238ecfa217022cbbd6e60269bc5fc51823151c6749ee553392",
+        "sha256": "0be41f5bc115d1dd8b84b4be7ff7436fc806e11d1cf65cecdd839b66ed69f73d",
+        "reason": "F02: reuse the exact active correction check for operational records instead of maintaining a separate correction-identity predicate.",
+        "regression": "core/woml-engine/tests/correction_authority/mod.rs"
+      },
+      {
+        "name": "impl DurableCapabilityAuthority::execute",
+        "originalSha256": "d5dc01cf6d1780a64b1f72e0b09b25b63b93dad02b78439365dce27e62b3ff7b",
+        "sha256": "0af2e516e1571c12875c32a7938c855c0aa52c15c28d34bf0dee8c2ecaeda2fc",
+        "reason": "F02: admit exact corrective attempts and verify operation-key derivation without bypassing lock, policy, registry, or durable operation gates.",
+        "regression": "core/woml-engine/tests/correction_authority/mod.rs"
+      },
+      {
+        "name": "impl DurableCapabilityAuthority::observe_native_fetch",
+        "originalSha256": "d7044f699d5bf999c205bc64b13a952a8ea7238832f93b1098ccd23c0716e769",
+        "sha256": "b0d2ae68e2d052df0a54cfb7bcf28215020c813e94311a27b3522f5f13753e91",
+        "reason": "F02: recognize corrective ownership for native-fetch observations while keeping the existing policy-enforced fetch prohibition.",
+        "regression": "core/woml-engine/tests/correction_authority/mod.rs"
+      }
+    ]
   }
 }

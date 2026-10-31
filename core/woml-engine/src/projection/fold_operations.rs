@@ -2,8 +2,8 @@
 
 use super::{
   require_active_operation_attempt, require_operation_runtime, require_operation_settlement,
-  validate_operation_terminal_identity, AttemptStatus, FoldError, LifecycleActionStatus,
-  OperationIdentity, OperationProjection, OperationStatus, RunProjection,
+  validate_operation_terminal_identity, FoldError, OperationIdentity, OperationProjection,
+  OperationStatus, RunProjection,
 };
 
 pub(super) fn apply_infrastructure_policy_decision_recorded(
@@ -30,23 +30,18 @@ pub(super) fn apply_operation_started(
   projection: &mut RunProjection,
   data: &crate::event::OperationStartedData,
 ) -> Result<(), FoldError> {
-  require_operation_runtime(projection)?;
-  let attempt_active = projection.attempts.iter().any(|attempt| {
-    attempt.identity.node_id == data.node_id
-      && attempt.identity.attempt == data.attempt_number
-      && attempt.identity.invocation_id == data.invocation_id
-      && attempt.status == AttemptStatus::Started
-  }) || projection.lifecycle_hooks.values().any(|hook| {
-    hook.actions.get(&data.node_id).is_some_and(|action| {
-      action.attempt == data.attempt_number && action.status == LifecycleActionStatus::Started
-    })
-  });
-  if !attempt_active {
-    return Err(FoldError::InvalidHistory(
-      "operation_started requires its matching active step or lifecycle action attempt."
-        .to_string(),
-    ));
-  }
+  require_operation_runtime(
+    projection,
+    &data.node_id,
+    data.attempt_number,
+    &data.invocation_id,
+  )?;
+  require_active_operation_attempt(
+    projection,
+    &data.node_id,
+    data.attempt_number,
+    &data.invocation_id,
+  )?;
   let key = OperationIdentity {
     invocation_id: data.invocation_id.clone(),
     call_id: data.call_id.clone(),
@@ -87,7 +82,12 @@ pub(super) fn apply_operation_succeeded(
   projection: &mut RunProjection,
   data: &crate::event::OperationSucceededData,
 ) -> Result<(), FoldError> {
-  require_operation_runtime(projection)?;
+  require_operation_runtime(
+    projection,
+    &data.node_id,
+    data.attempt_number,
+    &data.invocation_id,
+  )?;
   require_active_operation_attempt(
     projection,
     &data.node_id,

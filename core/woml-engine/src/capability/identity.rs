@@ -4,6 +4,16 @@ use crate::capability::NativeFetchInvocationIdentity;
 use sha2::Digest;
 use sha2::Sha256;
 
+pub(in crate::capability) fn corrective_attempt_key(
+  projection: &crate::RunProjection,
+  node_id: &str,
+  attempt: u32,
+  invocation_id: &str,
+) -> Option<String> {
+  crate::projection::active_correction(projection, node_id, attempt, invocation_id)
+    .map(|_| format!("sha256:{:x}", Sha256::digest(invocation_id.as_bytes())))
+}
+
 /// Rust's durable authority for managed capability operations. It records a
 /// start before dispatch and a terminal event before exposing the result.
 pub(in crate::capability) fn iteration_attempt_identity(
@@ -120,18 +130,13 @@ pub(in crate::capability) fn operational_invocation_is_active(
         .any(|hook| hook.active_action_id.as_deref() == Some(identity.node_id.as_str()))
     })
   });
-  let correction = projection.sagas.values().any(|saga| {
-    saga.actions.get(&identity.node_id).is_some_and(|action| {
-      action.active_attempt == Some(identity.attempt_number)
-        && action.status == crate::projection::CorrectionActionStatus::Started
-        && crate::durable::correction_invocation_id(
-          &identity.run_id,
-          &saga.saga_id,
-          &identity.node_id,
-          identity.attempt_number,
-        ) == identity.invocation_id
-    })
-  });
+  let correction = crate::projection::active_correction(
+    projection,
+    &identity.node_id,
+    identity.attempt_number,
+    &identity.invocation_id,
+  )
+  .is_some();
   root_attempt || root_lifecycle || root_reusable || iteration || correction
 }
 

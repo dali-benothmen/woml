@@ -1,5 +1,7 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
+mod policy_lifecycle;
+
 use serde_json::{json, Map};
 use woml_engine::event::StepAttemptStartedData;
 use woml_engine::{

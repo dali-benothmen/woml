@@ -1168,6 +1168,19 @@ This input mismatch is not a Rust relocation regression. It remains visible,
 as do the earlier baseline failures documented above; do not silently update
 a golden fixture or weaken equality as part of this refactor.
 
+**Post-refactor follow-up (F05, 2026-10-31):** The raw equality mismatch was
+subsequently repaired on `fix/runtime-lifecycle-and-policy-correctness`, not as
+part of the mechanical refactor. Both source files and the historical compiled
+fixture remain unchanged. RI7 now verifies the frozen model and permits only
+the two reviewed public-source migrations (metadata version `0.1` to `1.0.0`
+and `context.trigger.name` to `context.payload.name`), plus platform line
+endings. The retry and complete production-trigger source chains pass isolated
+regressions, with only their heavyweight shared N6 build/test suite stubbed.
+This does not certify the default full release gates. See the
+[retry contract decision](../protocols/retry-idempotency-v1.md#historical-fixture-and-public-example).
+The hashes above and the verification summary below describe the original
+RCM12/RCM13 checkpoint, not a new full-release result.
+
 The codebase-documenter workflow guided updated native, ingress, notification
 and remote reading routes, callback/lifetime explanations, architecture/schema
 maps, beginner story, edition metadata and per-file atlas roles. The book's
@@ -1203,3 +1216,157 @@ an expensive optimized release build on the developer machine.
 Selections overlap and are not counts of distinct tests. Optimized release,
 the complete runtime operations/package matrix, Windows/macOS, all native
 architectures and final full-release budgets remain independent RCM14 gates.
+
+## Post-merge F02: corrective managed-service authority
+
+This is a behavioral follow-up, not another file extraction. The original RCM
+snapshots remain unchanged. The scoped
+[compatibility repair record](post-refactor-compatibility-repairs.json) pins the
+exact F02 replacements and added private identity helper. It records why the
+capability declarations and `recover_run` transaction differ from the frozen
+refactor and points to executable regressions.
+
+Corrective calls now prove their exact active run/saga/action/attempt/invocation
+and derived operation key. The existing policy and lock gates remain in place.
+Operation events recognize compiled corrective actions, including per-iteration
+identities, without pretending those actions are ordinary DAG nodes. Only active
+corrective work gains the operation-runtime exception during cancellation.
+
+Open operations must settle before their corrective action. Recovery performs
+those terminals, interruption, and manual-recovery marking in the existing
+single transaction. Immutable StateService receipts retain their narrow proof:
+the mutation can be proven committed while the script still requires manual
+recovery. F03 policy-adapter support is not added by this fix.
+
+The correction CI matrix also runs `capability_authority` on Linux, macOS, and
+Windows. Local execution does not certify those remote platform results.
+
+## Post-merge F03: StateService infrastructure-policy adapter
+
+This behavioral repair adds the six existing State v1 operations to the trusted
+policy adapter list. It does not alter the original modularization snapshots.
+The [compatibility repair record](post-refactor-compatibility-repairs.json)
+explicitly pins the reviewed replacements for the retained `durable_state.rs`
+and `infrastructure_policy_runtime.rs` files, including their original hashes
+and regression path. Every other retained-file hash and the public API, schema,
+transaction, fixture, and native-export guards stay in force.
+
+The adapter shares the State v1 parser and produces bounded operation/scope
+facts and hashed key identifiers, never state values. Reads and idempotent
+writes retain their handler-owned effects. Policy allow/deny, required evidence,
+and emergency overlays run through the existing authority; state scoping,
+mutation receipts, version checks, and quotas remain unchanged.
+
+The `state_policy` regressions are part of the existing
+`infrastructure_policy_authority` integration target, so the Infrastructure
+Policies matrix runs them serially on Linux, macOS, and Windows. The correction
+matrix also exercises StateService policy decisions during compensation and
+cleanup. Local Linux results do not certify those other platform results.
+
+## Post-merge F04: nested workflow calls and parent completion
+
+The nested-call failure was reproduced, then separated into invalid activation
+setup and a real runtime ordering defect. The Rust composition test registered
+raw Model v7/v8 targets, whose events cannot represent workflow-call ingress.
+Its helpers now mirror CLI activation with Model v11 and required script
+bindings; historical fixtures and event validators are unchanged.
+
+A separate short-deadline regression reproduced the parent-left-Running issue:
+the Script Host completion cancelled the managed call but did not wait for its
+durable terminal event. The attempt-failure validator correctly rejected that
+ordering. The host now tracks per-call settlement acknowledgements, signals
+cancellation immediately, and waits without holding its shared transport mutex
+before publishing completion. The ten-second barrier fails closed on expiry or
+lost acknowledgement. It does not relax active-operation guards, assume external
+rollback, or replay uncertain work.
+
+Child duplicate validation also used an Event v11-only check for every
+policy-managed model. It now requires the event version selected by the stored
+definition, retaining the complete identity and history validation. The
+admission transaction and its atomic ordering are unchanged.
+
+The [repair record](post-refactor-compatibility-repairs.json) pins the exact
+reviewed host replacement against its original retained-file hash; no refactor
+baseline is regenerated. Regression targets cover nested branch/parallel/retry
+composition, retry/transport reattachment, modern child admission after reopening,
+policy-slot release/resume, explicit parent deadlines with an independent child,
+and concurrent/lost host settlement acknowledgements. The existing correction
+matrix runs workflow-call, policy-scheduler, and host integration targets serially
+on Linux, macOS, and Windows. Local results do not certify the remote platforms.
+
+### CI fixture and cancellation synchronization corrections
+
+A subsequent Windows CI run timed out while testing cancellation of two
+parallel children. The test observed durable `StepAttemptStarted` records,
+which precede actual Worker startup. It now waits for a successful, named cache
+operation from each child before requesting cancellation. The children then
+wait indefinitely, so natural completion cannot make the assertion pass.
+Readiness has a separate ten-second watchdog; the original three-second
+cancellation deadline and all terminal/group/downstream assertions remain.
+A failed watchdog aborts and joins the runtime task and reports its projection.
+The other cancellation tests still request cancellation without this readiness
+handshake.
+
+The macOS nested-call failure reported only that the middle workflow failed,
+not the child's underlying operation error. Its synthetic HTTP server had a
+reproducible framing defect: it replied after a single TCP read, even if the
+request head was incomplete. A new raw-socket regression failed before the
+repair. The fixture now consumes a complete, bounded HTTP head before replying;
+tests cover byte-by-byte fragmentation, every truncated prefix, and the size
+limit. The fixture serves only bodyless GETs, not arbitrary production HTTP.
+
+Nested-call failures now include bounded workflow, attempt, and operation
+failure summaries, without dumping payloads or capability inputs. The original
+macOS child cause remains unconfirmed until the platform rerun; fixing the
+independently reproduced fixture defect is not proof of that platform's root
+cause. Both affected suites pass locally, including a run with a symlinked
+temporary directory to exercise macOS-style path aliases. These changes do not
+modify production scheduling, cancellation, host settlement, schemas, frozen
+fixtures, or modularization baselines.
+
+Local verification passes 41 Rust tests across cancellation, compensation,
+policy scheduling, Script Host protocol, and composition, plus 33 source/CI
+contract tests. Three additional serial repetitions of both affected paths
+also pass, with nested composition using the symlinked temporary directory.
+The focused integration-test Clippy check uses the established allowance list
+without new exemptions; the progress mutex now has a lexical scope ending
+before asynchronous server shutdown. Documentation/example checks, formatting,
+and diff checks pass. macOS/Windows CI and full release validation remain
+separate from this Linux evidence.
+
+### Follow-up diagnosis of the remaining platform failures
+
+The next macOS/Windows CI logs identified the middle child's actual failures:
+native/managed HTTP transport errors, and a Windows `storage.put` failure.
+The earlier framing correction did not establish the accepted socket's mode.
+BSD/Winsock may inherit a nonblocking listener's socket mode, unlike Linux;
+a read timeout does not change that mode. The fixture now explicitly enables
+nonblocking mode on accepted sockets on every platform, so Linux reproduces the
+same condition, and the synchronous responder must reset them to blocking mode.
+Before that reset was added, the full nested journey failed locally with the
+same `WOML_HTTP_TRANSPORT_FAILED` child error as CI. An additional raw-socket
+regression proves the injected `WouldBlock` condition and requires the responder
+to wait for request bytes instead of closing the connection.
+
+Storage also unconditionally opened a directory as a regular file for
+`sync_all`, including Windows, after publishing an object. That platform error
+could report a failure even though rename had succeeded. The storage helper
+now matches the existing artifact backend: Unix directory syncing remains
+unchanged, while other platforms retain file-content flushing before atomic
+publication without attempting the unsupported directory open. The platform
+durability distinction is documented in the
+[Storage v1 protocol](../protocols/storage-v1.md#local-safety-and-limits).
+The original storage snapshot remains unchanged; the explicit compatibility
+repair record pins this behavioral repair and its publication/reopen/delete
+tests. The correction matrix now runs all managed-storage unit tests serially
+on Linux, macOS, and Windows, without weakening their assertions or adding
+lint exemptions. Native platform execution still requires the CI rerun.
+
+This correction passes 35 selected Rust tests locally: nine storage units,
+two storage integrations, six cancellation cases, fourteen compensation cases,
+and four composition/HTTP-fixture cases. The forced-nonblocking full journey
+fails before the socket-mode reset and passes afterwards. The 33 source/CI
+contract tests, TypeScript checking, the established Clippy policy applied to
+the library and affected integrations, documentation/example validation,
+formatting, and diff checks also pass. No optimized native rebuild or native
+macOS/Windows execution is claimed by these Linux checks.

@@ -604,7 +604,10 @@ pub(crate) fn validate_event_history_against_definition(
           .get(index.wrapping_sub(1))
           .is_some_and(|previous| match data.event {
             crate::LifecycleEventName::RunStart => {
-              matches!(previous.payload, RunEventPayload::RunStarted(_))
+              matches!(
+                previous.payload,
+                RunEventPayload::RunStarted(_) | RunEventPayload::RunExecutionStarted(_)
+              )
             }
             crate::LifecycleEventName::RunCancel => matches!(
               previous.payload,
@@ -843,6 +846,26 @@ pub(super) fn validate_operation_node(
           )
       })
   }) {
+    return Ok(());
+  }
+  if workflow
+    .graph
+    .sagas
+    .as_deref()
+    .unwrap_or_default()
+    .iter()
+    .any(|saga| {
+      [
+        crate::CorrectiveActionKind::Compensation,
+        crate::CorrectiveActionKind::Cleanup,
+      ]
+      .into_iter()
+      .any(|kind| {
+        super::validation::validate_correction_action(workflow, &saga.saga_id, node_id, kind)
+          .is_ok()
+      })
+    })
+  {
     return Ok(());
   }
   let node = workflow

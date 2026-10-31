@@ -186,7 +186,15 @@ impl DurableCapabilityAuthority {
       let root_key = attempt
         .and_then(|attempt| attempt.idempotency_key.as_deref())
         .map(str::to_string)
-        .or(lifecycle_key);
+        .or(lifecycle_key)
+        .or_else(|| {
+          crate::capability::corrective_attempt_key(
+            &projection,
+            &request.node_id,
+            request.attempt_number,
+            &request.invocation_id,
+          )
+        });
       let iteration = iteration_attempt_identity(
         &projection,
         &request.run_id,
@@ -200,6 +208,10 @@ impl DurableCapabilityAuthority {
         .unwrap_or((None, None));
       if root_key.or(iteration_key).as_deref()
         != Some(request.identity.step_idempotency_key.as_str())
+        || crate::capability::derive_operation_key(
+          &request.identity.step_idempotency_key,
+          &request.identity.operation_name,
+        ) != request.identity.operation_key
       {
         return Err(
           DurableStoreError::Contract(

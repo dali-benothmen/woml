@@ -79,6 +79,13 @@ definition, policy, queue, run identity, and `run_admitted`. The folded public
 status is `queued` until `run_execution_started` commits. An immediately
 eligible run still records both facts.
 
+When a lifecycle start hook is declared, the first execution claim also records
+its canonical `lifecycle_hook_requested` immediately after
+`run_execution_started`, within the same transaction. Hook execution precedes
+business dispatch. Reattachment and later capacity acquisition do not repeat
+either start fact. This uses the inherited lifecycle event shape; it does not
+introduce a new model, event, or store version or rewrite historical streams.
+
 Recovery derives queued runs and rate history from Event v11. Store v12 may
 rebuild queue/summary indexes. Scheduler leases are expired/reconciled using
 the live owner boundary. Duplicate ingress observes the original run.

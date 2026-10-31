@@ -52,6 +52,16 @@ characters. The local backend maps each key to a SHA-256 filename in a private
 flat directory, rejects symlinked store/object paths, uses a process-safe lock,
 writes a complete temporary container, syncs it, and atomically renames it.
 
+File contents are flushed before publication on every supported platform, and
+the temporary file handle is closed before renaming. On Unix, publication and
+deletion also sync the containing directory; errors from that sync fail closed.
+Windows does not support the same directory-as-regular-file `sync_all` pattern,
+so it follows the local artifact backend's platform behavior instead of
+reporting every successful rename/delete as `WOML_STORAGE_UNAVAILABLE`.
+This does not claim identical directory-metadata persistence after power loss
+on every operating system or filesystem. Locking, atomic replacement, checksum
+verification, and conditional-write rules remain in force.
+
 One object is limited to 64 MiB. Ordinary `put` and `get` additionally remain
 inside Capability Call v1's input/result limits. Managed HTTP storage mode can
 stream a larger response directly from Rust into the local store without

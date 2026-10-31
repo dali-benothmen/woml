@@ -36,6 +36,7 @@ pub use control_flow::{
   ForkBranchProjection, ForkJoinStatus, ForkProjection, ParallelGroupProjection,
   ParallelGroupStatus,
 };
+pub(crate) use correction::active_correction;
 pub use correction::{
   CorrectionActionProjection, CorrectionActionStatus, SagaPhase, SagaProjection,
 };

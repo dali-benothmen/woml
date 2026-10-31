@@ -59,16 +59,15 @@ called definition:
 woml run examples/workflowCallsModule
 ```
 
-Separate local processes are optional. They can discover each other when they
-use the same durable state file:
+The current CLI requires one persistence authority per state store. Activate
+the parent and child together with the multi-file command above; do not start
+two independent `woml run` processes against that store. The second process is
+rejected with `WOML_DEPLOYMENT_ALREADY_RUNNING`.
 
-```bash
-woml run child.woml --state .woml/state.sqlite
-woml run parent.woml --state .woml/state.sqlite
-```
-
-WOML creates private loopback routing credentials automatically. Do not add a
-URL or secret to the workflow call.
+The Rust routing layer also supports separately registered local workflow
+runtimes using authenticated loopback wakeups and a shared store. That lower-level
+protocol does not override CLI deployment ownership. WOML manages its routing
+credentials; do not add a URL or secret to the workflow call.
 
 ## Progress and inspection
 
@@ -100,8 +99,9 @@ Called workflows use the normal Rust DAG engine. They may contain sequential
 steps, branches, parallel groups, retries, local modules, native `fetch()`, and
 the current built-in services. A parent may be started by manual, webhook,
 Slack, schedule, interval, or named-event triggers; the call behavior is the
-same after the run starts. Nested calls work in one runtime and across local
-processes, up to the lineage-depth limit.
+same after the run starts. Nested calls work within the activated workflow set
+and across registered Rust routing runtimes, up to the lineage-depth limit.
+That is distinct from launching a second CLI persistence authority.
 
 Human Approval is the one v1 exception. A target containing approval is
 rejected by synchronous `call()` before a child run is admitted, with
@@ -115,6 +115,18 @@ created by `services.workflows.start()` are independent too. Inspect the child
 using the run ID printed in Workflow Call progress. Propagating cancellation
 requires a future explicit parent/child control contract; see
 [Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md).
+
+The calling step's deadline still applies while it waits. If it expires, Rust
+settles the managed call before reporting the failed parent attempt; it does not
+turn an uncertain child effect into success or retry the child automatically.
+An already-admitted child can finish after its parent has timed out. Inspect
+both runs rather than assuming their outcomes are identical.
+
+A retry or transport redelivery of the same named call with the same input
+reattaches to its original child, including after reopening the durable store.
+Reusing that identity for different input is an error, not a request to execute
+another child. Distinct logical calls in one script invocation need distinct
+stable names; a name is not permission to submit the same operation twice.
 
 ## Common failures
 

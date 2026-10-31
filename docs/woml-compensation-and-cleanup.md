@@ -109,6 +109,18 @@ context.cleanup.reason
 context.cleanup.compensationStatus
 ```
 
+Managed services in these scripts use the corrective action's own durable
+attempt identity—not the forward step's identity. Calls remain subject to the
+same operator capabilities, infrastructure policies, and live lock ownership.
+Cancellation still permits authorized compensation and cleanup, without
+reopening forward work. A denied or unsupported operation is not implicitly
+allowed just because it is corrective.
+
+If a corrective script is interrupted, WOML settles any open operation records
+before placing the action in manual recovery. Even proof that one state change
+committed does not prove the whole script finished. Inspect the real system
+before explicitly retrying or resolving the action.
+
 The bindings are deeply read-only and exist only for that invocation. They do
 not become durable workflow output. Use the original forward step result to
 identify the exact resource being corrected, and use

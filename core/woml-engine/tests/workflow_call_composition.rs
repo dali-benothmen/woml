@@ -73,6 +73,9 @@ impl LocalJsonServer {
       while !thread_stop.load(Ordering::Relaxed) {
         match listener.accept() {
           Ok((stream, _)) => {
+            // Deliberately reproduce BSD/Winsock inheritance on Linux too.
+            // The synchronous responder must establish its own socket mode.
+            stream.set_nonblocking(true).unwrap();
             thread::spawn(move || respond(stream));
           }
           Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -105,9 +108,18 @@ impl Drop for LocalJsonServer {
 }
 
 fn respond(mut stream: TcpStream) {
-  let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-  let mut request = [0_u8; 16_384];
-  let _ = stream.read(&mut request);
+  // Accepted sockets inherit nonblocking mode on BSD/Winsock, unlike Linux.
+  // A read timeout does not turn a nonblocking socket into a blocking one.
+  stream.set_nonblocking(false).unwrap();
+  stream
+    .set_read_timeout(Some(Duration::from_secs(2)))
+    .unwrap();
+  stream
+    .set_write_timeout(Some(Duration::from_secs(2)))
+    .unwrap();
+  if read_fixture_request_head(&mut stream).is_err() {
+    return;
+  }
   let body = br#"{"customer":"Alex"}"#;
   let response = format!(
     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -116,6 +128,126 @@ fn respond(mut stream: TcpStream) {
   if stream.write_all(response.as_bytes()).is_ok() {
     let _ = stream.write_all(body);
   }
+}
+
+// This fixture only serves bodyless GET requests. TCP reads are not HTTP
+// messages: replying after a partial head can close the socket while Bun or
+// reqwest is still writing, which is a reset on macOS/Windows.
+fn read_fixture_request_head(reader: &mut impl Read) -> std::io::Result<()> {
+  let mut head = Vec::new();
+  let mut chunk = [0_u8; 512];
+  while head.len() < 16_384 {
+    let remaining = (16_384 - head.len()).min(chunk.len());
+    let count = match reader.read(&mut chunk[..remaining]) {
+      Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+      result => result?,
+    };
+    if count == 0 {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::UnexpectedEof,
+        "incomplete fixture HTTP head",
+      ));
+    }
+    head.extend_from_slice(&chunk[..count]);
+    if head.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+      return Ok(());
+    }
+  }
+  Err(std::io::Error::new(
+    std::io::ErrorKind::InvalidData,
+    "fixture HTTP head exceeds its limit",
+  ))
+}
+
+#[test]
+fn fixture_http_head_handles_fragmentation_and_enforces_bounds() {
+  struct OneByteAtATime<'a>(&'a [u8]);
+  impl Read for OneByteAtATime<'_> {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+      let count = output.len().min(self.0.len()).min(1);
+      output[..count].copy_from_slice(&self.0[..count]);
+      self.0 = &self.0[count..];
+      Ok(count)
+    }
+  }
+  let request = b"GET /data HTTP/1.1\r\nHost: localhost\r\n\r\n";
+  read_fixture_request_head(&mut OneByteAtATime(request)).unwrap();
+  for end in 0..request.len() {
+    assert_eq!(
+      read_fixture_request_head(&mut OneByteAtATime(&request[..end]))
+        .unwrap_err()
+        .kind(),
+      std::io::ErrorKind::UnexpectedEof
+    );
+  }
+  assert_eq!(
+    read_fixture_request_head(&mut std::io::repeat(b'x'))
+      .unwrap_err()
+      .kind(),
+    std::io::ErrorKind::InvalidData
+  );
+}
+
+#[test]
+fn fixture_http_server_rejects_a_truncated_request() {
+  let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+  let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+  client
+    .set_read_timeout(Some(Duration::from_secs(2)))
+    .unwrap();
+  let (server, _) = listener.accept().unwrap();
+  let response = thread::spawn(move || respond(server));
+  client
+    .write_all(b"GET /data HTTP/1.1\r\nHost: localhost\r\n")
+    .unwrap();
+  client.shutdown(std::net::Shutdown::Write).unwrap();
+  let mut bytes = Vec::new();
+  client.read_to_end(&mut bytes).unwrap();
+  response.join().unwrap();
+  assert!(
+    bytes.is_empty(),
+    "a partial HTTP head must not receive a successful response"
+  );
+}
+
+#[test]
+fn fixture_http_server_waits_for_input_on_an_inherited_nonblocking_socket() {
+  let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+  let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+  client
+    .set_read_timeout(Some(Duration::from_secs(2)))
+    .unwrap();
+  let (mut server, _) = listener.accept().unwrap();
+  server.set_nonblocking(true).unwrap();
+  // No request bytes have been sent. Prove the platform-independent injection
+  // actually creates the WouldBlock condition that killed CI connections.
+  assert_eq!(
+    server.read(&mut [0_u8; 1]).unwrap_err().kind(),
+    std::io::ErrorKind::WouldBlock
+  );
+  let (started, ready) = std::sync::mpsc::channel();
+  let (finished, done) = std::sync::mpsc::channel();
+  let response = thread::spawn(move || {
+    started.send(()).unwrap();
+    respond(server);
+    finished.send(()).unwrap();
+  });
+  ready.recv_timeout(Duration::from_secs(2)).unwrap();
+  assert!(
+    matches!(
+      done.recv_timeout(Duration::from_millis(100)),
+      Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    ),
+    "the responder must wait for request bytes, not close on WouldBlock"
+  );
+  client
+    .write_all(b"GET /data HTTP/1.1\r\nHost: localhost\r\n\r\n")
+    .unwrap();
+  let mut bytes = Vec::new();
+  client.read_to_end(&mut bytes).unwrap();
+  response.join().unwrap();
+  assert!(bytes.starts_with(b"HTTP/1.1 200 OK\r\n"));
+  assert!(bytes.ends_with(br#"{"customer":"Alex"}"#));
 }
 
 fn host_options() -> Option<ScriptHostProcessOptions> {
@@ -134,6 +266,9 @@ fn host_options() -> Option<ScriptHostProcessOptions> {
 
 fn caller_model(workflow_id: &str, source: &str) -> CompiledWorkflowDefinition {
   let mut value: Value = serde_json::from_str(CALLER_MODEL).unwrap();
+  // Match CLI activation: triggered definitions use Model v11 so a called
+  // child has truthful workflow-call ingress instead of a fabricated trigger.
+  value["schemaVersion"] = json!(11);
   value["workflowId"] = json!(workflow_id);
   value["graph"]["nodes"][0]["inputs"]["fields"]["source"]["value"] = json!(source);
   serde_json::from_value(value).unwrap()
@@ -141,13 +276,21 @@ fn caller_model(workflow_id: &str, source: &str) -> CompiledWorkflowDefinition {
 
 fn fixture_model(source: &str) -> CompiledWorkflowDefinition {
   let mut value: Value = serde_json::from_str(source).unwrap();
-  value["schemaVersion"] = json!(7);
+  value["schemaVersion"] = json!(11);
+  for node in value["graph"]["nodes"].as_array_mut().unwrap() {
+    if node["handler"] == "runtime.script" && node.get("scriptRuntime").is_none() {
+      node["scriptRuntime"] = json!({
+        "bindingVersion": 1,
+        "bindings": ["context", "attempt", "services", "secrets"],
+        "requiredSecrets": []
+      });
+    }
+  }
   serde_json::from_value(value).unwrap()
 }
 
 fn retry_model() -> CompiledWorkflowDefinition {
-  let mut value: Value = serde_json::from_str(RETRY_MODEL).unwrap();
-  value["schemaVersion"] = json!(7);
+  let mut value = serde_json::to_value(fixture_model(RETRY_MODEL)).unwrap();
   value["graph"]["nodes"][1]["retryPolicy"]["backoff"]["initialDelayMs"] = json!(1);
   value["graph"]["nodes"][1]["retryPolicy"]["backoff"]["maximumDelayMs"] = json!(1);
   value["graph"]["nodes"][1]["inputs"]["fields"]["source"]["value"] = json!(
@@ -218,6 +361,51 @@ async fn wait_for_terminal(database: &TemporaryDatabase, run_id: &str) -> RunSta
   }
 }
 
+fn run_failure_diagnostics(store: &DurableEventStore) -> String {
+  store
+    .list_runs(20)
+    .unwrap()
+    .runs
+    .into_iter()
+    .map(|run| {
+      let projection = store.projection(&run.run_id).unwrap();
+      let attempts = projection
+        .attempts
+        .iter()
+        .filter_map(|attempt| {
+          if let woml_engine::projection::AttemptStatus::Failed { failure } = &attempt.status {
+            Some(format!(
+              "{}: {} ({})",
+              attempt.identity.node_id, failure.code, failure.message
+            ))
+          } else {
+            None
+          }
+        })
+        .collect::<Vec<_>>();
+      let operations = projection
+        .operations
+        .values()
+        .filter_map(|operation| {
+          if let woml_engine::OperationStatus::Failed { failure, .. } = &operation.status {
+            Some(format!(
+              "{}.{}: {} ({})",
+              operation.capability, operation.operation, failure.code, failure.message
+            ))
+          } else {
+            None
+          }
+        })
+        .collect::<Vec<_>>();
+      format!(
+        "workflow={} status={:?} attempts={attempts:?} operations={operations:?}",
+        run.workflow_id, projection.status
+      )
+    })
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
 #[actix_web::test]
 async fn nested_cross_process_calls_compose_with_branch_and_parallel_targets() {
   let Some(host) = host_options() else {
@@ -257,7 +445,7 @@ async fn nested_cross_process_calls_compose_with_branch_and_parallel_targets() {
         services.cache.get("wc6:record")
       ]);
       const emitted = await services.events.emit("order.created", {{ orderId: "wc6-order" }});
-      const review = await services.workflows.call('review-content', {{}});
+      const review = await services.workflows.call('review-content', {{}}, {{ name: 'review' }});
       const field = await services.workflows.call('field-report', {{}});
       const retry = await services.workflows.call('retry-demo', {{ name: 'Alex' }});
       return {{
@@ -312,7 +500,12 @@ async fn nested_cross_process_calls_compose_with_branch_and_parallel_targets() {
   let store = DurableEventStore::open(database.path()).unwrap();
   let status = wait_for_terminal(&database, &top_run_id).await;
   let top_projection = store.projection(&top_run_id).unwrap();
-  assert_eq!(status, RunStatus::Succeeded, "{top_projection:#?}");
+  assert_eq!(
+    status,
+    RunStatus::Succeeded,
+    "{top_projection:#?}\n{}",
+    run_failure_diagnostics(&store)
+  );
   assert_eq!(
     top_projection.result,
     Some(json!({
@@ -342,26 +535,41 @@ async fn nested_cross_process_calls_compose_with_branch_and_parallel_targets() {
     .child_calls
     .iter()
     .all(|call| call.depth == 2));
-
-  let messages = call_progress.lock().unwrap();
-  assert_eq!(
-    messages
-      .iter()
-      .filter(|message| matches!(message, WorkflowCallProgress::CallAdmitted { .. }))
-      .count(),
-    4
-  );
-  let encoded_progress = serde_json::to_string(&*messages).unwrap();
-  for private in [
-    "wc6-order",
-    "record-42",
-    "wc6:record",
-    raw_service_url.as_str(),
-    application_database.as_str(),
-  ] {
-    assert!(!encoded_progress.contains(private));
+  for child in &middle_relations.child_calls {
+    let projection = store.projection(&child.child_run_id).unwrap();
+    assert_eq!(projection.status, RunStatus::Succeeded);
+    assert_eq!(projection.event_schema_version, Some(10));
+    assert_eq!(
+      store
+        .workflow_call_relations_for_run(&child.child_run_id)
+        .unwrap()
+        .parent_call
+        .unwrap()
+        .parent_run_id,
+      middle_run_id
+    );
   }
-  drop(messages);
+
+  {
+    let messages = call_progress.lock().unwrap();
+    assert_eq!(
+      messages
+        .iter()
+        .filter(|message| matches!(message, WorkflowCallProgress::CallAdmitted { .. }))
+        .count(),
+      4
+    );
+    let encoded_progress = serde_json::to_string(&*messages).unwrap();
+    for private in [
+      "wc6-order",
+      "record-42",
+      "wc6:record",
+      raw_service_url.as_str(),
+      application_database.as_str(),
+    ] {
+      assert!(!encoded_progress.contains(private));
+    }
+  }
 
   caller_runtime.stop().await;
   target_runtime.stop().await;

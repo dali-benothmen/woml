@@ -183,9 +183,13 @@ fn parallel_workflow() -> CompiledWorkflowDefinition {
       fields.insert(
         "source".to_string(),
         ValueExpression::Literal {
-          value: json!(
-            "await new Promise(resolve => setTimeout(resolve, 5000)); return { done: true };"
-          ),
+          // A durable attempt start precedes Worker startup. Publish a real
+          // managed-operation receipt so the test can cancel two active Workers
+          // rather than timing cold startup, and never finish naturally.
+          value: json!(format!(
+            "await services.cache.set('cancel-ready-{}', true, {{ name: 'ready' }}); await new Promise(() => {{}}); return {{ done: true }};",
+            node.id
+          )),
         },
       );
     }
@@ -553,7 +557,7 @@ async fn cancellation_signals_all_active_parallel_children() {
   let mut control = DurableEventStore::open(database.clone()).unwrap();
   start_known_run(&mut control, &workflow, run_id);
   let runtime_database = database.clone();
-  let runtime = tokio::spawn(async move {
+  let mut runtime = tokio::spawn(async move {
     execute_admitted_trigger_run_durable(
       runtime_database,
       run_id,
@@ -562,7 +566,7 @@ async fn cancellation_signals_all_active_parallel_children() {
     .await
   });
 
-  tokio::time::timeout(std::time::Duration::from_secs(3), async {
+  let ready = tokio::time::timeout(std::time::Duration::from_secs(10), async {
     loop {
       let projection = control.projection(run_id).unwrap();
       let active_children = ["loadWeather", "loadSoil"]
@@ -572,7 +576,14 @@ async fn cancellation_signals_all_active_parallel_children() {
             matches!(
               attempt.status,
               woml_engine::projection::AttemptStatus::Started
-            )
+            ) && projection.operations.values().any(|operation| {
+              operation.node_id == *node_id
+                && operation.identity.invocation_id == attempt.identity.invocation_id
+                && operation.attempt_number == attempt.identity.attempt
+                && operation.capability == "cache"
+                && operation.operation == "set"
+                && matches!(operation.status, OperationStatus::Succeeded { .. })
+            })
           })
         })
         .count();
@@ -582,16 +593,26 @@ async fn cancellation_signals_all_active_parallel_children() {
       tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
   })
-  .await
-  .expect("both parallel children start");
+  .await;
+  if ready.is_err() {
+    let projection = control.projection(run_id).unwrap();
+    runtime.abort();
+    let _ = runtime.await;
+    panic!("both parallel Workers must acknowledge readiness: {projection:#?}");
+  }
   control
     .request_run_cancellation(run_id, "cancel_parallel", Utc::now())
     .unwrap();
-  let error = tokio::time::timeout(std::time::Duration::from_secs(3), runtime)
-    .await
-    .expect("parallel cancellation settles promptly")
-    .unwrap()
-    .unwrap_err();
+  // Keep the original cancellation deadline. Cold Worker startup belongs to
+  // the separate readiness watchdog above, not this responsiveness assertion.
+  let settled = tokio::time::timeout(std::time::Duration::from_secs(3), &mut runtime).await;
+  if settled.is_err() {
+    let projection = control.projection(run_id).unwrap();
+    runtime.abort();
+    let _ = runtime.await;
+    panic!("parallel cancellation did not settle within three seconds: {projection:#?}");
+  }
+  let error = settled.unwrap().unwrap().unwrap_err();
   assert!(matches!(error, RuntimeExecutionError::RunCancelled(_)));
   let projection = control.projection(run_id).unwrap();
   assert_eq!(projection.status, RunStatus::Cancelled);

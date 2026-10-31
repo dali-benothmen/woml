@@ -2,6 +2,7 @@
 
 use crate::durable::append_to_history;
 use crate::durable::definition_for_run;
+use crate::durable::expand_model_v11_payload;
 use crate::durable::generated_event_id;
 use crate::durable::load_events;
 use crate::durable::run_binding_in_transaction;
@@ -418,18 +419,28 @@ impl DurableEventStore {
         .ok_or_else(|| {
           DurableStoreError::Contract("Policy run has no admission event.".to_string())
         })?;
-      append_to_history(
-        &transaction,
-        &mut events,
+      // Policy admission only queues the run. Request its start hook with the
+      // first execution claim, in the same transaction and canonical order as
+      // legacy RunStarted expansion. Reacquisition must never request it again.
+      let payloads = expand_model_v11_payload(
+        &workflow,
         run_id,
-        generated_event_id(),
-        policy_now,
-        event_schema_version,
         RunEventPayload::RunExecutionStarted(crate::event::RunExecutionStartedData {
           started_at: policy_now,
           timeout_at,
         }),
       )?;
+      for payload in payloads {
+        append_to_history(
+          &transaction,
+          &mut events,
+          run_id,
+          generated_event_id(),
+          policy_now,
+          event_schema_version,
+          payload,
+        )?;
+      }
       validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
         .map_err(DurableStoreError::Contract)?;
     }

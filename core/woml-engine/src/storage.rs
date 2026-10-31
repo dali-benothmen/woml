@@ -1038,10 +1038,20 @@ fn decode_cursor(cursor: &str) -> Result<String, CapabilityFailure> {
   Ok(key)
 }
 
+#[cfg(unix)]
 fn sync_directory(path: &Path) -> Result<(), CapabilityFailure> {
   File::open(path)
     .and_then(|directory| directory.sync_all())
     .map_err(|_| storage_unavailable())
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> Result<(), CapabilityFailure> {
+  // Match the local artifact backend: Windows cannot open a directory as a
+  // regular File for sync_all. Upload contents are still synced, then the
+  // handle is closed before atomic rename. Do not claim Unix directory-fsync
+  // power-loss guarantees on platforms without that primitive.
+  Ok(())
 }
 
 fn storage_input(message: &str) -> CapabilityFailure {
@@ -1277,6 +1287,71 @@ mod tests {
         .unwrap()
         .code,
       "WOML_STORAGE_CONFLICT"
+    );
+  }
+
+  #[test]
+  fn overwrite_and_delete_remain_visible_after_reopen_on_every_platform() {
+    let root = TestRoot::new("publication-portability");
+    let store = root.store();
+    let cancellation = CapabilityCancellationToken::default();
+    let first = store
+      .put_bytes(&put_input("portable.txt", "first"), &cancellation)
+      .unwrap();
+    let mut replacement = put_input("portable.txt", "replacement");
+    replacement.insert("overwrite".to_string(), json!(true));
+    let second = store.put_bytes(&replacement, &cancellation).unwrap();
+    assert_ne!(first["version"], second["version"]);
+
+    let restarted = root.store();
+    let loaded = restarted
+      .get(&Map::from_iter([
+        ("key".to_string(), json!("portable.txt")),
+        ("responseType".to_string(), json!("text")),
+      ]))
+      .unwrap();
+    assert_eq!(loaded["data"], "replacement");
+    assert_eq!(loaded["object"], second);
+    assert_eq!(
+      restarted.list(&Map::new()).unwrap()["objects"]
+        .as_array()
+        .unwrap()
+        .len(),
+      1
+    );
+    assert_eq!(
+      restarted
+        .delete(&Map::from_iter([
+          ("key".to_string(), json!("portable.txt")),
+          ("ifVersion".to_string(), second["version"].clone()),
+        ]))
+        .unwrap()["deleted"],
+      true
+    );
+    assert_eq!(
+      root
+        .store()
+        .head(&Map::from_iter([(
+          "key".to_string(),
+          json!("portable.txt")
+        ),]))
+        .unwrap(),
+      Value::Null
+    );
+    assert!(fs::read_dir(&root.0)
+      .unwrap()
+      .filter_map(Result::ok)
+      .all(|entry| !entry.file_name().to_string_lossy().starts_with(".upload-")));
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn unix_directory_sync_still_rejects_unavailable_directories() {
+    let root = TestRoot::new("directory-sync");
+    sync_directory(&root.0).unwrap();
+    assert_eq!(
+      sync_directory(&root.0.join("missing")).unwrap_err().code,
+      "WOML_STORAGE_UNAVAILABLE"
     );
   }
 

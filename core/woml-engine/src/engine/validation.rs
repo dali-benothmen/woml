@@ -1073,7 +1073,7 @@ pub(crate) fn validate_payload_against_definition(
   Ok(())
 }
 
-fn validate_correction_action(
+pub(super) fn validate_correction_action(
   workflow: &CompiledWorkflowDefinition,
   saga_id: &str,
   action_id: &str,

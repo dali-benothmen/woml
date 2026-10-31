@@ -335,7 +335,15 @@ impl DurableCapabilityAuthority {
           let root_key = attempt
             .and_then(|attempt| attempt.idempotency_key.as_deref())
             .map(str::to_string)
-            .or(lifecycle_key);
+            .or(lifecycle_key)
+            .or_else(|| {
+              crate::capability::corrective_attempt_key(
+                &projection,
+                &identity.node_id,
+                identity.attempt_number,
+                &identity.invocation_id,
+              )
+            });
           let iteration = iteration_attempt_identity(
             &projection,
             &identity.run_id,

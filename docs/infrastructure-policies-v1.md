@@ -72,6 +72,7 @@ Untrusted values may be part of an operation, but cannot assert that an approval
 | `services.db` | Managed database handler | Driver, operation class, logical connection identity | Writes protected; reads follow bundle default |
 | `services.storage` | Managed storage handler | Operation, logical backend, normalized key class | Writes and deletes protected |
 | `services.cache` | Managed cache handler | Operation and logical key class | Mutations protected when policy marks the cache authoritative for coordination |
+| `services.state` | Managed State v1 handler | Validated operation, workflow scope class, opaque key target and key digest | `get`/`has` follow read rules; `set`/`delete`/`increment`/`set_if_absent` follow idempotent-write rules |
 | `services.events.emit` | Durable event handler | Event name and destination scope | Protected |
 | `services.workflows.call/start` | Durable workflow-call authority | Child workflow ID and call/start mode | Protected |
 | `services.artifacts` | Artifact Policy v1 and artifact authority | Operation, immutable artifact identity, provenance | Writes, export, and materialization protected |
@@ -96,6 +97,57 @@ Rust builds `woml.infrastructure-operation` v1 only after the generic capability
 Raw process arguments exist only in evaluator memory for exact prefix comparison. Serialized descriptors contain their count and a domain-separated digest. Database connections, storage/cache keys, lock sessions, and provider destinations are likewise represented by domain-separated digests. Authorization headers, credentials, request bodies, artifact bodies, provider tokens, environment values, and message text are excluded.
 
 The policy metadata method is separate from presentation metadata and durable operation metadata. An adapter cannot silently fall back to arbitrary capability input: an unregistered capability/operation returns `WOML_POLICY_INPUT_UNSUPPORTED`.
+
+### Durable StateService coverage
+
+All six State v1 operations participate in the same policy authority as other
+managed capabilities. The JavaScript method `services.state.setIfAbsent()` uses
+the policy operation name `set_if_absent`; the other five names are unchanged.
+The registered Rust handler classifies `get` and `has` as reads, and `set`,
+`delete`, `increment`, and `set_if_absent` as idempotent writes. A workflow cannot
+change that classification through its request.
+
+The adapter reuses the State v1 request parser, without opening the database.
+It produces exactly three safe facts: `action`, `scopeClass: "workflow"`, and
+`keyDigest`. The logical target is `state-` followed by the lowercase hexadecimal
+SHA-256 of the validated UTF-8 key. `keyDigest` uses the policy's existing
+domain-separated digest function with domain `state-key`. Neither representation
+is encryption: a predictable key can be guessed and hashed. Identical keys have
+the same logical target across workflows; use `match.workflows` to restrict a
+key-target rule to a particular workflow. As for other capabilities, an explicit
+engine-owned effective execution target takes precedence over the adapter's
+logical target; a key-target rule must not assume it overrides placement.
+Actual state isolation still comes from the Rust-derived state-location
+identity and workflow ID, not this target.
+
+Raw keys, values, increments, version preconditions, and caller-supplied scope or
+evidence are not copied into policy descriptors or decisions. A state value can
+still enter ordinary workflow results if a script explicitly returns it; policy
+redaction does not make arbitrary script output safe to publish.
+
+For example, this rule fragment allows reads but requires explicit write rules
+elsewhere in a default-deny bundle:
+
+```json
+{
+  "id": "read-release-state",
+  "match": {
+    "workflows": ["release"],
+    "capabilities": ["state"],
+    "operations": ["get", "has"]
+  },
+  "decision": "allow"
+}
+```
+
+Existing defaults, matching denies, evidence requirements, and emergency denies
+apply before handler execution. An allow does not waive stable mutation names,
+workflow isolation, version checks, quotas, or immutable receipt verification.
+Unknown operations remain unsupported. This adapter is additive: policy and
+State v1 contracts and previously recorded decisions are unchanged. New state
+calls now reach policy evaluation instead of failing as unsupported; review
+existing read/idempotent-write defaults when upgrading, particularly bundles
+that allow unmatched operations in those classes.
 
 ## Evidence Reference v1
 

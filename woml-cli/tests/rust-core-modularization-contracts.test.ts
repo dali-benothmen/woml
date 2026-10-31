@@ -65,7 +65,7 @@ test('declaration guards reject trait-method visibility before fingerprint norma
   expect(declarationFingerprints('impl WindowsJob {\n  pub(in crate::process) fn attach() {}\n}\n')).toHaveLength(1);
 });
 
-test('extracted engine and bridge families preserve every ordered production declaration', async () => {
+test('extracted engine and bridge declarations preserve baselines with explicit behavioral repairs', async () => {
   async function productionFiles(directory: string): Promise<string[]> {
     const paths: string[] = [];
     for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -89,14 +89,53 @@ test('extracted engine and bridge families preserve every ordered production dec
     })];
     const actual = (await Promise.all(files.map(path => readFile(path, 'utf8'))))
       .flatMap(source => declarationFingerprints(source.replaceAll('\r\n', '\n')));
-    expect(sort(actual)).toEqual(sort(contract.declarations));
+    const expected = [...contract.declarations];
+    const repairs = (compatibilityRepairs.declarationRepairs as Record<string, {
+      name: string; originalSha256: string | null; sha256: string;
+      reason: string; regression: string;
+    }[]>)[module] ?? [];
+    expect(new Set(repairs.map(repair => repair.name)).size).toBe(repairs.length);
+    for (const repair of repairs) {
+      const index = expected.findIndex(declaration => declaration.name === repair.name);
+      if (repair.originalSha256 === null) {
+        expect(index).toBe(-1);
+        expected.push({ name: repair.name, sha256: repair.sha256 });
+      } else {
+        expect(expected[index]?.sha256).toBe(repair.originalSha256);
+        expected[index] = { name: repair.name, sha256: repair.sha256 };
+      }
+      expect(repair.reason).toContain('F02:');
+      expect((await readFile(resolve(root, repair.regression), 'utf8')).length).toBeGreaterThan(0);
+    }
+    expect(sort(actual)).toEqual(sort(expected));
   }
+  expect(Object.keys(compatibilityRepairs.declarationRepairs)).toEqual(['capability']);
+  expect(compatibilityRepairs.declarationRepairs.capability.map(repair => repair.name).sort()).toEqual([
+    'fn corrective_attempt_key', 'fn operational_invocation_is_active',
+    'impl DurableCapabilityAuthority::execute', 'impl DurableCapabilityAuthority::observe_native_fetch',
+  ]);
 });
 
-test('the reviewed cohesive families remain unchanged during RCM12 and RCM13', async () => {
+test('the reviewed cohesive families retain their baselines with explicit behavioral repairs', async () => {
+  const repairs = compatibilityRepairs.retainedRepairs;
+  expect(new Set(repairs.map(repair => repair.path)).size).toBe(repairs.length);
+  expect(repairs.map(repair => repair.path).sort()).toEqual([
+    'core/woml-engine/src/durable_state.rs',
+    'core/woml-engine/src/host.rs',
+    'core/woml-engine/src/infrastructure_policy_runtime.rs',
+    'core/woml-engine/src/storage.rs',
+  ]);
   for (const retained of featureBridgeBaseline.retained) {
+    const repair = repairs.find(candidate => candidate.path === retained.path);
+    if (repair !== undefined) {
+      expect(repair.originalSha256).toBe(retained.sha256);
+      expect(repair.reason).toContain(repair.path.endsWith('/storage.rs')
+        ? 'Portable managed storage:'
+        : repair.path.endsWith('/host.rs') ? 'F04:' : 'F03:');
+      expect((await readFile(resolve(root, repair.regression), 'utf8')).length).toBeGreaterThan(0);
+    }
     expect(hash((await readFile(resolve(root, retained.path), 'utf8')).replaceAll('\r\n', '\n')))
-      .toBe(retained.sha256);
+      .toBe(repair?.sha256 ?? retained.sha256);
   }
   const bridge = await readFile(resolve(root, featureBridgeBaseline.contracts.bridge.path), 'utf8');
   const names = [...bridge.matchAll(/^pub (?:async )?fn (\w+)/gm)].map(match => match[1]!).sort();
@@ -214,7 +253,7 @@ test('critical transaction declarations preserve ordered tokens with explicit po
     expect(orderedDeclarationHash(source, declaration.name)).toBe(repair?.sha256 ?? declaration.sha256);
   }
   expect(Object.keys(compatibilityRepairs.repairs).sort()).toEqual([
-    'register_durable_wait_atomically', 'request_run_cancellation',
+    'recover_run', 'register_durable_wait_atomically', 'request_run_cancellation',
   ]);
   // This is a refactor-only guard, not an algorithm test or a perpetual ban on
   // reviewed behavior changes. Executable contention/recovery tests remain required.

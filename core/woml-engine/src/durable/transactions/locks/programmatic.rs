@@ -203,7 +203,15 @@ impl DurableEventStore {
       ));
     }
     let projection = fold_events(&load_events(&transaction, run_id)?)?;
-    let active = projection.attempts.iter().any(|attempt| {
+    let corrective_attempt = projection.sagas.values().find_map(|saga| {
+      saga
+        .actions
+        .get(node_id)
+        .and_then(|action| action.active_attempt)
+    });
+    let active = corrective_attempt.is_some_and(|attempt| {
+      crate::projection::active_correction(&projection, node_id, attempt, invocation_id).is_some()
+    }) || projection.attempts.iter().any(|attempt| {
       attempt.identity.node_id == node_id
         && attempt.identity.invocation_id == invocation_id
         && attempt.status == AttemptStatus::Started

@@ -41,6 +41,8 @@ an error-handler convenience.
 | Retention removes evidence | Runs with active correction or manual recovery are protected |
 | Two runtimes execute the same correction | Workflow ownership filter plus the existing durable policy claim |
 | Cleanup omitted after failure | Runtime continues through corrective failures and settles cleanup explicitly |
+| Corrective code borrows a forward or stale attempt's authority | Exact active run/saga/action/attempt/invocation match and verified operation-key derivation |
+| Recovery closes a correction while its operation remains open | Operation terminals commit before corrective interruption/manual recovery, in one transaction |
 
 ## Operator notes
 

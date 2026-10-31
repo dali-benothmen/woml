@@ -74,7 +74,9 @@ export function analyzeInfrastructurePolicySource(
     /\bservices\.([A-Za-z][\w-]*)\.([A-Za-z][\w-]*)\s*\(/g
   )) {
     const capability = match[1]!;
-    const operation = match[2]!;
+    const operation = capability === 'state' && match[2] === 'setIfAbsent'
+      ? 'set_if_absent'
+      : match[2]!;
     operations.set(`${capability}\0${operation}`, { capability, operation });
   }
   if (/\bfetch\s*\(/.test(selected)) {
