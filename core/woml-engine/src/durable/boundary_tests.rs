@@ -58,6 +58,132 @@ fn attempt_started() -> RunEventPayload {
 }
 
 #[test]
+fn fresh_bootstrap_matches_the_entire_historically_migrated_schema() {
+  let fresh = DurableEventStore::open_in_memory().unwrap();
+  let database = TemporaryDatabase::new();
+  let legacy = Connection::open(&database.0).unwrap();
+  legacy.execute_batch(super::CREATE_SCHEMA).unwrap();
+  legacy
+    .execute(
+      "INSERT INTO woml_store_metadata(key, value) VALUES ('schema_version', '1')",
+      [],
+    )
+    .unwrap();
+  drop(legacy);
+  // A populated sqlite_master forces the original v1 -> v20 upgrade path.
+  let migrated = DurableEventStore::open(&database.0).unwrap();
+  let schema = |connection: &Connection| {
+    connection
+      .prepare("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+      .unwrap()
+      .query_map([], |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, String>(2)?,
+          row.get::<_, Option<String>>(3)?,
+        ))
+      })
+      .unwrap()
+      .collect::<Result<Vec<_>, _>>()
+      .unwrap()
+  };
+  assert_eq!(schema(&fresh.connection), schema(&migrated.connection));
+  for connection in [&fresh.connection, &migrated.connection] {
+    let version: String = connection
+      .query_row(
+        "SELECT value FROM woml_store_metadata WHERE key = 'schema_version'",
+        [],
+        |row| row.get(0),
+      )
+      .unwrap();
+    assert_eq!(version, super::STORE_SCHEMA_VERSION_V20);
+    let integrity: String = connection
+      .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+      .unwrap();
+    assert_eq!(integrity, "ok");
+    assert!(!super::runtime_policy_indexes_need_rebuild(connection).unwrap());
+    let synchronous: i64 = connection
+      .query_row("PRAGMA synchronous", [], |row| row.get(0))
+      .unwrap();
+    assert_eq!(
+      synchronous, 2,
+      "bootstrap must preserve FULL synchronization"
+    );
+    let foreign_keys: i64 = connection
+      .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+      .unwrap();
+    assert_eq!(foreign_keys, 1);
+  }
+}
+
+#[test]
+fn fresh_bootstrap_rolls_back_all_objects_on_disk_full_and_can_be_retried() {
+  let database = TemporaryDatabase::new();
+  let mut connection = Connection::open(&database.0).unwrap();
+  connection
+    .execute_batch("PRAGMA max_page_count = 4;")
+    .unwrap();
+  let error = super::bootstrap::initialize_empty_store(&mut connection).unwrap_err();
+  assert!(
+    matches!(error, DurableStoreError::Sqlite(rusqlite::Error::SqliteFailure(error, _))
+    if error.code == rusqlite::ErrorCode::DiskFull)
+  );
+  assert!(connection.is_autocommit());
+  let objects: i64 = connection
+    .query_row("SELECT COUNT(*) FROM sqlite_master", [], |row| row.get(0))
+    .unwrap();
+  assert_eq!(
+    objects, 0,
+    "failed bootstrap must not publish a partial schema or marker"
+  );
+  connection
+    .execute_batch("PRAGMA max_page_count = 100000;")
+    .unwrap();
+  assert!(super::bootstrap::initialize_empty_store(&mut connection).unwrap());
+  assert!(!super::bootstrap::initialize_empty_store(&mut connection).unwrap());
+}
+
+#[test]
+fn fresh_bootstrap_does_not_treat_partial_or_foreign_schemas_as_empty() {
+  let mut connection = Connection::open_in_memory().unwrap();
+  connection.execute_batch(super::CREATE_SCHEMA).unwrap();
+  assert!(!super::bootstrap::initialize_empty_store(&mut connection).unwrap());
+  let marker_count: i64 = connection
+    .query_row("SELECT COUNT(*) FROM woml_store_metadata", [], |row| {
+      row.get(0)
+    })
+    .unwrap();
+  assert_eq!(marker_count, 0);
+  let mut foreign = Connection::open_in_memory().unwrap();
+  foreign
+    .execute_batch("CREATE TABLE foreign_data(value TEXT);")
+    .unwrap();
+  assert!(!super::bootstrap::initialize_empty_store(&mut foreign).unwrap());
+}
+
+#[test]
+fn simultaneous_first_openers_publish_one_complete_store() {
+  let database = TemporaryDatabase::new();
+  let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+  let threads: Vec<_> = (0..4)
+    .map(|_| {
+      let path = database.0.clone();
+      let barrier = barrier.clone();
+      std::thread::spawn(move || {
+        barrier.wait();
+        let store = DurableEventStore::open(&path).unwrap();
+        assert!(store.connection.is_autocommit());
+      })
+    })
+    .collect();
+  for thread in threads {
+    thread.join().unwrap();
+  }
+  drop(DurableEventStore::open_ready(&database.0).unwrap());
+}
+
+#[test]
 fn ready_open_does_not_run_schema_repair_or_require_a_writer_lock() {
   let database = TemporaryDatabase::new();
   drop(DurableEventStore::open(&database.0).unwrap());

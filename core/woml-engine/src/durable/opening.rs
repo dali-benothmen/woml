@@ -95,6 +95,12 @@ impl DurableEventStore {
   fn initialize(mut connection: Connection) -> Result<Self, DurableStoreError> {
     connection.busy_timeout(Duration::from_secs(5))?;
     connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+    if super::bootstrap::initialize_empty_store(&mut connection)? {
+      return Ok(Self {
+        connection,
+        projection_cache: RefCell::new(HashMap::new()),
+      });
+    }
     connection.execute_batch(CREATE_SCHEMA)?;
     let version: Option<String> = connection
       .query_row(

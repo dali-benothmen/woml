@@ -30,7 +30,7 @@ source guards intentionally require owned trees. Text/binary fixtures may use
 | Global event gate and feature transitions | [projection/fold.rs](woml-engine/src/projection/fold.rs), `fold_*.rs`, `iteration_fold.rs` |
 | Run scheduling, execution families, lifecycle, correction | [runtime.rs](woml-engine/src/runtime.rs), `runtime/scheduling/`, `control_flow/`, `lifecycle/`, `correction/` |
 | Runtime storage adaptation | [runtime/engine_adapter/](woml-engine/src/runtime/engine_adapter/mod.rs); scoped iteration adapter in `control_flow/for_each/shared.rs` |
-| Store startup/layout and supported upgrades | [durable/opening.rs](woml-engine/src/durable/opening.rs), `schema.rs`, `migrations.rs`, `validation.rs` |
+| Store startup/layout and supported upgrades | [durable/opening.rs](woml-engine/src/durable/opening.rs), [atomic empty-store creation](woml-engine/src/durable/bootstrap.rs), `schema.rs`, `migrations.rs`, `validation.rs` |
 | Atomic history, related indexes and cache | [durable/events/commits.rs](woml-engine/src/durable/events/commits.rs), `history.rs`, `cache.rs` |
 | Feature transactions and ordered recovery | [durable/transactions/](woml-engine/src/durable/transactions/mod.rs), [recovery.rs](woml-engine/src/durable/recovery.rs), `recovery/` |
 | Handler selection versus permission to perform an effect | [capability/registry.rs](woml-engine/src/capability/registry.rs) versus [authority.rs](woml-engine/src/capability/authority.rs) |

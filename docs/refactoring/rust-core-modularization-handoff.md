@@ -289,3 +289,46 @@ The existing Linux debug addon also passed all 68 export checks and the real
 sync/async/error/callback, activation, telemetry, shutdown and rebind journey.
 No Rust rebuild or Windows runtime execution is claimed for this cleanup fix;
 Windows CI must confirm the native loaded-DLL behavior on its runner.
+
+## Cold-activation budget repair: atomic empty-store initialization
+
+The next Windows combined gate passed its contracts but measured 3,797.69 ms
+against the unchanged 3,000 ms cold-activation ceiling. This is a timing failure,
+not another DLL cleanup or Windows compilation failure. The single CI number
+does not identify a Windows-specific cause by itself.
+
+Local native profiling identified avoidable first-store work: an empty database
+autocommitted the base DDL and then ran nineteen individually committed
+historical migrations, including repeated nested layout validation. The new
+private `durable/bootstrap.rs` path runs the exact same frozen DDL in order,
+validates the complete layout, and publishes the current version marker in one
+`Immediate` transaction. Only a database with no schema objects qualifies; it is
+checked again after acquiring the writer lock. Partial, foreign, old, and future
+stores retain the existing opening/migration path. Historical migration bodies,
+DDL literals, schema versions, public APIs, synchronization settings and frozen
+performance budgets are unchanged. This is an explicit startup optimization
+after the structural refactor, not a claim that only file movement occurred.
+
+Regression coverage compares every `sqlite_master` object and SQL definition
+against an actual v1-to-v20 upgrade, checks FULL synchronization and foreign-key
+enforcement, injects disk-full failure and verifies complete rollback/retry,
+rejects partial/foreign schemas from the fast path, and races four first openers.
+The existing recovery, state, lock, compensation, backup and remote-dispatch
+integration tests also remain required.
+
+An illustrative Linux before/after comparison used separately loaded debug
+addons and a fresh database in each process, with the same JavaScript host:
+initial store opening measured 262.7 -> 27.0 ms and cold execution measured
+928.1 -> 758.2 ms. These are single diagnostic samples, not cross-platform p95
+proof or optimized-release results. Windows CI must still confirm that its
+complete cold activation meets the frozen 3-second gate. No retries, prewarmed
+database, raised budget, or reduced durability were added to the benchmark.
+
+Local verification passed 10 store boundary tests, 66 existing integration
+tests across seven storage/recovery targets, 31 modularization contract tests,
+the exact CI Clippy command, formatting and diff checks. The rebuilt debug
+addon passed the actual 68-export sync/async/error/callback, activation,
+telemetry, shutdown and rebind verifier. The separate unrestricted Clippy
+attempt still reports the 201 documented legacy library diagnostics; no lint
+allowance was added. Windows execution and optimized-release timing remain
+unverified locally.

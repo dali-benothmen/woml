@@ -3,6 +3,7 @@
 //! Private transaction, recovery, and adapter modules share this owner.
 //! Module boundaries never create independent transaction or scheduling authority.
 
+mod bootstrap;
 #[cfg(test)]
 mod boundary_tests;
 mod definitions;
