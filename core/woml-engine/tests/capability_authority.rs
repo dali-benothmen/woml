@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+mod correction_authority;
+
 use chrono::Utc;
 use serde_json::{json, Map};
 use tokio::sync::Mutex;

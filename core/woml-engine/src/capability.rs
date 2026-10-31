@@ -32,7 +32,8 @@ pub(in crate::capability) use failures::{
 pub use handler::CapabilityHandler;
 pub use identity::derive_operation_key;
 pub(in crate::capability) use identity::{
-  iteration_attempt_identity, operation_with_iteration_scope, operational_invocation_is_active,
+  corrective_attempt_key, iteration_attempt_identity, operation_with_iteration_scope,
+  operational_invocation_is_active,
 };
 pub use native_fetch::{
   NativeFetchFailure, NativeFetchFailureKind, NativeFetchInvocationIdentity,

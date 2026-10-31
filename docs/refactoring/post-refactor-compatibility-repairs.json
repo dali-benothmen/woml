@@ -1,6 +1,12 @@
 {
   "profile": "woml.post-refactor-compatibility-repairs/v1",
   "repairs": {
+    "recover_run": {
+      "originalSha256": "ad6435da9ed666cc740c7ecf808905f9311df138870ff793b79982033bd93fd1",
+      "sha256": "f9126ecd1e795eecf0b38e38e8b5ec1022257c64cf8359821f9054861c9ea36f",
+      "reason": "F02: settle operations owned by interrupted corrective attempts before closing those attempts in the same recovery transaction; a committed mutation does not prove script success.",
+      "regression": "core/woml-engine/tests/correction_authority/mod.rs"
+    },
     "register_durable_wait_atomically": {
       "originalSha256": "5afca44faa552e6461ae7e1c1badfdb70b40af6da8813137c69e12d59c6d8a80",
       "sha256": "5ad8a8808f6ee9200691bb8ac6c17250e82592e8878c1ba99ee4c3e66f359feb",
@@ -13,5 +19,37 @@
       "reason": "Permit existing cancellation authority for supported Model v21; transaction ordering is unchanged.",
       "regression": "core/woml-engine/tests/lifecycle_authority.rs"
     }
+  },
+  "declarationRepairs": {
+    "capability": [
+      {
+        "name": "fn corrective_attempt_key",
+        "originalSha256": null,
+        "sha256": "82a0525c755d1a4e248d5bfcd2b561ee3013a818a9104e10c53d995400017c91",
+        "reason": "F02: derive the existing corrective key only for an exact active durable correction identity.",
+        "regression": "core/woml-engine/tests/correction_authority/mod.rs"
+      },
+      {
+        "name": "fn operational_invocation_is_active",
+        "originalSha256": "abae976a932742238ecfa217022cbbd6e60269bc5fc51823151c6749ee553392",
+        "sha256": "0be41f5bc115d1dd8b84b4be7ff7436fc806e11d1cf65cecdd839b66ed69f73d",
+        "reason": "F02: reuse the exact active correction check for operational records instead of maintaining a separate correction-identity predicate.",
+        "regression": "core/woml-engine/tests/correction_authority/mod.rs"
+      },
+      {
+        "name": "impl DurableCapabilityAuthority::execute",
+        "originalSha256": "d5dc01cf6d1780a64b1f72e0b09b25b63b93dad02b78439365dce27e62b3ff7b",
+        "sha256": "0af2e516e1571c12875c32a7938c855c0aa52c15c28d34bf0dee8c2ecaeda2fc",
+        "reason": "F02: admit exact corrective attempts and verify operation-key derivation without bypassing lock, policy, registry, or durable operation gates.",
+        "regression": "core/woml-engine/tests/correction_authority/mod.rs"
+      },
+      {
+        "name": "impl DurableCapabilityAuthority::observe_native_fetch",
+        "originalSha256": "d7044f699d5bf999c205bc64b13a952a8ea7238832f93b1098ccd23c0716e769",
+        "sha256": "b0d2ae68e2d052df0a54cfb7bcf28215020c813e94311a27b3522f5f13753e91",
+        "reason": "F02: recognize corrective ownership for native-fetch observations while keeping the existing policy-enforced fetch prohibition.",
+        "regression": "core/woml-engine/tests/correction_authority/mod.rs"
+      }
+    ]
   }
 }

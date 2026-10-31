@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+mod corrective_services;
+
 use rusqlite::Connection;
 use serde_json::{Map, Value};
 use uuid::Uuid;

@@ -1203,3 +1203,27 @@ an expensive optimized release build on the developer machine.
 Selections overlap and are not counts of distinct tests. Optimized release,
 the complete runtime operations/package matrix, Windows/macOS, all native
 architectures and final full-release budgets remain independent RCM14 gates.
+
+## Post-merge F02: corrective managed-service authority
+
+This is a behavioral follow-up, not another file extraction. The original RCM
+snapshots remain unchanged. The scoped
+[compatibility repair record](post-refactor-compatibility-repairs.json) pins the
+exact F02 replacements and added private identity helper. It records why the
+capability declarations and `recover_run` transaction differ from the frozen
+refactor and points to executable regressions.
+
+Corrective calls now prove their exact active run/saga/action/attempt/invocation
+and derived operation key. The existing policy and lock gates remain in place.
+Operation events recognize compiled corrective actions, including per-iteration
+identities, without pretending those actions are ordinary DAG nodes. Only active
+corrective work gains the operation-runtime exception during cancellation.
+
+Open operations must settle before their corrective action. Recovery performs
+those terminals, interruption, and manual-recovery marking in the existing
+single transaction. Immutable StateService receipts retain their narrow proof:
+the mutation can be proven committed while the script still requires manual
+recovery. F03 policy-adapter support is not added by this fix.
+
+The correction CI matrix also runs `capability_authority` on Linux, macOS, and
+Windows. Local execution does not certify those remote platform results.

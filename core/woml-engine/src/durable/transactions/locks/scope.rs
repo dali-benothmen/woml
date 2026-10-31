@@ -70,6 +70,34 @@ pub(in crate::durable) fn lock_descriptor_for_protected_node<'a>(
   workflow: &'a CompiledWorkflowDefinition,
   node_id: &str,
 ) -> Option<&'a crate::CompiledLock> {
+  // Corrective actions live outside the forward DAG. Their enclosing scope is
+  // the saga, not the original forward step (whose inner lock may be released).
+  let node_id = workflow
+    .graph
+    .sagas
+    .as_deref()
+    .unwrap_or_default()
+    .iter()
+    .find(|saga| {
+      saga
+        .compensations
+        .iter()
+        .chain(&saga.cleanup)
+        .any(|action| match &action.identity {
+          crate::model::CompiledCorrectionIdentity::Static { action_id } => action_id == node_id,
+          crate::model::CompiledCorrectionIdentity::ForEachIteration {
+            action_id_template, ..
+          } => action_id_template
+            .split_once("{iterationKey}")
+            .is_some_and(|(prefix, suffix)| {
+              node_id
+                .strip_prefix(prefix)
+                .and_then(|rest| rest.strip_suffix(suffix))
+                .is_some_and(|index| index.parse::<u32>().is_ok())
+            }),
+        })
+    })
+    .map_or(node_id, |saga| saga.open_node_id.as_str());
   fn contains_node(
     lock: &crate::CompiledLock,
     node_id: &str,

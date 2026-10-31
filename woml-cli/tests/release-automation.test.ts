@@ -101,7 +101,7 @@ describe('WOML release automation', () => {
     expect(step?.['working-directory']).toBe('core');
     for (const target of [
       'lifecycle_runtime', 'lifecycle_authority', 'cancellation_runtime',
-      'runtime_policy_store',
+      'runtime_policy_store', 'capability_authority',
     ]) {
       expect(step?.run).toContain(`--test ${target}`);
     }

@@ -8,6 +8,29 @@ use crate::event::RunEvent;
 use crate::event::RunEventPayload;
 use std::collections::BTreeMap;
 
+fn require_settled_operations(
+  projection: &RunProjection,
+  saga_id: &str,
+  action_id: &str,
+  attempt: u32,
+) -> Result<(), FoldError> {
+  let invocation_id = crate::durable::correction_invocation_id(
+    projection.run_id.as_deref().unwrap_or_default(),
+    saga_id,
+    action_id,
+    attempt,
+  );
+  if projection.operations.values().any(|operation| {
+    operation.identity.invocation_id == invocation_id
+      && operation.status == super::OperationStatus::Started
+  }) {
+    return Err(FoldError::InvalidHistory(
+      "A corrective attempt cannot settle while an operation remains active.".into(),
+    ));
+  }
+  Ok(())
+}
+
 pub(super) fn apply_saga_started(
   projection: &mut RunProjection,
   event: &RunEvent,
@@ -181,6 +204,7 @@ pub(super) fn apply_correction_attempt_succeeded(
   projection: &mut RunProjection,
   data: &crate::event::CorrectionAttemptIdentityData,
 ) -> Result<(), FoldError> {
+  require_settled_operations(projection, &data.saga_id, &data.action_id, data.attempt)?;
   let saga = projection.sagas.get_mut(&data.saga_id).ok_or_else(|| {
     FoldError::InvalidHistory("Correction success references an unknown saga.".into())
   })?;
@@ -208,6 +232,7 @@ pub(super) fn apply_correction_attempt_failed(
   projection: &mut RunProjection,
   data: &crate::event::CorrectionAttemptFailedData,
 ) -> Result<(), FoldError> {
+  require_settled_operations(projection, &data.saga_id, &data.action_id, data.attempt)?;
   let saga = projection.sagas.get_mut(&data.saga_id).ok_or_else(|| {
     FoldError::InvalidHistory("Correction failure references an unknown saga.".into())
   })?;
@@ -273,6 +298,7 @@ pub(super) fn apply_correction_interrupted(
   projection: &mut RunProjection,
   data: &crate::event::CorrectionInterruptedData,
 ) -> Result<(), FoldError> {
+  require_settled_operations(projection, &data.saga_id, &data.action_id, data.attempt)?;
   let saga = projection.sagas.get_mut(&data.saga_id).ok_or_else(|| {
     FoldError::InvalidHistory("Correction interruption references an unknown saga.".into())
   })?;

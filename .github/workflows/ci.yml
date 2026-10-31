@@ -315,7 +315,7 @@ jobs:
           --config profile.dev.incremental=false -j 1 --locked
           -p woml-engine --test compensation_runtime --test compensation_store
           --test lifecycle_runtime --test lifecycle_authority
-          --test cancellation_runtime --test runtime_policy_store
+          --test cancellation_runtime --test runtime_policy_store --test capability_authority
           -- --test-threads=1
       - name: Failure diagnostics
         if: failure()

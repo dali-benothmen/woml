@@ -62,11 +62,12 @@ pub(super) fn require_active_operation_attempt(
     hook.actions.get(node_id).is_some_and(|action| {
       action.attempt == attempt_number && action.status == LifecycleActionStatus::Started
     })
-  }) {
+  }) || super::active_correction(projection, node_id, attempt_number, invocation_id).is_some()
+  {
     Ok(())
   } else {
     Err(FoldError::InvalidHistory(
-      "An operation event requires its matching active step or lifecycle action attempt."
+      "An operation event requires its matching active step, lifecycle, or corrective attempt."
         .to_string(),
     ))
   }
@@ -133,11 +134,18 @@ pub(super) fn require_running_or_cancelling(projection: &RunProjection) -> Resul
   Ok(())
 }
 
-pub(super) fn require_operation_runtime(projection: &RunProjection) -> Result<(), FoldError> {
+pub(super) fn require_operation_runtime(
+  projection: &RunProjection,
+  node_id: &str,
+  attempt_number: u32,
+  invocation_id: &str,
+) -> Result<(), FoldError> {
   if !matches!(
     projection.status,
     RunStatus::Running | RunStatus::Finalizing
-  ) {
+  ) && !(projection.status == RunStatus::Cancelling
+    && super::active_correction(projection, node_id, attempt_number, invocation_id).is_some())
+  {
     return Err(FoldError::InvalidHistory(
       "An operation requires a running or lifecycle-finalizing run.".to_string(),
     ));

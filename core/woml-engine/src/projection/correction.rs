@@ -54,3 +54,25 @@ pub struct SagaProjection {
   pub correction_completed_sequence: Option<u64>,
   pub actions: BTreeMap<String, CorrectionActionProjection>,
 }
+
+/// A corrective effect belongs to one exact durable attempt, never merely to
+/// an action name. Iteration-qualified action IDs remain part of that identity.
+pub(crate) fn active_correction<'a>(
+  projection: &'a super::RunProjection,
+  node_id: &str,
+  attempt: u32,
+  invocation_id: &str,
+) -> Option<&'a CorrectionActionProjection> {
+  let run_id = projection.run_id.as_deref()?;
+  projection.sagas.values().find_map(|saga| {
+    let action = saga.actions.get(node_id)?;
+    (matches!(
+      saga.phase,
+      SagaPhase::Correcting | SagaPhase::ManualRecovery
+    ) && action.status == CorrectionActionStatus::Started
+      && action.active_attempt == Some(attempt)
+      && crate::durable::correction_invocation_id(run_id, &saga.saga_id, node_id, attempt)
+        == invocation_id)
+      .then_some(action)
+  })
+}

@@ -848,6 +848,26 @@ pub(super) fn validate_operation_node(
   }) {
     return Ok(());
   }
+  if workflow
+    .graph
+    .sagas
+    .as_deref()
+    .unwrap_or_default()
+    .iter()
+    .any(|saga| {
+      [
+        crate::CorrectiveActionKind::Compensation,
+        crate::CorrectiveActionKind::Cleanup,
+      ]
+      .into_iter()
+      .any(|kind| {
+        super::validation::validate_correction_action(workflow, &saga.saga_id, node_id, kind)
+          .is_ok()
+      })
+    })
+  {
+    return Ok(());
+  }
   let node = workflow
     .node(node_id)
     .ok_or_else(|| format!("Operation references unknown node or lifecycle action {node_id:?}."))?;
