@@ -245,3 +245,26 @@ simulated network/deployment handles. It also documents unresolved boundaries:
 managed corrective service-call authorization, policy support for StateService,
 and missing run-start hook admission on the policy-managed path. Those are not
 silently bypassed or counted as verified features.
+
+## Windows compilation repair after CI
+
+The PR's Windows feature lanes shared one compile blocker: extraction had added
+`pub(in crate::process)` to `WindowsJob`'s `Drop::drop` implementation. Trait
+implementation methods cannot declare visibility. The pre-refactor destructor
+used plain `fn drop`; the repair restores that spelling without changing handle
+ownership or kill-on-close behavior. This was an extraction regression, unlike
+the separately deferred run-start admission bug.
+
+The Unix-only containment grace-period import and its facade re-export are now
+both cfg-gated. A new negative source-contract regression rejects visibility on
+trait methods before fingerprint normalization can erase the invalid qualifier;
+inherent helper visibility remains supported. Original baselines are unchanged.
+
+Verification includes 24 passing Linux process tests and 26 passing
+modularization/source/architecture/CI checks. The actual Windows Job Object and
+containment modules also type-check under `x86_64-pc-windows-msvc`, using cached
+real Tokio/windows-sys metadata and a small temporary harness with warnings
+denied. That is not Windows execution or a full engine build. The full Windows
+engine/test cross-check stops in ring's build script because this Linux machine
+lacks MSVC C/archive tools (`lib.exe`); the Windows CI build and runtime suites
+must still be rerun.

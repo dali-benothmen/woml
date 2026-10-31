@@ -28,7 +28,9 @@ pub(in crate::process) use environment::prepare_process_environment;
 pub(in crate::process) use executable::{
   verify_executable, verify_executable_policy, ExecutableIdentity,
 };
-pub(in crate::process) use execution::{execute_process, PROCESS_TERMINATION_GRACE};
+pub(in crate::process) use execution::execute_process;
+#[cfg(unix)]
+pub(in crate::process) use execution::PROCESS_TERMINATION_GRACE;
 pub(in crate::process) use failures::{failure, invalid_input, output_failure, rejected};
 pub use handler::ManagedProcessHandler;
 pub(in crate::process) use handler::{safe_duration, AuthorizedProcess};

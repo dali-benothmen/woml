@@ -95,7 +95,7 @@ unsafe impl Send for WindowsJob {}
 
 #[cfg(windows)]
 impl Drop for WindowsJob {
-  pub(in crate::process) fn drop(&mut self) {
+  fn drop(&mut self) {
     // SAFETY: handle is owned by self and closed exactly once.
     unsafe {
       windows_sys::Win32::Foundation::CloseHandle(self.handle);

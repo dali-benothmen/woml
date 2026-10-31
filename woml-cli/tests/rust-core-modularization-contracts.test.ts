@@ -38,6 +38,13 @@ function declarationFingerprints(source: string): { name: string; sha256: string
     if (head[1] !== undefined) return [{ name: `${head[1]} ${head[2]}`, sha256: hash(canonical(text)) }];
     const owner = text.slice(0, text.indexOf('{')).trim();
     const methods = [...text.matchAll(/^  (?:pub(?:\([^)]*\))? )?(?:(?:async|const) )?fn (\w+)/gm)];
+    // Scoped visibility is normalized for moved inherent helpers below, but
+    // it is illegal on trait methods (including cfg-gated Windows Drop).
+    // Reject it before normalization can conceal the extraction mistake.
+    if (/\bfor\s+[A-Za-z_:]/u.test(owner)
+      && methods.some(method => method[0].trimStart().startsWith('pub'))) {
+      throw new Error(`Visibility qualifiers are not permitted in trait implementations: ${owner}`);
+    }
     if (methods.length === 0) return [{ name: owner, sha256: hash(canonical(text)) }];
     const bounds = methods.map(match => {
       const start = Math.max(text.lastIndexOf('\n\n', match.index) + 2, text.indexOf('\n') + 1);
@@ -47,6 +54,16 @@ function declarationFingerprints(source: string): { name: string; sha256: string
       sha256: hash(canonical(text.slice(bounds[position], bounds[position + 1] ?? text.lastIndexOf('\n}')))) }));
   });
 }
+
+test('declaration guards reject trait-method visibility before fingerprint normalization', () => {
+  const valid = 'impl Drop for WindowsJob {\n  fn drop(&mut self) {}\n}\n';
+  expect(declarationFingerprints(valid)).toHaveLength(1);
+  for (const visibility of ['pub', 'pub(crate)', 'pub(super)', 'pub(in crate::process)']) {
+    expect(() => declarationFingerprints(valid.replace('  fn drop', `  ${visibility} fn drop`)))
+      .toThrow('Visibility qualifiers are not permitted in trait implementations');
+  }
+  expect(declarationFingerprints('impl WindowsJob {\n  pub(in crate::process) fn attach() {}\n}\n')).toHaveLength(1);
+});
 
 test('extracted engine and bridge families preserve every ordered production declaration', async () => {
   async function productionFiles(directory: string): Promise<string[]> {

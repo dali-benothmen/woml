@@ -6,6 +6,7 @@ use crate::process::process_group_exists;
 use crate::process::signal_process_group;
 #[cfg(windows)]
 use crate::process::WindowsJob;
+#[cfg(unix)]
 use crate::process::PROCESS_TERMINATION_GRACE;
 use std::io;
 use tokio::process::Child;
