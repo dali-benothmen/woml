@@ -174,3 +174,74 @@ The local book is intentionally ignored; essential contribution rules are in
 the tracked core guide. Its edition, maps, walkthrough and generated atlas are
 updated without changing the ignore rule. Final full CI/platform/optimized
 release completion remains pending, regardless of this handoff's local passes.
+
+## Post-handoff repairs: schema assertions and parallel recovery
+
+The five failures reproduced in the subsequent local test run are now repaired.
+This is a targeted behavior correction after the structural extraction; the
+original refactor baselines and historical results above remain unchanged.
+
+- Durable-state and runtime-ownership migration tests compare the persisted
+  schema marker with `DURABLE_STORE_SCHEMA_VERSION`, without additionally pinning
+  it to the obsolete value 15. Workflow-call admission checks the persisted
+  marker too. Lifecycle coverage still verifies the historical model-v11/event-v10
+  mapping on the current store, independently of the store version.
+- Parallel dispatch can select only ready children, but group settlement now
+  reloads the complete compiled group. A final failure recorded before restart
+  cannot disappear merely because only its pending sibling was dispatched.
+- The recovery regression covers either sibling failing first, one execution
+  per child, no downstream execution, one failed group completion, coherent
+  persisted history, and an unchanged history after another resume.
+
+Fresh serial Linux verification passed all 98 engine unit tests and 270
+integration tests across 33 targets, including the five previously failing
+targets, the CI engine baseline, and neighboring parallel/retry/fork tests.
+All 25 modularization/source/architecture/CI contract checks passed as well.
+Rust formatting and the exact CI lint command,
+`bun run test:communication-provider-clippy`, passed. A separate unrestricted
+`-D warnings` Clippy run failed with 201 library diagnostics; CI already has
+an explicit legacy-lint allowance list. That list was not expanded, and the
+unrestricted lint run is not being reported as a pass.
+No fixture, fingerprint, contract version, dependency, or performance budget
+was changed. A new native addon/release package was not built for this check.
+
+These results do not certify the separate workflow-call composition and retry
+publication-fixture issues, the full CLI operations shard, or the unrun
+cross-platform and optimized-release gates recorded above.
+
+## Manual feature-lab integration findings
+
+The follow-up laboratory is in `manual-tests/feature-lab/README.md`, with one
+main WOML workflow, small TypeScript helpers, reusable step tags, operator
+configuration, and separate payload scenarios. It is a local manual rehearsal,
+not a replacement for the feature suites or cross-platform CI.
+
+Running its combined default path exposed compatibility defects that isolated
+historical fixtures did not cover. These are explicit post-refactor fixes:
+
+- Project-aware service discovery now inspects resolved reusable steps and
+  their imported services, and recognizes `workflow.json` as a module boundary.
+- Public JS infrastructure/emergency authority options are encoded with the
+  native decoder's existing snake-case wire keys; native schemas are unchanged.
+- Verified module bundles load through short Worker-local blob URLs rather
+  than filename-length-sensitive data URLs. Imported module console calls now
+  use the same redacted facade as inline scripts, keeping stdout protocol-only.
+- Durable wait registration accepts supported inherited Event v17–v20 histories.
+  Newer model hooks, cancellation, outcome admission, and finalization retain
+  their historical lifecycle semantics rather than skipping work or rejecting
+  supported versions. The JS outcome decoder accepts Event v18–v20 and bounded
+  iteration envelopes while rejecting unsupported future versions.
+
+The original refactor baselines remain unchanged. The two affected ordered
+transaction fingerprints are separately pinned, with their original hashes and
+regression targets, in
+`post-refactor-compatibility-repairs.json`. Their guard predicates changed, not
+their transaction ordering; the contract suite checks these explicit amendments.
+No contract version, fixture inventory, dependency, performance threshold, native
+export, or legacy lint allowance was changed.
+
+The lab deliberately leaves real remote/quorum/collector setup opt-in and uses
+simulated network/deployment handles. It also documents unresolved boundaries:
+managed corrective service-call authorization, policy support for StateService,
+and missing run-start hook admission on the policy-managed path. Those are not
+silently bypassed or counted as verified features.

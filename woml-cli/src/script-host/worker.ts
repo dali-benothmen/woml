@@ -149,6 +149,8 @@ function safeSourceMapSources(sourceMap: string): readonly string[] {
   }
 }
 
+const runtimeModuleUrls = new WeakMap<ScriptWorkerModule, string>();
+
 function executableModuleBundle(module: ScriptWorkerModule): string {
   if (module.sourceMap === undefined) return module.bundle;
   const sourceMapUrl = Buffer.from(module.sourceMap, 'utf8').toString('base64');
@@ -179,14 +181,12 @@ function safeModuleFrame(
     if (module.sourceMap === undefined) continue;
     const source = safeSourceMapSources(module.sourceMap)[0];
     if (source === undefined) continue;
-    const encoded = Buffer.from(
-      executableModuleBundle(module),
-      'utf8'
-    ).toString('base64');
-    const offset = stack.indexOf(`data:text/javascript;base64,${encoded}`);
+    const moduleUrl = runtimeModuleUrls.get(module);
+    if (moduleUrl === undefined) continue;
+    const offset = stack.indexOf(moduleUrl);
     if (offset < 0) continue;
     const suffix = stack.slice(
-      offset + `data:text/javascript;base64,${encoded}`.length
+      offset + moduleUrl.length
     );
     const location = /^:(\d+):(\d+)/.exec(suffix);
     if (location !== null) return `${source}:${location[1]}:${location[2]}`;
@@ -3150,10 +3150,17 @@ async function loadRuntimeModules(
       }
     }
     const executableBundle = executableModuleBundle(module);
-    const encoded = Buffer.from(executableBundle, 'utf8').toString('base64');
-    const namespace = (await import(
-      `data:text/javascript;base64,${encoded}`
-    )) as Record<string, unknown>;
+    // Bun may route long data URLs through filesystem resolution, exceeding
+    // filename limits once a real bundle and its source map are combined.
+    // A short Worker-local blob URL keeps exact verified bytes in memory.
+    const moduleUrl = URL.createObjectURL(new Blob([executableBundle], { type: 'text/javascript' }));
+    runtimeModuleUrls.set(module, moduleUrl);
+    let namespace: Record<string, unknown>;
+    try {
+      namespace = (await import(moduleUrl)) as Record<string, unknown>;
+    } finally {
+      URL.revokeObjectURL(moduleUrl);
+    }
     const exposed: Record<string, Function> = {};
     for (const exportName of module.exports) {
       const implementation = namespace[exportName];
@@ -3208,6 +3215,7 @@ function identifyInvocation(
 async function executeScript(
   request: ScriptWorkerRequest
 ): Promise<ScriptWorkerResponse> {
+  const writeLegacyLog = globalThis.console.error.bind(globalThis.console);
   let secretValues: readonly string[] = [];
   const materializedPaths = new Set<string>();
   try {
@@ -3285,7 +3293,7 @@ async function executeScript(
         4_096
       );
       if (request.protocolVersion !== 12) {
-        globalThis.console.error(text);
+        writeLegacyLog(text);
         return;
       }
       self.postMessage({
@@ -3302,6 +3310,15 @@ async function executeScript(
       info: (...values: unknown[]) => writeScriptLog('info', values),
       warn: (...values: unknown[]) => writeScriptLog('warn', values),
       error: (...values: unknown[]) => writeScriptLog('error', values),
+    });
+    // Imported modules resolve console globally rather than through the inline
+    // script's parameter. Workers execute one invocation, so install the same
+    // redacted facade before loading modules; stdout remains protocol-only.
+    Object.defineProperty(globalThis, 'console', {
+      configurable: false,
+      enumerable: true,
+      writable: false,
+      value: safeConsole,
     });
     const builtInServices = deeplyReadonlyServiceFacade(
       request,

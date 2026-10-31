@@ -39,7 +39,7 @@ fn activation(seed: char) -> String {
 }
 
 #[test]
-fn store_v14_migrates_transactionally_from_v13() {
+fn store_v13_migrates_transactionally_to_current_schema() {
   let database = TestDatabase::new("migration");
   drop(DurableEventStore::open(database.path()).unwrap());
   let connection = Connection::open(database.path()).unwrap();
@@ -65,7 +65,6 @@ fn store_v14_migrates_transactionally_from_v13() {
     )
     .unwrap();
   assert_eq!(version, DURABLE_STORE_SCHEMA_VERSION.to_string());
-  assert_eq!(DURABLE_STORE_SCHEMA_VERSION, 15);
 }
 
 #[test]

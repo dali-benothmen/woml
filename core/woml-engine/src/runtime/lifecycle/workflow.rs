@@ -200,6 +200,7 @@ pub(in crate::runtime) async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
       | crate::COMPILED_MODEL_SCHEMA_VERSION_V18
       | crate::COMPILED_MODEL_SCHEMA_VERSION_V19
       | crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+      | crate::COMPILED_MODEL_SCHEMA_VERSION_V21
   ) {
     return Ok(());
   }

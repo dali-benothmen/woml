@@ -80,7 +80,7 @@ fn data(execution: &woml_engine::DurableStateExecution) -> &Value {
 }
 
 #[test]
-fn store_v12_migrates_transactionally_through_state_v1_to_store_v14() {
+fn store_v12_migrates_transactionally_through_state_v1_to_current_schema() {
   let database = TestDatabase::new("migration");
   drop(DurableEventStore::open(database.path()).unwrap());
   let connection = Connection::open(database.path()).unwrap();
@@ -107,7 +107,6 @@ fn store_v12_migrates_transactionally_through_state_v1_to_store_v14() {
     )
     .unwrap();
   assert_eq!(version, DURABLE_STORE_SCHEMA_VERSION.to_string());
-  assert_eq!(DURABLE_STORE_SCHEMA_VERSION, 15);
   for object in [
     "woml_state_entries",
     "woml_state_mutations",

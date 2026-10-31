@@ -792,6 +792,10 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V17
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V18
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V19
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V21
       ) || workflow.lifecycle.is_none()
         || !crate::event::is_definition_hash(&data.hook_invocation_id)
       {

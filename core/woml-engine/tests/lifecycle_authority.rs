@@ -86,8 +86,68 @@ fn started_store() -> DurableEventStore {
 }
 
 #[test]
-fn model_v11_maps_to_event_v10_while_current_store_is_v14() {
-  assert_eq!(DURABLE_STORE_SCHEMA_VERSION, 15);
+fn model_v21_retains_cancellation_and_business_outcome_authority() {
+  for cancel in [false, true] {
+    let mut store = DurableEventStore::open_in_memory().unwrap();
+    let workflow = CompiledWorkflowDefinition::from_json(include_str!(
+      "../../../woml/tests/fixtures/remote-execution-targets/model.v21.reviewed.json"
+    ))
+    .unwrap();
+    let at = Utc.with_ymd_and_hms(2026, 10, 31, 10, 0, 0).unwrap();
+    store
+      .register_definition(&workflow, DEFINITION_HASH)
+      .unwrap();
+    let run_id = store
+      .admit_trigger_occurrence(woml_engine::TriggerAdmissionRequest {
+        workflow_id: workflow.workflow_id,
+        definition_hash: DEFINITION_HASH.to_string(),
+        trigger_id: "start".to_string(),
+        trigger_handler: "trigger.manual".to_string(),
+        source_identity: "current-model-control".to_string(),
+        payload: Map::new(),
+        received_at: at,
+      })
+      .unwrap()
+      .run_id;
+    store
+      .claim_policy_run(
+        &run_id,
+        "current-model-owner",
+        at,
+        std::time::Duration::from_secs(30),
+      )
+      .unwrap();
+    let outcome = if cancel {
+      assert_eq!(
+        store
+          .request_run_cancellation(&run_id, "cancel_current", at)
+          .unwrap()
+          .status,
+        RunCancellationStatus::Accepted
+      );
+      RunOutcomeDecidedData::Cancelled {
+        cancellation_request_id: "cancel_current".to_string(),
+      }
+    } else {
+      RunOutcomeDecidedData::Succeeded {
+        result: json!({ "done": true }),
+      }
+    };
+    store.decide_run_outcome(&run_id, outcome, at).unwrap();
+    store.finalize_run_v11(&run_id, at).unwrap();
+    assert_eq!(
+      store.projection(&run_id).unwrap().status,
+      if cancel {
+        RunStatus::Cancelled
+      } else {
+        RunStatus::Succeeded
+      }
+    );
+  }
+}
+
+#[test]
+fn model_v11_keeps_event_v10_on_the_current_store() {
   assert_eq!(woml_engine::run_event_schema_version_for_model(11), 10);
   assert_eq!(
     started_store().events("run_lec2").unwrap()[0].event_schema_version,

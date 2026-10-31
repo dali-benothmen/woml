@@ -3009,6 +3009,33 @@ describe('Script Host v5 module runtime', () => {
     ).toBe(false);
   });
 
+  test('loads a large verified module without data-URL filename limits', async () => {
+    const bundle = `export function value() { return "large-bundle-ok"; }\n${'// bounded module padding\n'.repeat(4096)}`;
+    const digest = moduleDigest(bundle);
+    const result = await runHost([
+      { protocol: 'woml.script-host', protocolVersion: 5, messageType: 'register_module', bundleDigest: digest, bundle },
+      executeV5('inv_large_module', 'return services.utility.value();', digest, ['value']),
+    ], { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '5' });
+    expect(result.exitCode).toBe(0);
+    expect(byInvocation(result.messages).get('inv_large_module')).toMatchObject({
+      outcome: { kind: 'success', value: 'large-bundle-ok' },
+    });
+  });
+
+  test('routes imported module console output away from protocol stdout and redacts secrets', async () => {
+    const bundle = `export function report(value) { console.log('module log', value); console.warn(value); return true; }`;
+    const digest = moduleDigest(bundle);
+    const request = executeV5('inv_module_console', 'return services.utility.report(secrets.API_TOKEN);', digest, ['report']);
+    const result = await runHost([
+      { protocol: 'woml.script-host', protocolVersion: 5, messageType: 'register_module', bundleDigest: digest, bundle },
+      { ...request, bindings: { bindingVersion: 1, servicesVersion: 1, secrets: { API_TOKEN: 'module-secret-value' } } },
+    ], { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '5' });
+    expect(result.exitCode).toBe(0);
+    expect(byInvocation(result.messages).get(request.invocationId)?.outcome).toEqual({ kind: 'success', value: true });
+    expect(result.stderr).toContain('module log');
+    expect(result.stderr).not.toContain('module-secret-value');
+  });
+
   test('registers one immutable bundle and creates fresh sync/async module state per Worker', async () => {
     const bundle = `let calls = 0;
 export function sync() { calls += 1; return calls; }

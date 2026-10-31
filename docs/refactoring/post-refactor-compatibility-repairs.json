@@ -1,0 +1,17 @@
+{
+  "profile": "woml.post-refactor-compatibility-repairs/v1",
+  "repairs": {
+    "register_durable_wait_atomically": {
+      "originalSha256": "5afca44faa552e6461ae7e1c1badfdb70b40af6da8813137c69e12d59c6d8a80",
+      "sha256": "5ad8a8808f6ee9200691bb8ac6c17250e82592e8878c1ba99ee4c3e66f359feb",
+      "reason": "Permit inherited durable waits in supported Event v17-v20 histories; transaction ordering is unchanged.",
+      "regression": "core/woml-engine/tests/durable_wait_runtime.rs"
+    },
+    "request_run_cancellation": {
+      "originalSha256": "1dfeb34d253d97587e5061658dc9a7b328458a1f54a434272e40173d1340cb28",
+      "sha256": "b43a9385112357feb35f17d771ddd6474fc66207d95c68db466dd91dd5cb7536",
+      "reason": "Permit existing cancellation authority for supported Model v21; transaction ordering is unchanged.",
+      "regression": "core/woml-engine/tests/lifecycle_authority.rs"
+    }
+  }
+}

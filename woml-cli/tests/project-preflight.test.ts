@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -82,6 +82,41 @@ describe('unified WOML project preflight', () => {
     expect(report.diagnostics).toContainEqual(
       expect.objectContaining({ code: 'WOML_PROCESS_DISABLED' })
     );
+  });
+
+  test('preflights imported custom tags on cold and warm compilation paths', async () => {
+    const initialized = await initializedProject();
+    const definitions = join(initialized.directory, 'workflows', 'definitions');
+    await mkdir(definitions);
+    await writeFile(join(definitions, 'marker.woml'),
+      '<woml><props><prop name="value" required="true" /></props><step><script>return { value: props.value };</script></step></woml>');
+    await writeFile(initialized.workflowPath,
+      '<woml><imports><module name="marker" from="./definitions/marker.woml" /></imports><workflow id="custom-project"><triggers><manual id="start" /></triggers><steps><marker id="mark" value="ready" /></steps></workflow></woml>');
+    for (let iteration = 0; iteration < 2; iteration++) {
+      const result = capture();
+      expect(await runCli(['check', '--project', initialized.manifestPath, '--json'], result.io), result.stderr.join('') + result.stdout.join('')).toBe(0);
+      expect(result.stderr).toEqual([]);
+      expect(JSON.parse(result.stdout.join('')).workflows).toContainEqual(
+        expect.objectContaining({ id: 'custom-project', status: 'ready' })
+      );
+    }
+  });
+
+  test('custom tags cannot hide module-owned process requirements from preflight', async () => {
+    const initialized = await initializedProject();
+    const definitions = join(initialized.directory, 'workflows', 'definitions');
+    await mkdir(definitions);
+    await writeFile(join(definitions, 'tool.ts'),
+      'export async function run() { return await services.process.run({ executable: "bun", args: ["--version"] }); }');
+    await writeFile(join(definitions, 'tool-step.woml'),
+      '<woml><imports><module name="tool" from="./tool.ts" /></imports><step><script>return await services.tool.run();</script></step></woml>');
+    await writeFile(initialized.workflowPath,
+      '<woml><imports><module name="tool-step" from="./definitions/tool-step.woml" /></imports><workflow id="custom-process"><triggers><manual id="start" /></triggers><steps><tool-step id="runTool" /></steps></workflow></woml>');
+    const result = capture();
+    expect(await runCli(['check', '--project', initialized.manifestPath, '--json'], result.io)).toBe(1);
+    const report = JSON.parse(result.stdout.join(''));
+    expect(report.subsystems).toContainEqual(expect.objectContaining({ id: 'process', status: 'blocked', required: true }));
+    expect(report.diagnostics).toContainEqual(expect.objectContaining({ code: 'WOML_PROCESS_DISABLED' }));
   });
 
   test('checks every workflow and preserves source locations for invalid ones', async () => {

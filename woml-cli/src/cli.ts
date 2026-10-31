@@ -32,6 +32,7 @@ import {
   inspectWomlModuleServiceUsage,
   isWomlElement,
   parseWoml,
+  prepareResolvedReusableWorkflow,
   resolveWomlReusableDefinitionGraph,
   validateWoml,
   validateResolvedReusableWorkflow,
@@ -4780,12 +4781,12 @@ async function runDeploymentCheckCommand(
   try {
     const sources = await compileWorkflowInputs(parsed.inputPaths, io);
     const processUsage = sources.filter(source =>
-      inspectWomlModuleUsage(source.document).referencedServices.includes(
+      requiredWorkflowServices(source).includes(
         'process'
       )
     );
     const artifactUsage = sources.filter(source =>
-      inspectWomlModuleUsage(source.document).referencedServices.includes(
+      requiredWorkflowServices(source).includes(
         'artifacts'
       )
     );
@@ -5036,15 +5037,36 @@ function projectDiagnosticFromError(error: unknown): ProjectCheckDiagnosticV1 {
   );
 }
 
+const compiledSourceServices = new WeakMap<CompiledWorkflowSource, readonly string[]>();
+
+function requiredWorkflowServices(source: CompiledWorkflowSource): readonly string[] {
+  const cached = compiledSourceServices.get(source);
+  if (cached !== undefined) return cached;
+  const options = { sourcePath: source.filePath, projectRoot: moduleProjectRoot(source.filePath) };
+  const graph = resolveWomlReusableDefinitionGraph(source.document, options);
+  // Inspect the same resolved custom-step view used by compilation, rather
+  // than validating imported tags as unknown built-in elements a second time.
+  const document = graph.definitions.length === 0
+    ? source.document
+    : prepareResolvedReusableWorkflow(source.document, graph, options).document;
+  const direct = inspectWomlModuleUsage(document).referencedServices;
+  const imported = source.runtimeModules.length === 0
+    ? []
+    : inspectWomlModuleServiceUsage(document, options).referencedServices;
+  const services = [...new Set([...direct, ...imported])].sort();
+  compiledSourceServices.set(source, services);
+  return services;
+}
+
 function workflowRequiredCapabilities(
   source: CompiledWorkflowSource
 ): readonly string[] {
   const activation = runtimeActivationRequirements([source.workflow]);
-  const usage = inspectWomlModuleUsage(source.document);
+  const referencedServices = requiredWorkflowServices(source);
   const capabilities = new Set<string>();
   if (activation.scriptExecution) capabilities.add('runtime.script');
   if (activation.runtimeModules) capabilities.add('runtime.modules');
-  for (const service of usage.referencedServices)
+  for (const service of referencedServices)
     capabilities.add(`services.${service}`);
   for (const handler of activation.triggerHandlers)
     capabilities.add(handler);
@@ -5185,7 +5207,7 @@ async function runProjectCheckCommand(
     requiredCapabilities: workflowRequiredCapabilities(source),
   }));
   const workflows = sources.map(source => source.workflow);
-  const usages = sources.map(source => inspectWomlModuleUsage(source.document));
+  const usages = sources.map(source => ({ referencedServices: requiredWorkflowServices(source) }));
   if (infrastructureAuthority !== undefined) {
     for (const source of sources) {
       const decisions = analyzeInfrastructurePolicySource(
@@ -5770,6 +5792,7 @@ function moduleProjectRoot(sourcePath: string): string {
   let directory = dirname(sourcePath);
   while (true) {
     if (
+      existsSync(join(directory, 'workflow.json')) ||
       existsSync(join(directory, 'woml.json')) ||
       existsSync(join(directory, 'package.json'))
     ) {
@@ -9733,7 +9756,7 @@ async function runCliUnprofiled(
     sources = await compileWorkflowInputs(inputPaths, io);
     if (
       sources.some(source =>
-        inspectWomlModuleUsage(source.document).referencedServices.includes(
+        requiredWorkflowServices(source).includes(
           'process'
         )
       ) &&
@@ -9746,7 +9769,7 @@ async function runCliUnprofiled(
     }
     if (
       sources.some(source =>
-        inspectWomlModuleUsage(source.document).referencedServices.includes(
+        requiredWorkflowServices(source).includes(
           'artifacts'
         )
       ) &&

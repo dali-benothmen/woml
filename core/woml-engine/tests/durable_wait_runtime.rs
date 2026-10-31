@@ -219,6 +219,41 @@ async fn timer_wait_persists_before_releasing_execution_resources() {
 }
 
 #[tokio::test]
+async fn lock_model_can_register_and_settle_an_inherited_timer_wait() {
+  let schema_version = 18;
+  let database = TemporaryDatabase::new("successor-registration");
+  let started_at = Utc.with_ymd_and_hms(2026, 10, 13, 8, 0, 0).unwrap();
+  let mut workflow = wait_model();
+  workflow.schema_version = schema_version;
+  workflow.graph.locks = Some(Vec::new());
+  let outcome = execute_workflow_durable_outcome(
+    workflow,
+    WAIT_MODEL_HASH.to_string(),
+    Map::new(),
+    unavailable_host_options(started_at),
+    database.path().to_path_buf(),
+  )
+  .await
+  .unwrap();
+  let WorkflowRuntimeOutcome::WaitingTime { run_id, .. } = outcome else {
+    panic!("Model v{schema_version} must preserve inherited wait support");
+  };
+  let mut store = DurableEventStore::open(database.path()).unwrap();
+  assert!(store
+    .events(&run_id)
+    .unwrap()
+    .iter()
+    .any(|event| matches!(event.payload, RunEventPayload::WaitRegistered(_))));
+  store
+    .settle_timer_wait(&run_id, "pause", started_at + Duration::seconds(2))
+    .unwrap();
+  assert!(matches!(
+    store.projection(&run_id).unwrap().durable_waits["pause"].status,
+    DurableWaitStatus::Satisfied { .. }
+  ));
+}
+
+#[tokio::test]
 async fn overdue_timer_recovers_after_restart_and_resumes_exactly_once() {
   let database = TemporaryDatabase::new("restart");
   let started_at = Utc.with_ymd_and_hms(2026, 10, 13, 9, 0, 0).unwrap();

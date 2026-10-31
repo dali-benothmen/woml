@@ -513,6 +513,17 @@ pub(in crate::runtime) async fn execute_parallel_group<E: RuntimeDagEngine>(
     }
   }
 
+  // Dispatch may contain only ready script children. Settlement must use the
+  // full compiled group, including child outcomes recorded before a restart.
+  let group = engine
+    .workflow()
+    .parallel_group(&group.parallel_id)
+    .ok_or_else(|| {
+      RuntimeExecutionError::Stalled(format!(
+        "parallel group {:?} is unavailable for settlement",
+        group.parallel_id
+      ))
+    })?;
   let projection = engine.projection(run_id)?;
   if projection.status == RunStatus::Cancelling {
     return Ok(completion_order);

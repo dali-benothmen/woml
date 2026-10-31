@@ -12,6 +12,7 @@ import transactionBaseline from '../../docs/refactoring/rcm8-baseline.json';
 import capabilityArtifactBaseline from '../../docs/refactoring/rcm10-baseline.json';
 import featureBridgeBaseline from '../../docs/refactoring/rcm12-baseline.json';
 import fixtureBaseline from '../../docs/refactoring/rcm14-fixtures-baseline.json';
+import compatibilityRepairs from '../../docs/refactoring/post-refactor-compatibility-repairs.json';
 
 const root = resolve(import.meta.dir, '../..');
 const hash = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex');
@@ -187,12 +188,17 @@ test('owned implementation modules cannot leak through public module or unreview
   expect(() => publicReexportNames('pub use child::Record as PublicAlias;')).toThrow('explicitly');
 });
 
-test('critical transaction and recovery declarations preserve their ordered tokens', async () => {
+test('critical transaction declarations preserve ordered tokens with explicit post-refactor repairs', async () => {
   const source = (await readRustModuleSource(resolve(root, 'core/woml-engine/src/durable.rs')))
     .replaceAll('\r\n', '\n');
   for (const declaration of transactionBaseline.criticalDeclarations) {
-    expect(orderedDeclarationHash(source, declaration.name)).toBe(declaration.sha256);
+    const repair = (compatibilityRepairs.repairs as Record<string, { originalSha256: string; sha256: string }>)[declaration.name];
+    if (repair !== undefined) expect(repair.originalSha256).toBe(declaration.sha256);
+    expect(orderedDeclarationHash(source, declaration.name)).toBe(repair?.sha256 ?? declaration.sha256);
   }
+  expect(Object.keys(compatibilityRepairs.repairs).sort()).toEqual([
+    'register_durable_wait_atomically', 'request_run_cancellation',
+  ]);
   // This is a refactor-only guard, not an algorithm test or a perpetual ban on
   // reviewed behavior changes. Executable contention/recovery tests remain required.
   const name = 'recovered_state_mutation_settlement';

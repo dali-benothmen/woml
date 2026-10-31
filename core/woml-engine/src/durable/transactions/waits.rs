@@ -52,9 +52,16 @@ impl DurableEventStore {
           "A durable wait cannot be registered before run_started.".to_string(),
         )
       })?;
-    if event_schema_version != crate::RUN_EVENT_SCHEMA_VERSION_V16 {
+    if !matches!(
+      event_schema_version,
+      crate::RUN_EVENT_SCHEMA_VERSION_V16
+        | crate::RUN_EVENT_SCHEMA_VERSION_V17
+        | crate::RUN_EVENT_SCHEMA_VERSION_V18
+        | crate::RUN_EVENT_SCHEMA_VERSION_V19
+        | crate::RUN_EVENT_SCHEMA_VERSION_V20
+    ) {
       return Err(DurableStoreError::Contract(
-        "Durable wait registration requires Event v16.".to_string(),
+        "Durable wait registration requires Event v16 or a supported successor.".to_string(),
       ));
     }
     let workflow = definition_for_run(&transaction, run_id)?;

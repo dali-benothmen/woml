@@ -45,6 +45,7 @@ impl DurableEventStore {
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V18
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V19
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V21
     ) {
       return Err(DurableStoreError::Contract(
         "Business-outcome authority requires compiled Model v11+.".to_string(),
@@ -139,6 +140,10 @@ impl DurableEventStore {
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V17
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V18
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V19
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V21
     ) {
       return Err(DurableStoreError::Contract(
         "Run finalization authority requires compiled Model v11+.".to_string(),

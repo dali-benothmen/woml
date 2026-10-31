@@ -64,6 +64,7 @@ impl DurableEventStore {
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V18
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V19
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V21
     ) {
       return Ok(result(
         RunCancellationStatus::Rejected,
