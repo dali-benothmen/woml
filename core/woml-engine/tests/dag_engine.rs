@@ -590,3 +590,77 @@ fn engine_rejects_starting_a_node_before_its_dependencies_succeed() {
   assert!(error.to_string().contains("not ready"));
   assert_eq!(engine.events("run_hello_01").len(), 1);
 }
+
+#[test]
+fn the_global_fold_gate_rejects_identity_sequence_version_and_terminal_drift() {
+  let events = hello_events();
+  let mut duplicate = events[1].clone();
+  duplicate.event_id = events[0].event_id.clone();
+  let mut wrong_sequence = events[1].clone();
+  wrong_sequence.sequence += 1;
+  let mut wrong_run = events[1].clone();
+  wrong_run.run_id = "another-run".to_string();
+  let mut mixed_version = events[1].clone();
+  mixed_version.event_schema_version = 2;
+  let mut unsupported_version = events[1].clone();
+  unsupported_version.event_schema_version = u32::MAX;
+
+  for (candidate, message) in [
+    (duplicate, "appears more than once"),
+    (wrong_sequence, "Expected sequence"),
+    (wrong_run, "mixes run IDs"),
+    (mixed_version, "mixes event schema versions"),
+  ] {
+    let error = fold_events(&[events[0].clone(), candidate]).unwrap_err();
+    assert!(error.to_string().contains(message), "{error}");
+  }
+  assert!(fold_events(&[events[0].clone(), unsupported_version]).is_err());
+
+  let mut after_terminal = events.clone();
+  let mut candidate = events[1].clone();
+  candidate.sequence = events.len() as u64 + 1;
+  candidate.event_id = "after-terminal".to_string();
+  after_terminal.push(candidate);
+  assert!(fold_events(&after_terminal)
+    .unwrap_err()
+    .to_string()
+    .contains("A terminal run event must be the final event"));
+}
+
+#[test]
+fn a_rejected_feature_transition_does_not_poison_committed_history_or_context() {
+  let events = hello_events();
+  let run_id = &events[0].run_id;
+  let mut store = InMemoryEventStore::default();
+  store.append(events[0].clone()).unwrap();
+  store.append(events[1].clone()).unwrap();
+  let before = store.projection(run_id).unwrap();
+  let mut invalid = events[2].clone();
+  let RunEventPayload::StepAttemptSucceeded(data) = &mut invalid.payload else {
+    panic!("the frozen hello history must settle its first attempt");
+  };
+  data.invocation_id = "unknown-invocation".to_string();
+  assert!(store.append(invalid).is_err());
+  assert_eq!(store.events(run_id), &events[..2]);
+  assert_eq!(store.projection(run_id).unwrap(), before);
+
+  // Reuse the rejected event ID: neither the cache nor the global ID index may
+  // publish the candidate before the complete fold succeeds.
+  let committed = store.append(events[2].clone()).unwrap();
+  assert_eq!(committed, fold_events(&events[..3]).unwrap());
+
+  let mut engine = InMemoryDagEngine::new(hello_model(), HELLO_HASH).unwrap();
+  for event in &events[..2] {
+    engine.append_event(event.clone()).unwrap();
+  }
+  let before = engine.projection(run_id).unwrap();
+  let mut invalid = events[2].clone();
+  let RunEventPayload::StepAttemptSucceeded(data) = &mut invalid.payload else {
+    unreachable!();
+  };
+  data.node_id = "b".to_string();
+  assert!(engine.append_event(invalid).is_err());
+  assert_eq!(engine.projection(run_id).unwrap(), before);
+  assert_eq!(engine.events(run_id), &events[..2]);
+  assert_eq!(engine.append_event(events[2].clone()).unwrap(), committed);
+}

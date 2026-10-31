@@ -1,0 +1,1412 @@
+{
+  "baseRevision": "e8a62490fd15c40c152c8440ff12fd2bdb75120f",
+  "description": "Exact tracked author fixture inventory from the original pre-refactor Git tree, not current working-tree content. RCM0 accidentally mixed seven ignored generated editor declarations into its aggregate; that historical baseline remains intact. Generated declarations are covered by editor/DX tests, not frozen as immutable source fixtures.",
+  "files": [
+    {
+      "path": "woml/tests/fixtures/approval-slack.compiled.v5.json",
+      "sha256": "8901420562f7d93d8df1eda2b41135b9bdbbb37face0ab2e889502b2e5d740d0"
+    },
+    {
+      "path": "woml/tests/fixtures/approval-slack.woml",
+      "sha256": "6d94e23a541431bd5c716cb64fee6f00870f9771def9b6ace9ddd239f10c950e"
+    },
+    {
+      "path": "woml/tests/fixtures/approval-timeout-fail.compiled.v4.json",
+      "sha256": "54e6f73c7f2b38ce45cba1d6e802cdc954dfc3fdcefa5e5f40cc65473a6f82f0"
+    },
+    {
+      "path": "woml/tests/fixtures/approval.compiled.v4.json",
+      "sha256": "b99b5f318c0bb9b6f8de84a3d66405f09a8c02d749d3e7c2c281dbf50880ce12"
+    },
+    {
+      "path": "woml/tests/fixtures/approval.context.v0.1.json",
+      "sha256": "5ca9e2cac4a7529fc3ac82c239f555487ef0bd685590232191d24e8d523bf99e"
+    },
+    {
+      "path": "woml/tests/fixtures/approval.result.v0.1.json",
+      "sha256": "bdcf515fccc97d06aec4d4f3e1c4b94a57b6f5fb3567db38facb34d493c29e7e"
+    },
+    {
+      "path": "woml/tests/fixtures/approval.woml",
+      "sha256": "f1cda4e0424607238237c83ebe74410a80a644a185d27a710511775f47c0c679"
+    },
+    {
+      "path": "woml/tests/fixtures/branch.compiled.v2.json",
+      "sha256": "b362f689ac3fd45a5a0e7827a96b6ecc959e9c4ba51d84a79a3abcdbb9aef193"
+    },
+    {
+      "path": "woml/tests/fixtures/branch.context.v0.1.json",
+      "sha256": "97264f53578ed5ec883dd0fed278920bb35e08558a4fe1b0c5e205400b8b6688"
+    },
+    {
+      "path": "woml/tests/fixtures/branch.legacy.woml",
+      "sha256": "1f1d13f285cb0039b9ac5566a27d6a91165cead980d254f0fb090b19e401d419"
+    },
+    {
+      "path": "woml/tests/fixtures/branch.result.v0.1.json",
+      "sha256": "c68f6bef2228d7704a08521bb6e4709cd4f92c7791d0e973b0b564405655fbe1"
+    },
+    {
+      "path": "woml/tests/fixtures/branch.woml",
+      "sha256": "a096db9be2d102ee5fe7d2f8718090b8eb7e07c615c1383f60a596f526172fa8"
+    },
+    {
+      "path": "woml/tests/fixtures/combined-developer-experience/budgets.v1.json",
+      "sha256": "53c51a915f7494970b4115a49d31eb77953b781a27e1a46dd948d1ffbecf8ae3"
+    },
+    {
+      "path": "woml/tests/fixtures/combined-developer-experience/project-check.v1.reviewed.json",
+      "sha256": "806f1d30950d2ad4c9cdaf78672bb628e874847b92395c975a0419dd30324990"
+    },
+    {
+      "path": "woml/tests/fixtures/combined-developer-experience/project.v1.reviewed.json",
+      "sha256": "80911ecc3e5a5c8e57d28f1ad28c1b7eb8cd7abf2a9a38e243607c0a924d5882"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/contracts.v1.json",
+      "sha256": "aa38af0c24ee49417b0dca2375e0825a9bede0ea191247562ead83bf304677bb"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/discord-contextual-alias.woml",
+      "sha256": "adaef7a9fd4d6faee8d2854f3850dffb9d546405c5fcd9ad9ddb9b0fba362a8f"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/discord-helper.ts",
+      "sha256": "fb3e6ed953323f4676dbf3f1bbf3797b0bc1704ff9bf4c46447a5f80c7319020"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/discord-module.woml",
+      "sha256": "4312b75931a87f6bb087637ac96cdc0719839565beaf75b2ad52d83069ac3aa1"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/discord-shadow.ts",
+      "sha256": "45ff866358ae622f323e2fb5b7801da79582c582c516be90bb6e4e05e2699a61"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/discord-shadow.woml",
+      "sha256": "6c8fd497fd736600d7a10fcc19a866a1eb02bf3e5a2f530acda04bc2a74e0185"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/discord.expected.json",
+      "sha256": "9e5d51f4dd0ca44167cef2528d3a732d58f2ed5f0ab567c892346d83f92aaf2c"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/discord.woml",
+      "sha256": "8b68967ee1d9458442f30b00c7874b425cd18bd4907ce6e0aff9684bc2df5839"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/local-discord-provider.woml",
+      "sha256": "12e234f15b86c1586bc174923780e3522df6af937bfe0b88300d6f07a6eed9b9"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/local-telegram-provider.woml",
+      "sha256": "dd82e615ba4e9d97ed2f5f8432463fd06b23c4886ada8d6d7f3bffadb4b898c2"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/payloads.v1.json",
+      "sha256": "3a2796971ad98ece4509dd3858777ffa1a6b10104e3fb7c8260b1f2571328946"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/semantics.v1.json",
+      "sha256": "7120a0881322d03c59d03f0203da4d751082466531f295ae8dccc92f8c5d9329"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/telegram-contextual-alias.woml",
+      "sha256": "0c7a14072fc230dc269e8c8b8e8f5a335c0c965db7c2ecddbd4496d7ed195752"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/telegram-helper.ts",
+      "sha256": "57443829edf0c087abf18ab21d12cd533627fae9b8879c15df341241529c8a91"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/telegram-module.woml",
+      "sha256": "a4991c2c259c6567f09740760895e0342599fdbdcb7b7bcd7e9c5ced8f87baba"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/telegram-shadow.ts",
+      "sha256": "45ff866358ae622f323e2fb5b7801da79582c582c516be90bb6e4e05e2699a61"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/telegram-shadow.woml",
+      "sha256": "56d044425bfa270cca54d358b9054cfff5cf0627ec94e0be48b0222be05ad5fb"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/telegram.expected.json",
+      "sha256": "9aa728d9130af0f2955587549790910298b10bf6daec6fc7b7d2b10869e098e5"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/telegram.woml",
+      "sha256": "82e2c40c12ed00979658ff7349743c831cf0edef11d42b822424494d65052b55"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/whatsapp-callback.json",
+      "sha256": "b6a8a2d8490121d25730c8208cc106863a0c40ab940d243543f8ff38066b2534"
+    },
+    {
+      "path": "woml/tests/fixtures/communication-providers/whatsapp.woml",
+      "sha256": "62bea87cbf77731434a99a7c3cfeeb639c38e0ac7ad7d21988ea7434c76c186f"
+    },
+    {
+      "path": "woml/tests/fixtures/compensation-and-cleanup/contracts.v1.json",
+      "sha256": "653b28fc3dd1d86a6f54300658492100b05562902217336ef76429b368bf0df3"
+    },
+    {
+      "path": "woml/tests/fixtures/compensation-and-cleanup/control-flow.reviewed.woml",
+      "sha256": "b0696ea0c1b9eb0983e4e7fc0bd8e0ae12dcbb2f606e393d5a68b47987b5544c"
+    },
+    {
+      "path": "woml/tests/fixtures/compensation-and-cleanup/errors.v1.json",
+      "sha256": "698e3725098d93bae4254e3203dfd269e024144b10b1e3f274a30306b262badd"
+    },
+    {
+      "path": "woml/tests/fixtures/compensation-and-cleanup/events.v18.json",
+      "sha256": "74e55fdd5e82b90336482a1e6006cd52b66314854b53cd5ea1fdca2b98307e9c"
+    },
+    {
+      "path": "woml/tests/fixtures/compensation-and-cleanup/for-each.reviewed.woml",
+      "sha256": "7b95f786e1271fa06f98ea4a1ac8b9f07ea54cf6c80b8510b7d3130fcd34da1a"
+    },
+    {
+      "path": "woml/tests/fixtures/compensation-and-cleanup/fork-failure.reviewed.woml",
+      "sha256": "776c506a02623534840bb105c9571607b0c80a6e52373b63a0ee10fbe66bcf6b"
+    },
+    {
+      "path": "woml/tests/fixtures/compensation-and-cleanup/inspection.v1.json",
+      "sha256": "2737e51d99fdf156d5d1b675f65af953f634cc6d94d1d066ac2b8acc14e0904c"
+    },
+    {
+      "path": "woml/tests/fixtures/compensation-and-cleanup/model.reviewed.woml",
+      "sha256": "c6dd8a6519006d89424af25ff251f187bdd28b0bf0f41fc9abfebe207da7b7c1"
+    },
+    {
+      "path": "woml/tests/fixtures/compensation-and-cleanup/model.v19.reviewed.json",
+      "sha256": "b13c49f4df26de8351219c8d5cdddef74cb029171661bcbae14c5bc815e7bffb"
+    },
+    {
+      "path": "woml/tests/fixtures/compensation-and-cleanup/parallel-failure.reviewed.woml",
+      "sha256": "9b9b827c74a7d79b4dd24d203bc0008c47b2b97f45f868354f99a61588cab393"
+    },
+    {
+      "path": "woml/tests/fixtures/compensation-and-cleanup/recovery.v1.json",
+      "sha256": "ebebf3cb399236dc25668d02056250a72f62e6bbac23f1bd179188107a3a139f"
+    },
+    {
+      "path": "woml/tests/fixtures/compensation-and-cleanup/store.v17.json",
+      "sha256": "9aea1d3b8db41fd7b1555ef93cdf0b136df8adaacb4f863d2bb53411546142ea"
+    },
+    {
+      "path": "woml/tests/fixtures/compensation-and-cleanup/threat-model.v1.json",
+      "sha256": "b20cd5e3379eea966754193c4563b13b3808d529150b5c7809e682c9bce380b4"
+    },
+    {
+      "path": "woml/tests/fixtures/compensation-and-cleanup/transitions.v1.json",
+      "sha256": "436be2fc472c3c0062698c31bd660a1409c1df32ac0abfbe64bb3a94af1455f2"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-artifacts/backends.v1.json",
+      "sha256": "cc13ca744134c337c7a93dd39189d457b97f5a79ebf33fecd40d810b3a564d29"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-artifacts/behavior-matrix.v1.json",
+      "sha256": "5208e555e32471bcf6b85f5bc1c00029ea8fc1aea5cd628d4060053129afbc44"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-artifacts/capability-put.v1.json",
+      "sha256": "613be140ce8ae79bd7bae3987fd49e0299b6f7e061d1f423e702f4350e64b644"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-artifacts/contracts.v1.json",
+      "sha256": "b57cae00cc448ab7dec2721d036be566403270dc222095273c9dd628f45d0937"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-artifacts/failures.v1.json",
+      "sha256": "d5d401a6d3f2357e384dc4c475efba899d602a31d6a653dfa95259a962e532a2"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-artifacts/maintenance.v1.json",
+      "sha256": "b2475fd1a09e6bf2c34c362924b30604b36116d02981adcdb9e456691da125bd"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-artifacts/operation-metadata.v1.json",
+      "sha256": "8aed0c8813775f220bd1bee9a5ce6a6b86604b0feddb3e131355d9d0407a0663"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-artifacts/operator.v1.json",
+      "sha256": "72f0e4eac10437792021a160385fbf34cc7c9338664c4d8917df385163df4924"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-artifacts/policy.v1.json",
+      "sha256": "eab2743c550fca842fd1e53a9a72708d432e6203d4de4fc5a0e409dc5d76cc9c"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-artifacts/rejections.v1.json",
+      "sha256": "ab2de1b7e3ea3355e21301193a780e3794eb439cd9cfc753fca5e56383bb0193"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-artifacts/reviewed.woml",
+      "sha256": "ecf3abeeffc3ed3873af02bf2a44ee6f2c94701d85996f16fa5dd47439998897"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-artifacts/settlements.v1.json",
+      "sha256": "cd003a45c279c2b355ec449f7cf83547da59b80fb6cbeaf552accfe724012498"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-state/capability-call.v1.json",
+      "sha256": "131cf5426b1394ec27d8d1c8681f818d0eaa03e63da4a8d448d23ef823b005ef"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-state/contracts.v1.json",
+      "sha256": "e6ddafcd02c918f71ef713df026b258576e36d96894152de100f43e76e0a0bf2"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-state/failures.v1.json",
+      "sha256": "7cf1e67accd4ecf10aa2c045d49da5ad586a7b0df682969ddf3c28422fee5667"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-state/identity.v1.json",
+      "sha256": "19c6480255412feda73856b37057f69d5f6b9d0ca52eeeb87af84075b0e66a4b"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-state/metadata.v1.json",
+      "sha256": "59952072fdf7c392e6231788a0e76dba7b3bd144e1146e7d072732866f40bd31"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-state/state-service.generated.d.ts",
+      "sha256": "bc9ea30cfeb3dd516d7a01cfa21c29cba2d1c384fa31b2a20077286c73f84add"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-state/store.v13.json",
+      "sha256": "9291c4cd2d0a5a08378400bc604f4332c8e6aefc605ce7f44041462e9523d1b6"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-waits/authoring.reviewed.woml",
+      "sha256": "56a23119b5f46e03698ac55c5b0753292a0e14bcb6ec03c421a542551d5516ab"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-waits/composition.reviewed.woml",
+      "sha256": "3348b2b2415625f9521e3db68b80cd760350924c1f362ba28416ec9653a84598"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-waits/contracts.v1.json",
+      "sha256": "dfef8411d5ec03c5adc31e0008f7de2b669f0b6d223e8b21f37f1806fe06ce7d"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-waits/events.v16.json",
+      "sha256": "d1fa946b0cad8c57c017aef69e9e2047c8621befd6c13be57fb4a1af96f5e2a8"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-waits/inspection.v1.json",
+      "sha256": "29e50c9618ca938721ed65c2c31cb0dba912fe8a9e1b7994ec3e749a9bd6ba22"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-waits/model.reviewed.woml",
+      "sha256": "18c611cb578be4aff225b85f6ea4c2291996d1ebc0ad454b2df47bb08d69c1ae"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-waits/model.v17.reviewed.json",
+      "sha256": "ce4df2f69f0ace812fa4fdec2c011de0bb8117f85e27b02dd3454ba684c92173"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-waits/rejections.v1.json",
+      "sha256": "6706af52c7c3fd913a71bb190153bc22cc6044dac00df77c08a25c2072435b62"
+    },
+    {
+      "path": "woml/tests/fixtures/durable-waits/signal-api.v1.json",
+      "sha256": "96a2418eac9497af8574fb3e7a6ea21014b38552b500082c5faedd0a8be6aa04"
+    },
+    {
+      "path": "woml/tests/fixtures/event-contracts/publish.v1.json",
+      "sha256": "4a4a1d28349218088a6957db41071ed700ce8193147b85cfb6a81eb0691d2411"
+    },
+    {
+      "path": "woml/tests/fixtures/event-contracts/published-all.v1.json",
+      "sha256": "e1e5495bbc8db78602fd22c541ccc801507e05bac40ec677a34049f54589f1c9"
+    },
+    {
+      "path": "woml/tests/fixtures/event-contracts/published-duplicate.v1.json",
+      "sha256": "720bc4f7ad5b18c2267d54ec41efcd0596819ad859fad1ae84422b6888a772fe"
+    },
+    {
+      "path": "woml/tests/fixtures/event-contracts/published-partial.v1.json",
+      "sha256": "e7051d4120a65c01cfd7da2e5571d5f35b76f47eafbe93e619b768a1901be5ad"
+    },
+    {
+      "path": "woml/tests/fixtures/event-contracts/published-rejected.v1.json",
+      "sha256": "611bf7bba4a9ecffacba6ba566b1919a52e7b48671e845980ab38780da024d19"
+    },
+    {
+      "path": "woml/tests/fixtures/event-contracts/rejected-unauthorized.v1.json",
+      "sha256": "1dfb7fa63a5835b1e3397cff14e37e58e17b228ae9d9d6808c84d4fa751280d8"
+    },
+    {
+      "path": "woml/tests/fixtures/for-each/authoring.reviewed.woml",
+      "sha256": "529808977e8695298941093698d8ef12221ff79e06d2fbbc81c16b5cd64cd126"
+    },
+    {
+      "path": "woml/tests/fixtures/for-each/events.v15.reviewed.json",
+      "sha256": "a8129fcc179a9374c0c55ca4d4e0da050d7f5ef674aa8798c7c4ff754634609e"
+    },
+    {
+      "path": "woml/tests/fixtures/for-each/model.reviewed.woml",
+      "sha256": "c0d6c8a305e4d5f2dba56108c7f66ca657f0a5b8679930262e035098989ff937"
+    },
+    {
+      "path": "woml/tests/fixtures/for-each/model.v16.reviewed.json",
+      "sha256": "e20f13da8bcb1153a9bd8b4799afb2653e1557f8bf1b30f539c34a5e47291ef7"
+    },
+    {
+      "path": "woml/tests/fixtures/for-each/script-host.v9.reviewed.json",
+      "sha256": "076c1a24b32db5b7cb0c148850c90c402659f699816d853059e0beb332184cb4"
+    },
+    {
+      "path": "woml/tests/fixtures/for-each/semantics.v1.json",
+      "sha256": "bd818ce34d02fbc5ed5bbc7dd558f14b626136961d306e62e5dfc0782bb468cd"
+    },
+    {
+      "path": "woml/tests/fixtures/fork-branch/approval-in-branch.woml",
+      "sha256": "7077291c7e9009a681bc757873196a8c8620a4419d40d50b6197871d8452ce5e"
+    },
+    {
+      "path": "woml/tests/fixtures/fork-branch/choice-results.v1.json",
+      "sha256": "dfe7924effc992d2b2886e8bde9e2d34619a34c6ab422874b15e619f80b833a7"
+    },
+    {
+      "path": "woml/tests/fixtures/fork-branch/compiled-join-profiles.v13.json",
+      "sha256": "2b06e46ae77e63c6609d286c1253199da3ea94dd99000aaf558514cb2581199e"
+    },
+    {
+      "path": "woml/tests/fixtures/fork-branch/contracts.v1.json",
+      "sha256": "af43bceb42aba6a58c9781ef6476b87eb3a51759237ede0cc30872dfdbd50002"
+    },
+    {
+      "path": "woml/tests/fixtures/fork-branch/control-choice.compiled.v13.json",
+      "sha256": "790d33266abb184668cc6c6c18c9e53a42afb2b1341d41740de80f185cde86fc"
+    },
+    {
+      "path": "woml/tests/fixtures/fork-branch/histories.v12.json",
+      "sha256": "5550fba82c47fa5f7d55d3e7d9ad0568593e93c848f741ecc68f8610e97794a6"
+    },
+    {
+      "path": "woml/tests/fixtures/fork-branch/join-all.compiled.v13.json",
+      "sha256": "00a33b34824ce9676ec5a2b5c48be053a57f7ebed0d0619e4f9a82548cc55485"
+    },
+    {
+      "path": "woml/tests/fixtures/fork-branch/join-all.woml",
+      "sha256": "ccf6e002342a5c4832782f4e6aad38793060556d6efa00ef422f4a5a0e457684"
+    },
+    {
+      "path": "woml/tests/fixtures/fork-branch/join-none.woml",
+      "sha256": "340d634d2cab6e4a01a1f815b2b0d38d828f83fb61259c5bb50418fd43865b30"
+    },
+    {
+      "path": "woml/tests/fixtures/fork-branch/join-selected.woml",
+      "sha256": "5509924eec3afbef22dc06f67608e9bee9ad617c833166416ca390e56e9bae39"
+    },
+    {
+      "path": "woml/tests/fixtures/fork-branch/module-fork.woml",
+      "sha256": "23c07de8bfe5afdc7313833939c36cc29df8448df28afb8852520435b13a588b"
+    },
+    {
+      "path": "woml/tests/fixtures/fork-branch/nested-fork.invalid.woml",
+      "sha256": "7623f71bae4c295dcc6e5f2c3db1e8023f795515fed1f07a435f4be23aff5f01"
+    },
+    {
+      "path": "woml/tests/fixtures/fork-branch/root-first.woml",
+      "sha256": "581e3253d0d98b0b037060793e0146a147a32193cd5177bc62afb7560d8d753e"
+    },
+    {
+      "path": "woml/tests/fixtures/fork-branch/terminal-fork.woml",
+      "sha256": "bbc61ec943780d836755437c801e297f346ae27bf6239e6fa9cf17a9f6ba3618"
+    },
+    {
+      "path": "woml/tests/fixtures/hello.compiled.v1.json",
+      "sha256": "d055dda82a62efe2117c3fa53a2529c476831981cafb8230753f9027947a36e5"
+    },
+    {
+      "path": "woml/tests/fixtures/hello.context.v0.1.json",
+      "sha256": "ee19317925bc203d362bdcaa6be12104092eb52500dfba87b4c6339c055e290e"
+    },
+    {
+      "path": "woml/tests/fixtures/hello.woml",
+      "sha256": "21c3dad6d678dc14805cb543ab3e8b768a04542fc9f44ef2893fe2a7c32e2ef2"
+    },
+    {
+      "path": "woml/tests/fixtures/infrastructure-policies/coverage.v1.json",
+      "sha256": "48f7c7e455dc09f2c39fdb6b8749a46ad954ee05cc352f2fa5f9f272b3afbb79"
+    },
+    {
+      "path": "woml/tests/fixtures/infrastructure-policies/decision.v1.json",
+      "sha256": "a13f8a0bf5d5a0072f4402a29a1c18d8e4dd00c8cf8b51e8bc4c5c3992336d8e"
+    },
+    {
+      "path": "woml/tests/fixtures/infrastructure-policies/identity.v1.json",
+      "sha256": "9a6871c9fe695d91c59f3218fe32995e306c117882a664adde1e1d67ceec80b1"
+    },
+    {
+      "path": "woml/tests/fixtures/infrastructure-policies/operation-descriptors.v1.json",
+      "sha256": "d567313abb854982d29c9482a3c734e258b0fbdbdf7edd5a9e47370e127f5e8a"
+    },
+    {
+      "path": "woml/tests/fixtures/infrastructure-policies/production.signed.v1.json",
+      "sha256": "05d24c5803145a6ac29691a6a5bfdc10e8967d4ff5bb1131daaae08e608c0547"
+    },
+    {
+      "path": "woml/tests/fixtures/infrastructure-policies/production.unsigned.v1.json",
+      "sha256": "5b5e05304ca16f83f4475e36779ffdb7117c62cc60a09bd5ff03a8fa4889ded4"
+    },
+    {
+      "path": "woml/tests/fixtures/infrastructure-policies/threat-model.v1.json",
+      "sha256": "f445166d89ba5ecc6dcade5a7ad0673460899682a8a55a3cdcf8014da4ef200f"
+    },
+    {
+      "path": "woml/tests/fixtures/lifecycle/contracts.v1.json",
+      "sha256": "9c748d91bed66953458d7fc546bfc6e819a591a1e1534f016b426580e55dee4c"
+    },
+    {
+      "path": "woml/tests/fixtures/lifecycle/event-sequences.v10.json",
+      "sha256": "0b32d30cc946c79683b0b475340bf1f7dfda5ece2898f71a4ccd7e465aef5be8"
+    },
+    {
+      "path": "woml/tests/fixtures/lifecycle/events.v10.json",
+      "sha256": "674d7ef99835faf496145dad6dbb4c27d817fdd8b9e9aec09bdff06fe04d9cda"
+    },
+    {
+      "path": "woml/tests/fixtures/lifecycle/invalid-order.woml",
+      "sha256": "0945f15290e874923faa3541924f4e55c4baa0db14696382cdc360feb0022649"
+    },
+    {
+      "path": "woml/tests/fixtures/lifecycle/invalid-template.woml",
+      "sha256": "4ba312bb52add51afd896b5b5ad7f8a97b9f587ad2dbb1c6fa90a89166b7516d"
+    },
+    {
+      "path": "woml/tests/fixtures/lifecycle/lifecycle-module.woml",
+      "sha256": "632df461bac81331798f117ce29b37c1c0c4d68d79f4e45c96a30a8a5904cdc9"
+    },
+    {
+      "path": "woml/tests/fixtures/lifecycle/lifecycle.compiled.v11.json",
+      "sha256": "382a67f1a9636836b364600f082b9147cd8fd9e04e0dc34c324f6bdc573ca330"
+    },
+    {
+      "path": "woml/tests/fixtures/lifecycle/lifecycle.woml",
+      "sha256": "9fee40549e04d55d45a0d7dbe0fb6f411df8012052c1820fc256055b77619b65"
+    },
+    {
+      "path": "woml/tests/fixtures/locks-and-leases/capability.v1.json",
+      "sha256": "ba9a0b2759f1c009be24f0d67a5aa9a405db28c16aec654488c4aa7aabccbe6d"
+    },
+    {
+      "path": "woml/tests/fixtures/locks-and-leases/composition.reviewed.woml",
+      "sha256": "9fed6e366bfa871f30076d28e160f87237b1fda37d066fd3e55a76c8e8524ffa"
+    },
+    {
+      "path": "woml/tests/fixtures/locks-and-leases/contracts.v1.json",
+      "sha256": "9009eb01dca681b81d0de75635cd0da623903346588a4f29b864aac1c539847c"
+    },
+    {
+      "path": "woml/tests/fixtures/locks-and-leases/errors.v1.json",
+      "sha256": "f29eafeee56906155a9ce9a48b8170fdbbb30225ca347ba11a51f816d3fbb7f4"
+    },
+    {
+      "path": "woml/tests/fixtures/locks-and-leases/events.v17.json",
+      "sha256": "6bef85f15179dc1b1de33727cbc759300fa0a3bffbbd7375406bf89a8c51d22d"
+    },
+    {
+      "path": "woml/tests/fixtures/locks-and-leases/increment.woml",
+      "sha256": "f0ec5c660baf178fe1a5c5f9750c9007c7ea6dea07ecdadaa2a3ecf012880ba7"
+    },
+    {
+      "path": "woml/tests/fixtures/locks-and-leases/inspection.v1.json",
+      "sha256": "de576229100802a9e96c37e8ee2250dd2a1b6ffc8cf67503831add0eda49f778"
+    },
+    {
+      "path": "woml/tests/fixtures/locks-and-leases/model.reviewed.woml",
+      "sha256": "b0c00d8df2c76a49e69afabbc8ed10a8a75e26977bfea693604dbd10fe89c52d"
+    },
+    {
+      "path": "woml/tests/fixtures/locks-and-leases/model.v18.reviewed.json",
+      "sha256": "eb5365b2c73c4a6186be33eddd6bc184e6e5611c5232badfabbe2e9404843e0d"
+    },
+    {
+      "path": "woml/tests/fixtures/locks-and-leases/programmatic.reviewed.woml",
+      "sha256": "a6977b3352ed16bd3547fbcb932428d134a69b73c8a24da3ae97124feac1e98c"
+    },
+    {
+      "path": "woml/tests/fixtures/locks-and-leases/rejections.v1.json",
+      "sha256": "ce29b62d4e62bba63be310b8025eec4c0170fca2955b2be53dc130a3bc2b46df"
+    },
+    {
+      "path": "woml/tests/fixtures/locks-and-leases/reusable.reviewed.woml",
+      "sha256": "b3dc5f2de2925b09dd956403cf922b0874d3d2ba331202b9dad8971bff96a9e7"
+    },
+    {
+      "path": "woml/tests/fixtures/locks-and-leases/store.v16.json",
+      "sha256": "ee1a60f462297e834d2525885d22d897df188395f670cb46397b1653e98206aa"
+    },
+    {
+      "path": "woml/tests/fixtures/locks-and-leases/threat-model.v1.json",
+      "sha256": "92ecdddae50bb3e30744b7c46659b74d511ca0ec14d8359933efa11d7e58980b"
+    },
+    {
+      "path": "woml/tests/fixtures/locks-and-leases/transitions.v1.json",
+      "sha256": "7dad37dca7d8ed58123c679ad23e92f3e8f27e11d03d32536f9295ef71153ae3"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/customer-import.compiled.v9.json",
+      "sha256": "f90d107613f28c1f81ef7cab86cbbe0b3ec3269454cac0c69ce3cf20d0520e88"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/customer-import.package.v1.json",
+      "sha256": "a08bcfd4328eb0963d175a0540fb26baa532d6c9556ecc14f3d5d12a65628bab"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/customer-import.package.v2.identity.json",
+      "sha256": "713af623cd5d1d7f3a533084dd3fe68f002552dbbdfaa0653d529ae935b2c762"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/customer-import.package.v3.identity.json",
+      "sha256": "03d2a5e0a0b46361250ee95cfd585035f6b2be515a2fa554dde13087b17e952f"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/customer-import.woml",
+      "sha256": "ae534825f10c032648d5c12875ef559b37abdcfea7907203acfae4edfa94ee03"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/invalid-commonjs.js",
+      "sha256": "e44e7a74d2ebd9d23f661f74caa68b256c24a753d2b5faf953f94afac82cfd92"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/invalid-cycle-a.ts",
+      "sha256": "4d6d0024ee55fe2b4674e016e633f73c9c4645ccd3ade0a9dd7efa3edd7ef443"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/invalid-cycle-b.ts",
+      "sha256": "0518555e8b2c87a8bce00a9085a0a68822ab470ff229ec885412dc32255a8cf4"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/invalid-default.ts",
+      "sha256": "251c9bd692bdd7e867402653d65b983b57c1bf8b352ce821097cbcc0d24b99c4"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/invalid-dynamic.ts",
+      "sha256": "4c70540f34470018f17c2d6b98b070af1c86bba77fd97abb27a4f12df8bd206c"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/invalid-generator.js",
+      "sha256": "f232f74e9de265cafdef0d21559389735488491b9956ecc6577ad061a19e851d"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/services.generated.v1.d.ts",
+      "sha256": "9c58852687907d8544476125e84330d4e0526ea2739c311c19f2f1c41ac182f2"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/spreadsheet.bundle.v1.mjs",
+      "sha256": "8a474bbae11ac5793e2bcaaede1d78e0a691592f98c165c6ffa2a93b2319dcb1"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/spreadsheet.bundle.v1.mjs.map",
+      "sha256": "18904f79cb802e21efb5ebb83969a102e2f97c4adb3fa39fe7da7d5b6a64f2c6"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/spreadsheet.ts",
+      "sha256": "4c9e09d22a2cd866f6ede8cbae052d14f482e80d3864f8e3d4c14864d3eb9dad"
+    },
+    {
+      "path": "woml/tests/fixtures/modules/values.ts",
+      "sha256": "04dd382d1bb1fb3201b3695904a889d32a772b4ba6596f5d2c5b95827e875d51"
+    },
+    {
+      "path": "woml/tests/fixtures/parallel.compiled.v3.json",
+      "sha256": "0ac66c3ad83b3b7e63c6b811005d4fcec5a671e196c58cb833b84e5248bf90d7"
+    },
+    {
+      "path": "woml/tests/fixtures/parallel.context.v0.1.json",
+      "sha256": "ccb9475ecb2921f9a9a7da013e3c7af3854b330b0041f6cd1165eca7f622d885"
+    },
+    {
+      "path": "woml/tests/fixtures/parallel.result.v0.1.json",
+      "sha256": "4bbd215960dd5fd7c36482bfa3e0d5cb4c438a5a2737b033dc4d5c01a5faa858"
+    },
+    {
+      "path": "woml/tests/fixtures/parallel.woml",
+      "sha256": "1c59ed6716a4bf7fa708297f01ef033642e5d30631bcd9a03f4defbb36a96fdb"
+    },
+    {
+      "path": "woml/tests/fixtures/performance-eight-step-manual.woml",
+      "sha256": "2c2b1e196899c75a8a2bc92ad3b72dd8f841d8b97277c916193855cdc6f8bf07"
+    },
+    {
+      "path": "woml/tests/fixtures/performance-growing-context.woml",
+      "sha256": "78bc06952f3296ead4dd5bd8d2f5001e0fb198a467ac0ee76feb800737d125a9"
+    },
+    {
+      "path": "woml/tests/fixtures/performance-two-step-manual.woml",
+      "sha256": "e113a449bbe70390ad7ceee6b1fa5480dd8621236f8a76d5f4476aba041340a0"
+    },
+    {
+      "path": "woml/tests/fixtures/remote-execution-targets/dispatch-package.v1.json",
+      "sha256": "f0ae6ffbed0015853d472c9de85d6be1e4686c924fc1d472f1bc4e9d9358df4e"
+    },
+    {
+      "path": "woml/tests/fixtures/remote-execution-targets/inspection.v1.json",
+      "sha256": "841c7ab79381ec270b9afaf12352673eb7296e68b0a28e0544c39632257bb9a1"
+    },
+    {
+      "path": "woml/tests/fixtures/remote-execution-targets/model-module.reviewed.woml",
+      "sha256": "5743f55a626336fe438038c70d1b31b6b42ea9a22c931ea5d412d2fe25812800"
+    },
+    {
+      "path": "woml/tests/fixtures/remote-execution-targets/model.reviewed.woml",
+      "sha256": "e2a1ded0ad47b6fa98ee4adc0a0f4e24841648abf031a492089c0d32be6094d5"
+    },
+    {
+      "path": "woml/tests/fixtures/remote-execution-targets/model.v21.reviewed.json",
+      "sha256": "38ea46d84936fb6a90da1227fe1779615c37f006c094ffa0312529d31668298d"
+    },
+    {
+      "path": "woml/tests/fixtures/remote-execution-targets/reconciliation.v1.json",
+      "sha256": "d1c79b15a3bc29a759b6cae93097bc3d989d41f3d3fc65918ddb46530c05fd34"
+    },
+    {
+      "path": "woml/tests/fixtures/remote-execution-targets/release.ts",
+      "sha256": "23f5de7f7c9f27a37e6c8e5dc45dab89417745d668777de2adf0d8461ad99c92"
+    },
+    {
+      "path": "woml/tests/fixtures/remote-execution-targets/run-event.v20.json",
+      "sha256": "9424f61b47364337a174b6e0755d09e2e8a478f3fb952d8e30aa1184f4e5eaaa"
+    },
+    {
+      "path": "woml/tests/fixtures/remote-execution-targets/target-registry.v1.json",
+      "sha256": "8d767af918b1bea92d9578c921dfd3e61d5e66c0ee7c9aab421d7d0740b2ec6c"
+    },
+    {
+      "path": "woml/tests/fixtures/remote-execution-targets/target-trust.v1.json",
+      "sha256": "95d479550d953e9b68ce72ce83ff41b9949bf83700dce76a9c5d4732f46b4be9"
+    },
+    {
+      "path": "woml/tests/fixtures/remote-execution-targets/worker-configuration.v1.json",
+      "sha256": "e3d742d3f2e18ed4cb1840f8687aad041e7c4955c1321ae73a6dc0650a104f3c"
+    },
+    {
+      "path": "woml/tests/fixtures/remote-execution-targets/worker-protocol.v1.json",
+      "sha256": "8b354a47de41eebf75d8287cd58bff3fdeb4d8802a7721b8ec4fe8a379505b6d"
+    },
+    {
+      "path": "woml/tests/fixtures/retry-composition.woml",
+      "sha256": "6f54c1f8f57a9cbe227d5aee15eacd4c2c8c7f8e368b24a9f7916a7363b681f9"
+    },
+    {
+      "path": "woml/tests/fixtures/retry.compiled.v6.json",
+      "sha256": "b45e96c368dfdd04a0d159edb6b8c23b30cb9d4bef3d8b929777de91154052cd"
+    },
+    {
+      "path": "woml/tests/fixtures/retry.woml",
+      "sha256": "6ad7eba956c9996f66c14bd7dba2e427e72a926564b02fbce8974faf9130f375"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/calculate-discount.woml",
+      "sha256": "7fc424c92d88613ebe0c46ed2109b9cf66f4cfcbe6e3acd6637c5e8e60aaa2de"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/contracts.v1.json",
+      "sha256": "3a596b81b9b7ace76be21f097a1374dea1d6b5533c73ea62cb430ee44a367c3b"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/custom-provider-workflow.woml",
+      "sha256": "ac1bfb3f6998b077002a3f6817895f0dae04f77ac0abc19ab60c03973f2def06"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/custom-step-workflow.woml",
+      "sha256": "8d98eca89e48162e247702459c9fc832887f4c191976257c5c3c66d8e51caea8"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/cycle-a.woml",
+      "sha256": "47166648bac665180a3d4620b4de7a187f1be349c3f2d67ab2d27e5164982d93"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/cycle-b.woml",
+      "sha256": "f92efc4f8c6113bd91eb02f5059ea06e769a8c71a405a82de6d829bd9250d9b3"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/event-history.v13.json",
+      "sha256": "bab65ed80c145f98123418386ba270ff2fc95e70cc4b2c56cf35115be1efa437"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/local-approval-provider.woml",
+      "sha256": "0fdbccc54e9535e3500d32973fa32ee171377f5ceca06669e414923b84d12836"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/local-provider-approval-workflow.woml",
+      "sha256": "e453976afc653b954bc940345df2ff87d8d69cba250eebfc66ac8577b18f40c1"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/mixed-provider-workflow.woml",
+      "sha256": "f889123e8ae029aaa2633b6f67a105465d2459f28b4584747c1327ef3574684f"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/model-v14.reviewed.json",
+      "sha256": "b0e3d6a648a6cedd0f4362ee389048983e5c10a2db6f1b6380738516a36e2584"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/notify-with-telegram.woml",
+      "sha256": "db88ee2d3e0cc7ea83700f763101e122cfe116ed51e697fa47af262ea3a74af0"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/pricing-helper.ts",
+      "sha256": "fc905a92e86fcf40cb77a9891fdb7c04c402ee8aa1b0d8a9d373b6d22d8e0864"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/pricing.ts",
+      "sha256": "9c8aef7221a7569247c44e1c02575a1b7e5f1f5f1d04507eb649406a9bfc5fb0"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/provider-protocol.v1.json",
+      "sha256": "b3ffa11d27396609962d683080b8c521f32b7d1ad687a1c0f4c8853b10c8083c"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/semantics.v1.json",
+      "sha256": "25b3f7ea04aa5bbc153692939109ad0b95e3c20547248f824d9e871552f5d2dc"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/switch-control.reviewed.woml",
+      "sha256": "2f85c05d58965319b35c0598d0ea08d836027924e98f82091f3017ff21b1338b"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/switch-result.reviewed.woml",
+      "sha256": "c94e08d9fcca42c69bd0a3e8b978df4576e293a7444e1eb036e9e304efe8fc96"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/telegram.woml",
+      "sha256": "bde8cfdd39263fcce6704a693fbb18a3c5f3ff0da98e333e982a2309d2cca488"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/woml-custom-data.json",
+      "sha256": "2fa026f07c73506244308167c6386d268df1d3988213f04df16968f5e4b0b5ed"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-definitions/workflow.woml",
+      "sha256": "183075cc46e140100e568f764b94196e09179cf231b4904e34a04e401eddd1b1"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-production/approval-composition.woml",
+      "sha256": "b9f03d26eb5160e1ac57ade4aa84aaacb2950eded9a9601eda80c07341be5846"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-production/calculator.woml",
+      "sha256": "6bb7f4b242f2c40898c7c13d215eb15503a2a5de5d666d8cf8df555d88bc9b81"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-production/call-workflow.woml",
+      "sha256": "0bb5bbcfa68c078c62bae33b0e29e80ba4726a8e5b2a9c94f3d6789c66d3cdd4"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-production/cancellable.woml",
+      "sha256": "bed50a157ad596d4b0cd82d0c3dcb2d3cf0f049b99e3bdd3e834b3154b41c578"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-production/composition.woml",
+      "sha256": "2974b03ddeac982613a88294877059c7b061420ed8c86fd059ee9a30d6d0e08b"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-production/math.ts",
+      "sha256": "05f3d5cf460b4446d5588d198a61556b0394eeb0fba71057db8c8735e013e29f"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-production/read-secret.woml",
+      "sha256": "c69af8acf0404be579f44a7f52c284d0bdc2fafbf373fbf20b6e771cb9eebcda"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-production/scale-value.woml",
+      "sha256": "9ff13e9b8525d6dddd3edfd47e8dbdf449864ad119cdf8ce8f5798c04f48f0eb"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-production/start-workflow.woml",
+      "sha256": "c90107777ec7ad03dd91de6af19f76a39a2a7f3c1e4c41f2f781333485f7fccc"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-production/terminal-failure.woml",
+      "sha256": "acf9643e8cc6e3593bec6711510d80fb6219ba48ce79488135f05b65559e5400"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-production/wait-value.woml",
+      "sha256": "547589fda53d7697071eb9dd3a6b6f4f359df410191951568ed71495f1d94427"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-production/woml-custom-data.json",
+      "sha256": "bdc71e32789e5324dcd63fe9a71fac07918608eac815e0e5f9c497c9b4286a9e"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-production/workflow-caller.woml",
+      "sha256": "5f186c0241a8df69b02706ee5f7e730c925cc4bb93ded4d4b4594335321c07eb"
+    },
+    {
+      "path": "woml/tests/fixtures/reusable-production/workflow-timeout.woml",
+      "sha256": "cfe06c3c49feb2b7422c483d1150427b38b397f31b75ad8f1abc223117ac1f99"
+    },
+    {
+      "path": "woml/tests/fixtures/rich-plan-approvals/binding.v1.json",
+      "sha256": "11b3e45376cbdc52241734268958f17821af7d0bbd46a19bd5ea59c596d3bf6a"
+    },
+    {
+      "path": "woml/tests/fixtures/rich-plan-approvals/contracts.v1.json",
+      "sha256": "8b863c8a07504393e710b828050e239ff38a1c27accdd67e0e186fcd91883255"
+    },
+    {
+      "path": "woml/tests/fixtures/rich-plan-approvals/events.v19.json",
+      "sha256": "70ef527c6f5f0850e2396714e04e3c2b884b5b34126f28702ea6d4adb264376b"
+    },
+    {
+      "path": "woml/tests/fixtures/rich-plan-approvals/http.v2.json",
+      "sha256": "d91c2c7f8f2da0e9060dddde2d26193be9dccaa65b855018fa036a157b0cf6b5"
+    },
+    {
+      "path": "woml/tests/fixtures/rich-plan-approvals/inspection.v2.json",
+      "sha256": "d27aad3860998c5b9685db7672cf497255efc7c919100d1232ccd8626d8344ef"
+    },
+    {
+      "path": "woml/tests/fixtures/rich-plan-approvals/model-module.reviewed.woml",
+      "sha256": "10bc880a93aefba9ea20a586ecb654d51b0a356c9c850164cf55b9d7cbfba4ad"
+    },
+    {
+      "path": "woml/tests/fixtures/rich-plan-approvals/model.reviewed.woml",
+      "sha256": "63a425778e92742a8cbadf161df0ab4c24d0af34c403d9a6e6366b42ae65d628"
+    },
+    {
+      "path": "woml/tests/fixtures/rich-plan-approvals/model.v20.reviewed.json",
+      "sha256": "fc8b4aa25229259cbc8b5664c40049b3c2e0762563c785b9204e2ace0981e570"
+    },
+    {
+      "path": "woml/tests/fixtures/rich-plan-approvals/provider.v3.json",
+      "sha256": "23f0d0a89194259e0fef17d7cf3789353dac333b20cd4942d595627834de8a32"
+    },
+    {
+      "path": "woml/tests/fixtures/rich-plan-approvals/review-builder.ts",
+      "sha256": "b922ac8ea22a48751622a3799f485eff3535067808f15ce9879a948fd7be6ed9"
+    },
+    {
+      "path": "woml/tests/fixtures/rich-plan-approvals/review.v1.json",
+      "sha256": "46a182e73f9e6dbe16a9551b54de72341825bcf3d944914a550ae10b558c0670"
+    },
+    {
+      "path": "woml/tests/fixtures/rich-plan-approvals/reviewer-directory.v1.json",
+      "sha256": "226469894066720ba837b99136151cd389fcea622c20e2d5001dbeafbece89b2"
+    },
+    {
+      "path": "woml/tests/fixtures/rich-plan-approvals/store.v18.json",
+      "sha256": "f61b03b7b57b5d5be8b553534d58b12bee2ba7da904d01b91a2e39223217e94b"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/approval-approved.events.v4.json",
+      "sha256": "55a1c4cb6694ea16ea424ae7d89a39fba08ba55615dac480296fec29e7a5b45b"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/approval-rejected.events.v4.json",
+      "sha256": "d362ba278dfe7b9db4e5bc0efec37918e7ed5eb2856fb796d4e3a74731a1ab97"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/approval-slack-all-failed.events.v5.json",
+      "sha256": "30a89b00e6b0ba3daf3e596b257b04274bee69bdedf984d3373b82ee5fc1f2cd"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/approval-slack-approved.events.v5.json",
+      "sha256": "f8601a57a0e5a0e93938852419835fc7976ceea51469833b8d586e37ce3ced93"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/approval-slack-partial-delivery.events.v5.json",
+      "sha256": "d29bff7cb3bbad183b1ed59deb073d962f63680a20f0db7ab34f418df8036d32"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/approval-timeout-failed.events.v4.json",
+      "sha256": "de4760928668dc87fe0e5c8cb1e046db453a41873d6b5c737ace1e58d2ed531c"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/approval-timeout-rejected.events.v4.json",
+      "sha256": "497613f0e882de7359313433cac9fc7899ce2df2a756f7afc4dd181312d7d176"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/branch-selected.events.v2.json",
+      "sha256": "fde08882e1ed774c6d91ab80693231a9399370fa2136c4af1fe5590c3c59a6ae"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/branch-test-not-boolean.event.v2.json",
+      "sha256": "b0f642987552a7755a211bfeb2bd43efaa7a8d44177d8aa33afc57f7ba2d899c"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/hello.events.v1.json",
+      "sha256": "8a584ad0e1dcf4e19934a450ec22abdcc6f780ff045b32340cc39b2f7de2ffde"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/host-crashed.event.v1.json",
+      "sha256": "054ef4be2f4e5903349eb716bc79fe34a330d54fc55c9634a9a5bdab0d6519f2"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/interrupted.event.v1.json",
+      "sha256": "cbd291b39b4604c4ac0961e47a8a78cb9c910a4009685c48cc772a875447ede6"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/parallel-fail-fast.events.v3.json",
+      "sha256": "28a898e502c94c13f7637f6df29983c6c93442eef36091abf0013270b146aa81"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/parallel-succeeded.events.v3.json",
+      "sha256": "97c69e4313f65f50490135fed51c5c2b6cae954d01f019ab60f100bb6bb9015e"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/parallel-wait-all-failed.events.v3.json",
+      "sha256": "f4313ee13295b45dfcb42feff0c66e522831f350f27045472810bfb4728b4b28"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/reference-not-available.event.v2.json",
+      "sha256": "e5b5ad31e3a5c75a3df7200303ecfd886e92bf168da0215b093846cb7ed581aa"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/retry-ambiguous-recovery.events.v6.json",
+      "sha256": "b76de1504ec06e5053704abfcad3f54725885543ecda5fc81ffc6046d903c258"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/retry-exhausted.events.v6.json",
+      "sha256": "02d8729ecb46284318159854af2456a38f929c87864d5c6be4f74fd916c5e697"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/retry-scheduled-recovery.events.v6.json",
+      "sha256": "23429230901b4065517c9a6f9d309780823e7b3d35a4ff993e18bdaf1808bae4"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/retry-success.events.v6.json",
+      "sha256": "0a1a7a47f6f4167f467b147861acef83ecd36c25554b519bea9d37b94ca529a7"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/services-http-failed.events.v8.json",
+      "sha256": "bf7f0e304bd5ddab89a4467ac4af23ae54d1a94845ed03397f985987d2a09ffd"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/services-http.events.v8.json",
+      "sha256": "685861177e427d2f8fdeba8086dee103028e66a31c4c88d361455d5ba04a728b"
+    },
+    {
+      "path": "woml/tests/fixtures/run-events/webhook-trigger.events.v7.json",
+      "sha256": "2a8fd914e64f6672c50708b3f326f1e33470911012f5dbfb2b95c89537f6dff1"
+    },
+    {
+      "path": "woml/tests/fixtures/runtime-policies/contracts.v1.json",
+      "sha256": "8d715b80713a8380004fad75c412fe1a1748b0e20cc27436fa8e709b2bfd1494"
+    },
+    {
+      "path": "woml/tests/fixtures/runtime-policies/event-sequences.v11.json",
+      "sha256": "f246e119b5802485ec92b79b2b50473ad1d711af1ea1236eeb1d1af37e89b44d"
+    },
+    {
+      "path": "woml/tests/fixtures/runtime-policies/events.v11.json",
+      "sha256": "4cffc609a0dab4d913b9f94f3f725db68de6bb6c556e08ed341a56cc9ca8b9d9"
+    },
+    {
+      "path": "woml/tests/fixtures/runtime-policies/overflow-transports.v1.json",
+      "sha256": "ec028e5d1e45172af59be8f7439fbaaf714714c3f8e9a19f6408ad06f5ca1483"
+    },
+    {
+      "path": "woml/tests/fixtures/runtime-policies/policy-module.ts",
+      "sha256": "780da513a6edb68ce5be405e5ef5912e5732ffdd160d42472de396e77edca2ae"
+    },
+    {
+      "path": "woml/tests/fixtures/runtime-policies/runtime-policy-module.woml",
+      "sha256": "79bdd1ce046d49c0cc180e672884bef85fe8f19f343d81dfd7b101e6ec3591a7"
+    },
+    {
+      "path": "woml/tests/fixtures/runtime-policies/runtime-policy.compiled.v12.json",
+      "sha256": "689669c5afbbaf4735be9ade7e8f1b15ab143cc6bf1d04ea09aa3e652ca68ea4"
+    },
+    {
+      "path": "woml/tests/fixtures/runtime-policies/runtime-policy.woml",
+      "sha256": "8e7a6cf2f82edca348ab371cd9397798ba4490edc5561471064cfdaae8b7ea82"
+    },
+    {
+      "path": "woml/tests/fixtures/schedule-semantics.v1.json",
+      "sha256": "494130beedabb5c6db577c87fcb8e0314717e00214a095fb6e59e2176cd13503"
+    },
+    {
+      "path": "woml/tests/fixtures/services-bindings.compiled.v8.json",
+      "sha256": "8051ae08342564db2a9a5a1851c4e713d7d0086330e3eb5d22155ab42b3252a8"
+    },
+    {
+      "path": "woml/tests/fixtures/services-bindings.woml",
+      "sha256": "e2a983ce1b05310bfa8576bedcab43b1622c1a4a06500e9d5b289d37fd5d3c8b"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts-invalid/process-policy-unknown-field.v1.json",
+      "sha256": "284cfb5f230e87b09bfc141e5e93ce3a4666211ded0ce44f575830d84674c7c2"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts-invalid/process-request-invalid-path.v1.json",
+      "sha256": "153b011196640b67808a293c499b5b1bbab8af9ad6d3fd203eba91b60690ae89"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/cache-request.v1.json",
+      "sha256": "a5691062128e73653220cdfebda2709c6259e192c317cca4505e9f14dcd38c91"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/cache-result.v1.json",
+      "sha256": "cb46db771836a511b3be6a28f70993ca27c75e23e9db47958424fd6c7964bca4"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/capability-failed.v1.json",
+      "sha256": "8441491dfefccdcaf57ed44d9cd2a76f8fba1dac0ce8352437025c28b92d5c24"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/capability-host-crashed.v1.json",
+      "sha256": "50fb0657dd11f3b116a36c87b04e09011abdf37c8065c7d83b251cd87eb97af5"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/capability-process-cancelled.v1.json",
+      "sha256": "c0f8ad668b27daad3b58fb4232e24bfcf5e2367930465963cc2f01bde6d2a3ac"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/capability-process-exit-failed.v1.json",
+      "sha256": "179d827ab98ecfa908125fa4f3928b3d02453122685f35d7e949a12065235207"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/capability-process-permission-rejected.v1.json",
+      "sha256": "61144abb604981a491f228c5c9824c5d97016d267e633e888a6f32943db8705c"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/capability-process-request.v1.json",
+      "sha256": "e3b526319dd4d3a7415e219b046dfd20ea865541a26d712f8ea049cf8c4aceda"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/capability-process-succeeded.v1.json",
+      "sha256": "89c91d86f5816ae2eb18f5d45fef76a10f611996ab12a7a81f7084d577dfdb65"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/capability-process-timeout.v1.json",
+      "sha256": "698e4a4f001d4fe67a9657244e272a66c4fbbedf7fe1aab549c706f4c3b0939d"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/capability-request.v1.json",
+      "sha256": "77d1086fcb50ef55240a29eb46b6ab1b74753cd94e5ae04312f116170af348b7"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/capability-succeeded.v1.json",
+      "sha256": "62071f5eb98d79c8aa07c565ddf98bdbdc563af350305f212d798f992fc1a6d5"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/database-postgres-request.v1.json",
+      "sha256": "25989941f7edce366d188fda9b8e696381e29932b55aa772470d933731c79ec7"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/database-postgres-result.v1.json",
+      "sha256": "4d87cf08d777fd0570b42f55eacb1e479006c7b54b977276852700ee0e30b009"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/database-request.v1.json",
+      "sha256": "5ad9293d6ae226b8c55931429a7323d47706e44b9602ef9ced047151eb0679b8"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/database-result.v1.json",
+      "sha256": "204d62be4444cbdca09b63265f9c8f3e63a8efcc41770ba668c3714147a9342a"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/events-request.v1.json",
+      "sha256": "e1a539918e9ae738055b8113feebe9c2822ef9de84a614f26bf71abaf141ee2f"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/events-result.v1.json",
+      "sha256": "c50f3ddef01bbe515fb3bb9e48f359467e850fac1071589ca7bcbbd0feff2360"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/managed-http-request.v1.json",
+      "sha256": "d36b472cc0b46bc4a7691505997c3eef10ab3c7d8ce1ba1494993c5471993189"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/managed-http-result.v1.json",
+      "sha256": "e71247a932c3e18898def797e958b97f96516e781b0f16f1e88d4f82292084e8"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/managed-http-storage-request.v1.json",
+      "sha256": "9adab57a1e01e74d5a4e93a72ab6b4ad533475ec666c1a4df25dc0d2bd010653"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/managed-http-storage-result.v1.json",
+      "sha256": "638f4f5dd1e68b28d484d10b011ffc9e00ef6f9f9ea6261598e4000452e48c6e"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/native-fetch-completed.v1.json",
+      "sha256": "e57ab03dd9d2bccf1b7aa3838edca784a1aafa5242aae70e27d8fcf55a0e18e3"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/native-fetch-failed.v1.json",
+      "sha256": "452c4915791cc5a1b4041a20cb316dcd1e9be2bfe7ffdd070eae92dc68404b0d"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/native-fetch-started.v1.json",
+      "sha256": "a60c4c7e0412402df07f5aa905e98cccc18ad894f381291109c00402ea860270"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/process-policy.v1.json",
+      "sha256": "3eb1c064c3c09b45cdcdf84a97a9c96bcf6d4112361f7971d67abfbdfd8e38b8"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/process-request.v1.json",
+      "sha256": "a3d1dc98e9452cb8c9d0a0c40838c062ab0bca46f4ed77a633d3ffcc62421def"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/process-result-truncated.v1.json",
+      "sha256": "c685dd72641411d0bf06ae7276bc0799f20a9e2b5f2ac74d6bc9ae460883f85c"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/process-result.v1.json",
+      "sha256": "f46db411ea059c7e49a06c85c6b0bc2a9786a77f5e472e0f7fe3b26eaf9ef22c"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/script-host-messages.v4.json",
+      "sha256": "c71f3075d4a077d967e9559041e4b627b750d01d694c76c2159290c487309858"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/service-progress-failed.v1.json",
+      "sha256": "9aa7cffe73adffff7a38c1037a772122c6f3dba21457c334d95f0d5714027f9b"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/service-progress-started.v1.json",
+      "sha256": "3d536a1e9d43d38e87a26e65158ba00ba358d58c146c7edfb6c8862281e8493f"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/service-progress-succeeded.v1.json",
+      "sha256": "6e5148de995a271d4b7d1b8e62b68962a8d0c520234aede9895493b72f446fc4"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/storage-request.v1.json",
+      "sha256": "1041facb217741b3a469e927562edd0c130dc868a92f3f70484ebffad82d604d"
+    },
+    {
+      "path": "woml/tests/fixtures/services-contracts/storage-result.v1.json",
+      "sha256": "78092a3a5e24a6bd7cd02e338f3467de4db8b08a91b8033b8272f67d4b1f3b59"
+    },
+    {
+      "path": "woml/tests/fixtures/services-secret-runtime.woml",
+      "sha256": "d348ff4829e14d61246057bba0e822701ea34423a60638d4922ec9b6e18fc226"
+    },
+    {
+      "path": "woml/tests/fixtures/streaming-output/budgets.v1.json",
+      "sha256": "06aa488e5ed0b2394517a8fa0601f20bcbf66598a2600af5c8049be824323506"
+    },
+    {
+      "path": "woml/tests/fixtures/streaming-output/contracts.v1.json",
+      "sha256": "f1d5522700d7c644a11e958b2dc0f943279d39331b4888eaa802556d1cdf4d35"
+    },
+    {
+      "path": "woml/tests/fixtures/streaming-output/inventory.v1.json",
+      "sha256": "b7d992d11140e4e7b5d5559047abfa3c8fcdde314cddb261e63cc5250ad55213"
+    },
+    {
+      "path": "woml/tests/fixtures/streaming-output/threat-model.v1.json",
+      "sha256": "91b80b1679da654087d410349792a7422d960b7f3a53535bff0c42b001bce5a5"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/ingress-accepted.v1.json",
+      "sha256": "5690eabc1fde17de3eec188cb6fe1095b89f6d4d5f2dc7275b1dbd54dedd134a"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/ingress-admit.v1.json",
+      "sha256": "fd227a02def22c9bda96796335f027fe2e82e8020f0adb061d8298b0119a59dd"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/ingress-conflict.v1.json",
+      "sha256": "fe109df49b43753490df4e8b76363a562e9b851a7f5039983d95f0e47261e0b9"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/ingress-corrupt-history.v1.json",
+      "sha256": "22ec6b631a2a8ca0df4cbc0f4706fc6ce30bedc4687a52c8b12553baeec7ceaf"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/ingress-duplicate.v1.json",
+      "sha256": "fcca17aec7d8afcdbdbbed81bdc22366abf99942f14cf840e582c6da187a7fbe"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/ingress-restart-duplicate.v1.json",
+      "sha256": "8cf7edf3faf562129ed656bfdb4f6dd25e220310f0a8c178540fbafd46d56e40"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/occurrence-webhook.v1.json",
+      "sha256": "66c66e2cc65cd2fd75fb27d9bd41dd38206c886e6fefa0c02f208137fe5cae38"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/progress-accepted.v1.json",
+      "sha256": "66202cec61269fd1a99cb3bb662853e05e7814a71f53c37333776eec17012c34"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/progress-ready.v1.json",
+      "sha256": "cbd6a3a6a3e8c4f730ab0d27e743c22cc0c8f1799d644062e0c410e3b1051450"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/progress-rejected.v1.json",
+      "sha256": "8dc1510377361ab2440f0a486da3266d342fe74c088dcdd2ad301b69f2119785"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/progress-run-failed.v1.json",
+      "sha256": "34e62a484f91e1fb8f857c2042fd9c85927de3a4e408e132eb1ecc119767a694"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/progress-run-started.v1.json",
+      "sha256": "32b62d6f4069d11ac3c58b553300fb344a4bf1738abc34d17499bdc66a238de1"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/progress-run-succeeded.v1.json",
+      "sha256": "50586aa9452f7ec45575a357691cb6fee55e1c6fabbf7753929a4bbcbd048ac7"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/slack-acknowledge.v1.json",
+      "sha256": "1c23feebe41472bbe6e953689fb99244f5bd122a1904fa76f1da0e5dbd4ba55a"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/slack-connection.v1.json",
+      "sha256": "030d3c2559d8bc7266c68a989afc8e0c58d8fb92ae1846eacec305618a2cc045"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/slack-event.v1.json",
+      "sha256": "a60091f1aabd64ea23aa3ecc32ca88c3767ff37f386f4805801767814de7ab9d"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/slack-ready.v1.json",
+      "sha256": "f8fdbe6cf4394eeee4e422e4b294d375397efb0ac135b3a5d4e3fb517a483703"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/webhook-accepted.v1.json",
+      "sha256": "c19bba62c08a75397a6dd3353bacc36365113eb314e4fb09a4f69849d04783f6"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/webhook-duplicate.v1.json",
+      "sha256": "74d07a33d33980dea2a16943f07efc72d4465c20a17399678e5b8a14a1a08888"
+    },
+    {
+      "path": "woml/tests/fixtures/trigger-contracts/webhook-schema-error.v1.json",
+      "sha256": "4f2fff9cc8ae61653c20e1410a4c5db464d0fb41fa9899e9b6941efa2f417094"
+    },
+    {
+      "path": "woml/tests/fixtures/triggers-event.compiled.v7.json",
+      "sha256": "4378b928c5f6acb966fbe355f3a5e9202a02c8de545cd50dfd7e84be6af748c1"
+    },
+    {
+      "path": "woml/tests/fixtures/triggers-event.woml",
+      "sha256": "4135ac3bebfb18ae9111a6af33cc66dae24dee98e748afbcc100027adfa8c8b4"
+    },
+    {
+      "path": "woml/tests/fixtures/triggers-interval.compiled.v7.json",
+      "sha256": "d165711e18681036d5da1fbe7f7de58293e72b551a74284484320de790592858"
+    },
+    {
+      "path": "woml/tests/fixtures/triggers-interval.woml",
+      "sha256": "1a584dda431a46852a30adb2f606e6397db9439564b6e58acc415d5ec9480455"
+    },
+    {
+      "path": "woml/tests/fixtures/triggers-schedule.compiled.v7.json",
+      "sha256": "ac099add26c65c8846b652f1a74a7048fa5d2937c456f6cedbb25a7c6977a2cd"
+    },
+    {
+      "path": "woml/tests/fixtures/triggers-schedule.woml",
+      "sha256": "76b400653b4169e349a3409bdb99e59eb712d946ce6b5ac5aaff29e1fd40b527"
+    },
+    {
+      "path": "woml/tests/fixtures/triggers-slack.compiled.v7.json",
+      "sha256": "a380eb92f0ae8dcdb5812d54e10b3420c48f48f48bb74921307f1917c19de1b2"
+    },
+    {
+      "path": "woml/tests/fixtures/triggers-slack.woml",
+      "sha256": "d4c4197bd6893783ab3fc1a07b724c0c59dd6037071ea380459bfd5ded610262"
+    },
+    {
+      "path": "woml/tests/fixtures/triggers-webhook.compiled.v7.json",
+      "sha256": "0c3c4a08489bc8a2a826d7bed01ae291388048a5f26f037b21e46c65423c8e38"
+    },
+    {
+      "path": "woml/tests/fixtures/triggers-webhook.woml",
+      "sha256": "37c2c203bfa627886e3dd24739a9671c66703e591178dd1b405efcfb636c8684"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-call-contracts/cycle.v1.json",
+      "sha256": "09f46fbd83c2f7650013daba75054ab3b899c3d5ba037b745b659df9d8740879"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-call-contracts/failed.v1.json",
+      "sha256": "a943a37312dbd2a52a7cb2ade0e6c6fd96f483b92b0e5682265a9ebba752d625"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-call-contracts/idempotency-conflict.v1.json",
+      "sha256": "be6129ff7856f3eeb801e0890a48b5053b938e01835c9fa5f1906d5e8b0ec125"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-call-contracts/index.v1.json",
+      "sha256": "0c753e29004250ffd002ff4bab28c4eec984f1fc1d48da9b61efc2c839b77f07"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-call-contracts/missing-result.invalid.json",
+      "sha256": "0a4089fb69249589d79ec2e74892dfea82d462499b9e292409ea2af1a2c49823"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-call-contracts/null-result.v1.json",
+      "sha256": "254abd645afa516b9e98d2e4a7139697369abcd6e474f13f930482f8864c51b5"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-call-contracts/request.v1.json",
+      "sha256": "6d0b8e62b7b23f166a0baf63e6a24ed157b7294d1b6075cfc0ce9f38780841d3"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-call-contracts/routing-registration.v1.json",
+      "sha256": "4db0b083230ac2ecf2146cbb806276e7626969e3a13d95ae77f04cb44ce429ef"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-call-contracts/routing-wakeup.v1.json",
+      "sha256": "1f2b1b0072e281cecc332a0e2c15bb767972920e1148c943abe38a58b8782c07"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-call-contracts/start-request.v1.json",
+      "sha256": "3850af8355809b4a05519e9b02286888e6d869ced377ccff0025a8455781bfa1"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-call-contracts/started.v1.json",
+      "sha256": "b81721b421ca767678dfe0a290dc3a5cd88b4dd8bd407891229998c26f799897"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-call-contracts/succeeded.v1.json",
+      "sha256": "c82f62398416af0ce88acf4d16619e1c9fa3f608412386f5a821d7db9e7db97d"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-call-events/child-run-started.v9.json",
+      "sha256": "9334e3ae5103f9127a734cd2c2741c0219799ab516b49ddfc78ec9831474fffb"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-calls/calculate-risk-module.package.identity.json",
+      "sha256": "e949b486c4e62451bdc75da205ca56f9196447443f4a6106d012e48aa014d583"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-calls/calculate-risk-module.woml",
+      "sha256": "0469824b4c73ea55325f31368008b83441a76cb5c5aaa794e3658473837f4eb1"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-calls/calculate-risk.compiled.v10.json",
+      "sha256": "08bc901c2f5ec7f2de73b204b4d9a4b271ff02831f25b96d76801594a62ea5cb"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-calls/calculate-risk.woml",
+      "sha256": "c023fa7ed0a3cc21bdc17acd5f70938e0249ecc461338b7434a25d3ab37cbbc2"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-calls/request-risk.compiled.v8.json",
+      "sha256": "17b1d2a415ed829b46050ef4194928b71139bab633a33f3a3a8efc47cf9ba9a4"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-calls/request-risk.woml",
+      "sha256": "1259f74f89964195afe6f85712b20a9e09223626db65a62e335f902f9910f8b3"
+    },
+    {
+      "path": "woml/tests/fixtures/workflow-calls/risk-helper.ts",
+      "sha256": "cdc333ec5af925703588f93fdc0785852315b6d0ae571b7ffdf5d13202d1f781"
+    }
+  ],
+  "generatedEditorFiles": [
+    "woml/tests/fixtures/durable-waits/woml-env.d.ts",
+    "woml/tests/fixtures/fork-branch/woml-env.d.ts",
+    "woml/tests/fixtures/lifecycle/woml-env.d.ts",
+    "woml/tests/fixtures/locks-and-leases/woml-env.d.ts",
+    "woml/tests/fixtures/runtime-policies/woml-env.d.ts",
+    "woml/tests/fixtures/woml-env.d.ts",
+    "woml/tests/fixtures/workflow-calls/woml-env.d.ts"
+  ],
+  "sha256": "f933a3183674127a96b39dd413484504177d07f09d7321ad3e8ae039639bcc5f"
+}

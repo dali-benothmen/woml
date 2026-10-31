@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier};
 
 use chrono::{DateTime, Utc};
+use rusqlite::Connection;
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
 use woml_engine::{
@@ -213,7 +214,15 @@ fn admission_creates_one_truthfully_bound_child_and_reuses_it() {
     at,
   );
   let mut store = DurableEventStore::open(database.path()).unwrap();
-  assert_eq!(DURABLE_STORE_SCHEMA_VERSION, 15);
+  let version: String = Connection::open(database.path())
+    .unwrap()
+    .query_row(
+      "SELECT value FROM woml_store_metadata WHERE key = 'schema_version'",
+      [],
+      |row| row.get(0),
+    )
+    .unwrap();
+  assert_eq!(version, DURABLE_STORE_SCHEMA_VERSION.to_string());
 
   let first = store.admit_workflow_call(request.clone()).unwrap();
   assert!(!first.duplicate);

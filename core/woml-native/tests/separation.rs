@@ -48,8 +48,37 @@ fn native_manifest_has_only_the_woml_engine_as_a_local_dependency() {
 #[test]
 fn native_adapter_does_not_import_the_legacy_core_graph() {
   let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-  let adapter = fs::read_to_string(root.join("src/bridge.rs")).unwrap();
+  let adapter = rust_sources(&root.join("src"));
 
+  assert_adapter_sources(&adapter);
+}
+
+fn rust_sources(directory: &Path) -> String {
+  let mut paths = fs::read_dir(directory)
+    .unwrap()
+    .map(|entry| entry.unwrap().path())
+    .collect::<Vec<_>>();
+  paths.sort();
+  paths
+    .into_iter()
+    .map(|path| {
+      assert!(
+        !path.is_symlink(),
+        "Rust source must not escape through a symlink"
+      );
+      if path.is_dir() {
+        rust_sources(&path)
+      } else if path.extension().is_some_and(|extension| extension == "rs") {
+        fs::read_to_string(path).unwrap()
+      } else {
+        String::new()
+      }
+    })
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+fn assert_adapter_sources(adapter: &str) {
   assert!(
     !adapter.contains("crate::"),
     "The extracted adapter must depend on woml_engine, not crate-local legacy modules."
@@ -57,7 +86,8 @@ fn native_adapter_does_not_import_the_legacy_core_graph() {
 
   for module in LEGACY_MODULES {
     assert!(
-      !adapter.contains(&format!("use {module}::")),
+      !adapter.contains(&format!("use {module}::"))
+        && !adapter.contains(&format!("super::{module}::")),
       "The extracted adapter imports legacy module {module}."
     );
   }
@@ -66,6 +96,30 @@ fn native_adapter_does_not_import_the_legacy_core_graph() {
     adapter.contains("use woml_engine::"),
     "The extracted adapter must call the standalone WOML engine."
   );
+}
+
+#[test]
+#[should_panic(expected = "crate-local legacy modules")]
+fn native_adapter_guard_rejects_a_hidden_private_module_dependency() {
+  let sources = [
+    "use woml_engine::RunEvent; mod private;",
+    "use crate::models::Workflow;",
+  ]
+  .join("\n");
+  assert_adapter_sources(&sources);
+}
+
+#[test]
+fn native_adapter_guard_allows_private_bridge_owners() {
+  assert_adapter_sources(
+    "use woml_engine::RunEvent; use super::configuration::runtime_options; use super::errors::native_execution_error;",
+  );
+}
+
+#[test]
+#[should_panic(expected = "legacy module models")]
+fn native_adapter_guard_rejects_a_parent_relative_legacy_dependency() {
+  assert_adapter_sources("use woml_engine::RunEvent; use super::super::models::Workflow;");
 }
 
 #[test]

@@ -2,10 +2,11 @@
 
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { readRustModuleSource } from './rust-source';
 
 const root = resolve(import.meta.dir, '../..');
 const read = (path: string): Promise<string> =>
-  readFile(resolve(root, path), 'utf8');
+  path.endsWith('.rs') ? readRustModuleSource(resolve(root, path)) : readFile(resolve(root, path), 'utf8');
 
 const required = [
   'docs/woml-rich-plan-approvals.md',

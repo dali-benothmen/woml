@@ -1,0 +1,2003 @@
+{
+  "baseRevision": "b43f1299dbb8c14536c49b82a6c6933dacbee63d",
+  "description": "Pre-RCM12/RCM13 source/public inventories and ordered declaration fingerprints, including all native export bodies/attributes; untouched reviewed families are hash-pinned. Existing API/DDL/fixture/native baselines remain unchanged.",
+  "contracts": {
+    "remote_worker_journal": {
+      "path": "core/woml-engine/src/remote_worker_journal.rs",
+      "sha256": "4a59b28bdb8ef67df8df87ec252ca13e7eb2672f01721345894103aa0df79b0d",
+      "publicTypes": [
+        "EnvironmentRemoteSecretProvider",
+        "PreparedRemoteDispatchV1",
+        "RemoteWorkerAttemptRuntimeV1",
+        "RemoteWorkerAuthorityV1",
+        "RemoteWorkerCancellationTokenV1",
+        "RemoteWorkerError",
+        "RemoteWorkerTerminalV1",
+        "ResolvedRemoteSecretProvider",
+        "WorkerAttemptRecordV1",
+        "WorkerAttemptStateV1",
+        "WorkerJournalV1"
+      ],
+      "publicFunctions": [
+        "prepare_remote_dispatch",
+        "verify_remote_artifact_transfer"
+      ],
+      "publicConstants": [
+        "REMOTE_CANCELLATION_CONFIRMATION_TIMEOUT_MS",
+        "WORKER_JOURNAL_RECOVERY_LIMIT",
+        "WORKER_JOURNAL_SCHEMA_VERSION"
+      ],
+      "publicTraits": [
+        "RemoteSecretProvider"
+      ],
+      "declarations": [
+        {
+          "name": "const WORKER_JOURNAL_SCHEMA_VERSION",
+          "sha256": "aed64a290ad5e7d326bfe800566a04bc492b58690bf5742a343cb60bef8a61f2"
+        },
+        {
+          "name": "const WORKER_JOURNAL_RECOVERY_LIMIT",
+          "sha256": "2a6146aa36a47f9e6694768cd9a72d623d6ee79fda66b84c566206a5dc4e154e"
+        },
+        {
+          "name": "const REMOTE_CANCELLATION_CONFIRMATION_TIMEOUT_MS",
+          "sha256": "1a9c2099ccef2f3387efee6c44ee2eec151c79961f1cc1d06014354b4b5ca36b"
+        },
+        {
+          "name": "struct RemoteWorkerCancellationTokenV1",
+          "sha256": "0f429d758c2e44619b044f81b317fa4b786eb4062400acb73b3fe7e1453f88aa"
+        },
+        {
+          "name": "impl RemoteWorkerCancellationTokenV1::cancel",
+          "sha256": "a38290ca895077cfc052a55d5bd3776addcf6201c85830e81cb3c25b2cbae2d4"
+        },
+        {
+          "name": "impl RemoteWorkerCancellationTokenV1::is_cancelled",
+          "sha256": "9e8c75fa42f6b0c424435e712c262604f2392449f3f1d585bc76076e15555be4"
+        },
+        {
+          "name": "const CREATE_SCHEMA",
+          "sha256": "1c8344461d6a889b169831a0f56f0c2f02da2d7706ab5007fb2cdb369e6bf55f"
+        },
+        {
+          "name": "enum WorkerAttemptStateV1",
+          "sha256": "5209011a88462dd5d590c81ef16bd816e7c008d4ceb08b4494d857696f422f42"
+        },
+        {
+          "name": "impl WorkerAttemptStateV1::as_str",
+          "sha256": "fcc0568387e0141385756a44845049ccd3d4211758ed6ab64073eca6c22ba121"
+        },
+        {
+          "name": "impl WorkerAttemptStateV1::parse",
+          "sha256": "566c17b857260403657a536f6d3a4c5d4a6140f6eb4bee223e0c1b7a494d19d5"
+        },
+        {
+          "name": "impl WorkerAttemptStateV1::is_terminal",
+          "sha256": "74e56e4f370704d6b4eef76ea61e53c51ecde0a2b4243866e4dcd2ec63584749"
+        },
+        {
+          "name": "struct RemoteWorkerTerminalV1",
+          "sha256": "4c2dddebcfb1e6d04c6b38f46d07bde521b6d7cba0df75da31f3c3a1773e6a16"
+        },
+        {
+          "name": "impl RemoteWorkerTerminalV1::new",
+          "sha256": "a1a737d8b16dcdd31cec27046e48b5d93b132a36828f6154aba60dcfe7bf5697"
+        },
+        {
+          "name": "impl RemoteWorkerTerminalV1::verify",
+          "sha256": "f108053ad25382a50a794cddac6d87635d76bc0832d9d5ddf38205f0d7f4ae41"
+        },
+        {
+          "name": "struct WorkerAttemptRecordV1",
+          "sha256": "454d0d57d6c7c219bbc144a2f82687ed28d1dd746a3017c17f18afcdf68127bd"
+        },
+        {
+          "name": "struct RemoteWorkerAuthorityV1",
+          "sha256": "3186590d505e227104235987e122aedfaaab6e5a27f0c8e34ac909262777fdf5"
+        },
+        {
+          "name": "struct PreparedRemoteDispatchV1",
+          "sha256": "9d659441400631e270365b63f2bb92ba64a0777a64a14ffff41f36752f6576c1"
+        },
+        {
+          "name": "enum RemoteWorkerError",
+          "sha256": "ec2596a4d33cf45f450381f7226b64f856de04af34b6601fa456f5973d1f4c0b"
+        },
+        {
+          "name": "impl RemoteWorkerError::code",
+          "sha256": "8bd19a3e0cc1cdb56f0910160f6a58f5923bcf487d5a498511b99d1d2a6fd147"
+        },
+        {
+          "name": "trait RemoteSecretProvider",
+          "sha256": "e34ff5ff4aadd92401114e6829d445f54b9840302b8676512f41090ae3fb3161"
+        },
+        {
+          "name": "struct EnvironmentRemoteSecretProvider",
+          "sha256": "ce22fea8e6de84c06def827354f7ea2571c2b35c16a046e189106ca050510597"
+        },
+        {
+          "name": "impl RemoteSecretProvider for EnvironmentRemoteSecretProvider::resolve",
+          "sha256": "49d7a51081e439d90731c74ac6310e423958f290a4c56bbb9268dd757a36e9b7"
+        },
+        {
+          "name": "struct ResolvedRemoteSecretProvider",
+          "sha256": "4c6045c383fbd0264240ac05770017d2072ac4a3b198b33ecfc5036dc29a4210"
+        },
+        {
+          "name": "impl ResolvedRemoteSecretProvider::new",
+          "sha256": "e0214a6996d9fe29b55546573d8fe6712c6e309b689164c1972cfa14bd76ccb2"
+        },
+        {
+          "name": "impl RemoteSecretProvider for ResolvedRemoteSecretProvider::resolve",
+          "sha256": "888c51d7cdc603a55e54b42ace13efd026fe1ebcffe6a0f6dc8b1a257ad98690"
+        },
+        {
+          "name": "struct WorkerJournalV1",
+          "sha256": "73052dc6c96238a08f962844446aea17f129fe8fa3a0200734ea07d0b85d6b44"
+        },
+        {
+          "name": "impl WorkerJournalV1::open",
+          "sha256": "db58eb800b0667922d9569da2b0191c2150a13595ae83749243f4e4ddae1367f"
+        },
+        {
+          "name": "impl WorkerJournalV1::open_in_memory",
+          "sha256": "d19868cfbe19f3147b2692d64103efd69f7f30d5044a1486a2dd1ee5767b8738"
+        },
+        {
+          "name": "impl WorkerJournalV1::initialize",
+          "sha256": "34f2d4b6057adb98db6353cb56312ee5c20722e8d81c4c6d6cd4484ef0c350c7"
+        },
+        {
+          "name": "impl WorkerJournalV1::accept",
+          "sha256": "cd866f28eb26e0941d7c448d6ff77e9b5f6a8293a9c52e244c51a80e87f487a5"
+        },
+        {
+          "name": "impl WorkerJournalV1::start",
+          "sha256": "04acacdc0717f1ed775f680b2b6a7b6f9812395d11d3d5ee0a46c1c76cda33f4"
+        },
+        {
+          "name": "impl WorkerJournalV1::terminal",
+          "sha256": "3e910644d12c4a4b4441987589ee99e586534d5ac880688d76425c13ad4863b8"
+        },
+        {
+          "name": "impl WorkerJournalV1::recover",
+          "sha256": "170d01c026e38ad34e86c3c7b02c68223282f72a27930e77a66a667e58cf04dd"
+        },
+        {
+          "name": "impl WorkerJournalV1::terminal_for_resend",
+          "sha256": "4797c9fdff3c08461de82047b2edeb6bc086643a6edd90c972c4da90bedd8621"
+        },
+        {
+          "name": "impl WorkerJournalV1::was_started_by_session",
+          "sha256": "fc10d104b87bce45dca8ca25ed8ed02b0d75628d907c295a8694e886b308a957"
+        },
+        {
+          "name": "impl WorkerJournalV1::pending_or_ambiguous",
+          "sha256": "8b0879d32215cd872a3a9148368ffd962958fabf0c180f5d458646dbf71b38be"
+        },
+        {
+          "name": "impl WorkerJournalV1::load",
+          "sha256": "8f0260b6278415aaa896506bbcb4ad3c296877cf7bb203c5734db9667ecc7cf3"
+        },
+        {
+          "name": "impl WorkerJournalV1::verify_chain",
+          "sha256": "217a9358e66e91f6f866b488765448aec1c22f985b33742d1875fd255bd5aaea"
+        },
+        {
+          "name": "fn prepare_remote_dispatch",
+          "sha256": "b7b5590ed7ef4b64e74e4023b2d7adb11720b36bd7162d38272c0ca5e4be6589"
+        },
+        {
+          "name": "fn verify_remote_artifact_transfer",
+          "sha256": "e7365e60c1014f314f532c0d4fcc2a3911c0571cd48fa49af66f75d7bea1f0f7"
+        },
+        {
+          "name": "struct RemoteWorkerAttemptRuntimeV1",
+          "sha256": "3d5b2c452fd8f1b5438c09fe474500bd4c48a6718b3a7b3a7d270ba1b85f365b"
+        },
+        {
+          "name": "impl RemoteWorkerAttemptRuntimeV1::new",
+          "sha256": "535b2d07e4ed8ec9c25577934e6e4f4f3e528b2cbec1e0b7a2d34dd93e2a6acb"
+        },
+        {
+          "name": "impl RemoteWorkerAttemptRuntimeV1::begin_drain",
+          "sha256": "b3a9eae961f207656e820268449c90d2b57e5ec0bacb98b78af9fb9adefb6659"
+        },
+        {
+          "name": "impl RemoteWorkerAttemptRuntimeV1::is_drained",
+          "sha256": "dc138d1c1f12a0c01f972b5c7e905a5b3de9fc007542246451bbf05045b4091f"
+        },
+        {
+          "name": "impl RemoteWorkerAttemptRuntimeV1::journal",
+          "sha256": "d132fdba89b3934fa1272886ba4766b59a67071366de049211a77c0f71058abc"
+        },
+        {
+          "name": "impl RemoteWorkerAttemptRuntimeV1::execute",
+          "sha256": "0cfb1d98dbe22dda4e0833191354edf973887919f2c629d948ae5357e3c70787"
+        },
+        {
+          "name": "impl RemoteWorkerAttemptRuntimeV1::execute_prestarted",
+          "sha256": "b757d400ac4935b5ff8f1e656ca364924a3e0c33342d11b219307cbc78fa3c32"
+        },
+        {
+          "name": "impl RemoteWorkerAttemptRuntimeV1::execute_with_cancellation",
+          "sha256": "18ea8da330f1d80eec00588febbc2b1928b91b425a940d6fb957ccdf7d05748b"
+        },
+        {
+          "name": "impl RemoteWorkerAttemptRuntimeV1::execute_with_cancellation_mode",
+          "sha256": "56c33801f26eafe2570a1ae6e7b746e5196f1b2db26ebd8126ebc9922b8ac749"
+        },
+        {
+          "name": "struct ActiveSlot",
+          "sha256": "a9da9d871632479ab59e79c3b965404568b85f160ef44b3304d1d27b091600b9"
+        },
+        {
+          "name": "impl Drop for ActiveSlot::drop",
+          "sha256": "fc31be64ec2660fe27a614ccd9b9587f97b48063c5c57abb20788eabfd785afd"
+        },
+        {
+          "name": "fn script_source",
+          "sha256": "e37d4b204a5501e39966c5024d44c772b06b63a8b36a6f902a6aa7b471bc020d"
+        },
+        {
+          "name": "fn redact_json_value",
+          "sha256": "38d47fc0a1a7de886e268abf7aeadbca85749e0dcd92f04c5196f07c2776a8c9"
+        },
+        {
+          "name": "fn validate_artifact_grants",
+          "sha256": "038195b4363c5433f914991dc2c6aec6977344ee93ab98fdc686110ca14ed4be"
+        },
+        {
+          "name": "fn valid_secret_name",
+          "sha256": "8734f7cf2938e433f6fa3e3be9334267d4af133d2c913b6bb216069dfcf22eb5"
+        },
+        {
+          "name": "fn valid_bound_id",
+          "sha256": "ff670a9ef617f62bbed2303894769053ed236554b42481fecac7d80eebd4834c"
+        },
+        {
+          "name": "fn capability_version",
+          "sha256": "4718205a7b8052ee2d03b96c5706cbeeb072c1eb9f6e9db470e21b5e57b03198"
+        },
+        {
+          "name": "fn maximum_attempts",
+          "sha256": "97b2ec45fc7036f3e62e13613b80636fbe21eb5d032e4b4695e7c1bb24e60f4f"
+        },
+        {
+          "name": "fn artifact_grant_digest",
+          "sha256": "0761efa6aa69ab5276b0263b3acfd66b3d7a0fa1e36cb20ede4d6c8b4ed28d77"
+        },
+        {
+          "name": "fn append_record",
+          "sha256": "6261e24d08aa460c2e0d90c50f51943287242af5a9e3ecdae7b8e72f80e44272"
+        },
+        {
+          "name": "fn append_record_from_record",
+          "sha256": "75c5db35db01adc0f3d39fd5290c19f9035bf5c92b40799121f6e7674b143878"
+        },
+        {
+          "name": "fn sha256",
+          "sha256": "e48ea2ac8e6db7da332eb09419c2a6d4260dc073b6ef169f61bad94580371890"
+        },
+        {
+          "name": "impl From<CapabilityFailure> for RemoteWorkerError::from",
+          "sha256": "c597f1b991b1747e96b87a3961e082e0426323f0607cd9f82b64f36d6459c563"
+        }
+      ],
+      "testDeclarations": []
+    },
+    "remote_dispatch": {
+      "path": "core/woml-engine/src/remote_dispatch.rs",
+      "sha256": "3b813d00b711e7edd0e1fe078b2bb00ed887ff8c216da92dbde1d5e87c45c065",
+      "publicTypes": [
+        "RemoteDispatchError",
+        "RemoteDispatchInspectionV1",
+        "RemoteDispatchRecordV1",
+        "RemoteDispatchRequestV1",
+        "RemoteDispatchResolutionV1",
+        "RemoteDispatchStateV1",
+        "RemoteOutputBindingV1"
+      ],
+      "publicFunctions": [
+        "derive_remote_dispatch_id"
+      ],
+      "publicConstants": [
+        "REMOTE_DISPATCH_HEARTBEAT_MAX_BYTES",
+        "REMOTE_DISPATCH_RECOVERY_BATCH_LIMIT"
+      ],
+      "publicTraits": [],
+      "declarations": [
+        {
+          "name": "const REMOTE_DISPATCH_RECOVERY_BATCH_LIMIT",
+          "sha256": "ceb538e268c817850597d2da8d857361feb5234bb728c4171e21ec481a504d8e"
+        },
+        {
+          "name": "const REMOTE_DISPATCH_HEARTBEAT_MAX_BYTES",
+          "sha256": "033af9e6a4f9b4c87f32c794a3647f89cf059aa153da17ec83ed1e39e00346de"
+        },
+        {
+          "name": "const CREATE_REMOTE_DISPATCH_SCHEMA_V20",
+          "sha256": "248b8b2688152db6b6491316cb822b9b87ff123cac8cded3656f8a724cd7e2d9"
+        },
+        {
+          "name": "enum RemoteDispatchStateV1",
+          "sha256": "cae5789ad1ed1a5c706418278893298feab0abc9fe0c3869f1e34977feed7081"
+        },
+        {
+          "name": "impl RemoteDispatchStateV1::as_str",
+          "sha256": "2ac6fd0b47e15f63bbd5010896580eebb2bf5565e2f02b4d0a7ad7928180590d"
+        },
+        {
+          "name": "impl RemoteDispatchStateV1::parse",
+          "sha256": "5cb1a4eb7627174cc0a4f8d698665c995d766558d70413ce654279115dd0fd4d"
+        },
+        {
+          "name": "struct RemoteDispatchRequestV1",
+          "sha256": "cfe209e5189265d4a925bf0299b82e51bf0d84c939072d50eb8d51cb1924f732"
+        },
+        {
+          "name": "struct RemoteDispatchRecordV1",
+          "sha256": "ded46068f9e2c3e334d52ce3215223cbfbe31f0a1ce3fb51ebeb653d17396abc"
+        },
+        {
+          "name": "struct RemoteDispatchInspectionV1",
+          "sha256": "e54ee2663b95782e0811e70f87c5d6b29ad3eae6bd029e4798de57b6f93f537b"
+        },
+        {
+          "name": "struct RemoteOutputBindingV1",
+          "sha256": "f0b04c0f94a0efbc9748b0fe23fb8100a42e886f58b1bc83ede3c7125258c14a"
+        },
+        {
+          "name": "enum RemoteDispatchResolutionV1",
+          "sha256": "acdf7b3532370c54d8c6829c6bc59aaf63c22e5cafd37604b2c9286fb94ed718"
+        },
+        {
+          "name": "enum RemoteDispatchError",
+          "sha256": "b83a2ddf60bac9d4fe90c620dd788707ade3ced389c32752c5e914f6ea32a682"
+        },
+        {
+          "name": "impl RemoteDispatchError::code",
+          "sha256": "2990f629a15a4fa33c5ecc618cfdbdb0b58f52e9a6e738e701d8efca02cfe556"
+        },
+        {
+          "name": "fn derive_remote_dispatch_id",
+          "sha256": "47634a75c0737d5bc4bd385bff17388d0168d6fa0f2ccc9d6fb7e87b059ffd5e"
+        },
+        {
+          "name": "impl DurableEventStore::remote_dispatch_record",
+          "sha256": "1489f4639d8729b64e53b56290ab518fea005ca94dd20ff98b2d828d7a89a59a"
+        },
+        {
+          "name": "impl DurableEventStore::inspect_remote_dispatch",
+          "sha256": "a5b14dc0874d278dd050813e298fc3095cd0242a8f50a2da81c7be946e4e2abf"
+        },
+        {
+          "name": "impl DurableEventStore::request_remote_dispatch",
+          "sha256": "88099c67063c35d2939fbd7db3aa92c21c313f033bd0d9196f78fd009daa237f"
+        },
+        {
+          "name": "impl DurableEventStore::authorize_remote_output",
+          "sha256": "29354519a03fde11d62e342ea693c979cf50c8ee511fdaff608ae53683eb21a7"
+        },
+        {
+          "name": "impl DurableEventStore::offer_remote_dispatch",
+          "sha256": "818c7f14243db7e91ecfec33d80da66b963c3580d3a2c322fc0126d3069811db"
+        },
+        {
+          "name": "impl DurableEventStore::accept_remote_dispatch",
+          "sha256": "86c7cbe955e4b5831df65694392a60b3bf9ec4ff03fb4ca07283e3e68d4a6a05"
+        },
+        {
+          "name": "impl DurableEventStore::start_remote_dispatch",
+          "sha256": "c4a3bc92921e5ad148d4688726851d35f5579e82e1b186983c018bd988f353be"
+        },
+        {
+          "name": "impl DurableEventStore::heartbeat_remote_dispatch",
+          "sha256": "d498e00e01cd5ac018b9fc1011876f1d6b4658d9534112baef4775d062c77330"
+        },
+        {
+          "name": "impl DurableEventStore::request_remote_dispatch_cancel",
+          "sha256": "58209798ad5789c18874be8e72ceb79da119f78eb0fd85980434201b7be64772"
+        },
+        {
+          "name": "impl DurableEventStore::terminal_remote_dispatch",
+          "sha256": "bc2562d3cd8bab0928e8fbab48d4d414c0043f29bf443e6fb1180452ddafb434"
+        },
+        {
+          "name": "impl DurableEventStore::recover_remote_dispatches",
+          "sha256": "edb7757fa75809f124d4d55399776e17a0a446a914cb3125d184a27e3f10aba4"
+        },
+        {
+          "name": "impl DurableEventStore::mark_lost_remote_dispatches",
+          "sha256": "3aff2c99beee2b77bdb546c93f3e61771c3ca1f6bfea3ccc6f1481b987706efc"
+        },
+        {
+          "name": "impl DurableEventStore::reconcile_remote_dispatch",
+          "sha256": "08153248a74b3ca4c48901f8373bccbcd62a8ed5f923627f8adf07fc291cdfb5"
+        },
+        {
+          "name": "impl DurableEventStore::transition",
+          "sha256": "c97e8f96c217da6ff0e525753ff8e22486adaa4b6741fc2197d27ce782dc23ca"
+        },
+        {
+          "name": "impl DurableEventStore::bound_state_transition",
+          "sha256": "f189f35e7611ac3510e96ede9a77b0b7a6ddd6aacf128a9bdb29e49a455f4e74"
+        },
+        {
+          "name": "fn validate_remote_dispatch_schema",
+          "sha256": "bd387afc453c4d1e85b101e4dd140cb9653801712fdf3a39f47b82acf6d04f09"
+        },
+        {
+          "name": "fn validate_request",
+          "sha256": "cb6e77f61c98ae362152c047a51bc266100a59cc8d1772a5a1de5ace8e0a599d"
+        },
+        {
+          "name": "fn validate_request_against_definition",
+          "sha256": "066c849617ae993e66f3dd82ffdf92dd636f11cbc1bd28deb1bb8071fcc426a4"
+        },
+        {
+          "name": "fn same_request",
+          "sha256": "b2b7f885d20f4664afa7f4458b439adca8ebf57f8ac835f616b13a664799ebec"
+        },
+        {
+          "name": "fn bound_dispatch",
+          "sha256": "0a03f4594b0499f92b3b62094a415d6d1de0245dc6100a7034fb51ddada86a6b"
+        },
+        {
+          "name": "fn bound_dispatch_without_offer",
+          "sha256": "41889582b04cf1f9a47347b04f0eb2c414a3a391f7fec6e9b8996ed6f85a41b0"
+        },
+        {
+          "name": "fn load_dispatch",
+          "sha256": "d326b92c86235f8dd8fa43646219a77efebb6f0d9aebb7ff7de7de9bd8b90b27"
+        },
+        {
+          "name": "fn audit",
+          "sha256": "1decf46474a3f9795f19809640af7fdb22c2d5aa7b7a9503ddf140e80b9b1771"
+        },
+        {
+          "name": "fn digest_json",
+          "sha256": "fd1393fb293713ad1f9d29305956af0c0f3129e387364f6fa5b151f56133e1cb"
+        },
+        {
+          "name": "fn parse_time",
+          "sha256": "7feb32832a37514c01f3338ff0079b0e6cc579fea008c6988a2be56762946f6b"
+        },
+        {
+          "name": "fn parse_optional_time",
+          "sha256": "094baee2eb564ddc81f9b7bd5187e85db26ac5811f77885ba707b2c7c4debf85"
+        },
+        {
+          "name": "fn valid_id",
+          "sha256": "65b084184bbdf50fb8c17c7ee1c689acd1ba32a2a450a428db4d2403150884a4"
+        },
+        {
+          "name": "fn valid_digest",
+          "sha256": "4ba90ceca6b343bb68464b506ccf132d6f730cf5410e16c0eef8e24d58c34e67"
+        }
+      ],
+      "testDeclarations": []
+    },
+    "remote_coordinator_server": {
+      "path": "core/woml-engine/src/remote_coordinator_server.rs",
+      "sha256": "ef64b9629473455806d3204731f0215c9dc0397c8ff76925431d28271dc74270",
+      "publicTypes": [
+        "RemoteCoordinatorServerError",
+        "RemoteCoordinatorServerV1",
+        "RemoteCoordinatorTlsOptionsV1"
+      ],
+      "publicFunctions": [],
+      "publicConstants": [
+        "REMOTE_COORDINATOR_IO_TIMEOUT_SECONDS",
+        "REMOTE_COORDINATOR_MAX_CONNECTIONS",
+        "REMOTE_COORDINATOR_MAX_CONNECTIONS_PER_SECOND",
+        "REMOTE_COORDINATOR_MAX_HEADER_BYTES"
+      ],
+      "publicTraits": [],
+      "declarations": [
+        {
+          "name": "const REMOTE_COORDINATOR_MAX_CONNECTIONS",
+          "sha256": "15fee846349af7dabde393b1bb242cfe9704856de708ecfdcbb3efb395b40f38"
+        },
+        {
+          "name": "const REMOTE_COORDINATOR_MAX_CONNECTIONS_PER_SECOND",
+          "sha256": "2154fa4947e4673beea6c92e65887bc5fc12a7c5db6faa76023986ae811ef018"
+        },
+        {
+          "name": "const REMOTE_COORDINATOR_MAX_HEADER_BYTES",
+          "sha256": "d2a10ab3df5f1400c1137aaaf8d652861aa27bb1ccd78f8b8de7d83dcb4d2b6b"
+        },
+        {
+          "name": "const REMOTE_COORDINATOR_IO_TIMEOUT_SECONDS",
+          "sha256": "6ce5026451aec7f480fa32660de5cc4bfab697644dfdd706b44d48ce6a2a9557"
+        },
+        {
+          "name": "struct RemoteCoordinatorTlsOptionsV1",
+          "sha256": "0366bc8f11cde36d2d5af07bb746b948912f29f1537eaf9efedeafbd698e5aec"
+        },
+        {
+          "name": "enum RemoteCoordinatorServerError",
+          "sha256": "07d56a17ff7e206ce22ca00deb5ecb8d08f8571ad44336fc5b2f08885c313755"
+        },
+        {
+          "name": "struct RemoteCoordinatorServerV1",
+          "sha256": "2140c8a7046d18c50b5905a3d74ee87d4041dc56ffbc5689be580e80cf2ba451"
+        },
+        {
+          "name": "impl RemoteCoordinatorServerV1::start",
+          "sha256": "c7a16f2cb9ab89aaee88b68406023251d98d5211cba012f4e5bdefcd39e0a1dd"
+        },
+        {
+          "name": "impl RemoteCoordinatorServerV1::start_dispatching",
+          "sha256": "d3bb2cff62291b27d754a4114abc8e76cf834ff544a2f55d17a097f297f98b9f"
+        },
+        {
+          "name": "impl RemoteCoordinatorServerV1::start_inner",
+          "sha256": "77fc61d37f681b967fb5939fe982bbaae733adb68506db267c3a23e9ac25e3e7"
+        },
+        {
+          "name": "impl RemoteCoordinatorServerV1::local_address",
+          "sha256": "bfb1e92a5610f2a1ce49dbb2b7929a40f42ff0fb8dff16d64e79e0967ebf6237"
+        },
+        {
+          "name": "impl RemoteCoordinatorServerV1::shutdown",
+          "sha256": "39d31c8518dad7da61188ec58f518a4203259dd7e893be909f66e88bd8a50717"
+        },
+        {
+          "name": "impl Drop for RemoteCoordinatorServerV1::drop",
+          "sha256": "5dce4af81a320b670992545b05a33eb52157df2f66c54406118f7d261f796e14"
+        },
+        {
+          "name": "struct ActiveConnection",
+          "sha256": "12f53e8bd3652592aee48af844d9210416d3fdc426f46a7fa70a56915331fdb2"
+        },
+        {
+          "name": "impl Drop for ActiveConnection::drop",
+          "sha256": "fc31be64ec2660fe27a614ccd9b9587f97b48063c5c57abb20788eabfd785afd"
+        },
+        {
+          "name": "fn handle_connection",
+          "sha256": "bf4ac5a1979dfaf9038a33c3601e31ae0c0492e4fad08ce59da6d7075dbac818"
+        },
+        {
+          "name": "fn dispatch_fact",
+          "sha256": "73b0e74cdf7e72221069fdb233144846a0e72df406969b035b92d653a930a3b6"
+        },
+        {
+          "name": "fn map_transport_error",
+          "sha256": "e2f8329e2f3bb1dfb65fdc1f6a5a5b8e29682c8235249a6ff7cd3ae0883dd817"
+        },
+        {
+          "name": "struct HttpRequest",
+          "sha256": "1936fd07354ae821868a4e65c176acb7479e1699e9925af6675d5c0d539bb31e"
+        },
+        {
+          "name": "fn read_request",
+          "sha256": "912df6574c52470329f039d29a219cfcbc5ca7250b8620653dda8d707f0df8cc"
+        },
+        {
+          "name": "fn request_read_error",
+          "sha256": "04867edfd5f7bc3e2b4c857601705f0e7c29aeca46078150753aec7eebc5e2f1"
+        },
+        {
+          "name": "fn connection_io_error",
+          "sha256": "e8187e5a9618a708f7a692060a0cbf1c271ee37abbb19151cf12bd08e13857b7"
+        },
+        {
+          "name": "fn json_bytes",
+          "sha256": "eaa99051f86a51566d2ed227da67a33f1481839a797d5f1d3255af555269aeff"
+        },
+        {
+          "name": "fn write_error",
+          "sha256": "9d2ebeda3d97f31ee9b6e141b0ee7131799eb3604968a08ea7e7f93d529f6ac9"
+        },
+        {
+          "name": "fn write_response",
+          "sha256": "6a110ac0bf65c7a4886b00d3832cff1e8c5a7efae4f61d25b0131393553719c9"
+        },
+        {
+          "name": "fn server_configuration",
+          "sha256": "3b595af9ab8ec8c8dd177949fb95c4b0077880e9998e2b1cd3d25337543a9f44"
+        },
+        {
+          "name": "fn certificates",
+          "sha256": "a8913201f6d068e42bcd5db89b127f6ad33e2cc838c00aa9d6b445147b377865"
+        },
+        {
+          "name": "fn private_key",
+          "sha256": "ce01baab1bc475fb6f215f1231972ec39faedf1e46440b377adfc6f94d782203"
+        }
+      ],
+      "testDeclarations": []
+    },
+    "webhook": {
+      "path": "core/woml-engine/src/webhook.rs",
+      "sha256": "903ca11c8e2283d0b80b513767c8ad04b27818d0334935877908d7686798a596",
+      "publicTypes": [
+        "ExternalTriggerAdmissionCommand",
+        "ExternalTriggerAdmissionReceiver",
+        "TriggerProgress",
+        "TriggerProgressReporter",
+        "WebhookDefinitionRegistration",
+        "WebhookRuntimeError",
+        "WomlWebhookServer",
+        "WomlWebhookServerConfig"
+      ],
+      "publicFunctions": [],
+      "publicConstants": [
+        "COMMUNICATION_PROVIDER_MAX_BATCH_ITEMS",
+        "COMMUNICATION_PROVIDER_MAX_MESSAGE_BYTES",
+        "EVENT_MAX_SUBSCRIBERS",
+        "TRIGGER_PROGRESS_CONTRACT",
+        "TRIGGER_PROGRESS_CONTRACT_VERSION",
+        "WEBHOOK_MAX_BODY_BYTES",
+        "WHATSAPP_CALLBACK_PATH"
+      ],
+      "publicTraits": [],
+      "declarations": [
+        {
+          "name": "const WEBHOOK_MAX_BODY_BYTES",
+          "sha256": "b3ecbda1a4e3f7f38b1ef41475d4691b033a9cb48686eb0599210c441d619f55"
+        },
+        {
+          "name": "const WHATSAPP_CALLBACK_PATH",
+          "sha256": "421609121cd7da0cc2611100ee7d0d2e00a6c4f9b3a465fce2649817b0bb7349"
+        },
+        {
+          "name": "const COMMUNICATION_PROVIDER_MAX_BATCH_ITEMS",
+          "sha256": "3e30dfa69f0c6c3233d51839ea74f2e8eb00372806ae9ae6666d0e4506b405bc"
+        },
+        {
+          "name": "const COMMUNICATION_PROVIDER_MAX_MESSAGE_BYTES",
+          "sha256": "dd6850f0bbec2ce50a4828774803c5a9a0031c7e3c7837945e67125d62435788"
+        },
+        {
+          "name": "const EVENT_MAX_SUBSCRIBERS",
+          "sha256": "4bce55db6836a5c5068af2ef3fc4103c38ff35c90971c85940ec2a1e9372831a"
+        },
+        {
+          "name": "const TRIGGER_PROGRESS_CONTRACT",
+          "sha256": "21ccab12470f9c4d5aa333eb6a39416acea8e183151b2880baf730ee45a947a6"
+        },
+        {
+          "name": "const TRIGGER_PROGRESS_CONTRACT_VERSION",
+          "sha256": "54df436ffbbf1ee46366f6ee292886459509b7b6acfaab4b2a567f4ff79e6bfa"
+        },
+        {
+          "name": "const WORKFLOW_RUNTIME_LEASE_SECONDS",
+          "sha256": "90b88ad2711395706d6732a6b78e88afa1c34c183d220af6ff19f2df37c242e7"
+        },
+        {
+          "name": "const WORKFLOW_RUNTIME_RENEW_SECONDS",
+          "sha256": "f2f5fcc8c7503a3c39fc3180a5335d97b9f819def0a8c525bd10229a36d29d82"
+        },
+        {
+          "name": "const WORKFLOW_PENDING_SCAN_MILLISECONDS",
+          "sha256": "d418fb0f039da22bee098a3be8a419b12b11b59d0c07c54d02f88b04fda9897d"
+        },
+        {
+          "name": "const DURABLE_WAIT_SCAN_MILLISECONDS",
+          "sha256": "38c01cf8612ca42c5989bfe1ebacb8e0e1c768c7e704e3b77d16cea905bca029"
+        },
+        {
+          "name": "const DURABLE_WAIT_SCAN_LIMIT",
+          "sha256": "ea3ad27b3b2c9d4f257e7ff80d62847a12300794968a4529e8d05e3c53713159"
+        },
+        {
+          "name": "enum TriggerProgress",
+          "sha256": "5c2cbe8455f1321d6c41d320c1027495405acf926df7f3ec05ab80e49fc5ae31"
+        },
+        {
+          "name": "type TriggerProgressReporter",
+          "sha256": "221575b99916d0ba3b5da8d3a442d325104123b988b735bae99f3823d7589f74"
+        },
+        {
+          "name": "struct WebhookDefinitionRegistration",
+          "sha256": "6d8b0c24915cfd0fdd4f216ef0be692eeab7ae841dc0513eb7924d57a2921837"
+        },
+        {
+          "name": "impl WebhookDefinitionRegistration::new",
+          "sha256": "4b80d389f1acb2a74e41294942bc51997d2a9c5041ab4a4dad7159fdc8db3b07"
+        },
+        {
+          "name": "impl WebhookDefinitionRegistration::with_secret",
+          "sha256": "e142de9ce90d7989cd87e5b693dcb40eb0b5bca1a819a62d8fd18cc86eee137e"
+        },
+        {
+          "name": "impl WebhookDefinitionRegistration::with_runtime_modules",
+          "sha256": "9a2dfff911aead0976813bf87bcd69ee6c3cfd09e028a963ed4452f8cf20d7c8"
+        },
+        {
+          "name": "struct WomlWebhookServerConfig",
+          "sha256": "e1cb52525c8ae0f4d886e091556d41d8bc975470d07308e7230c65adcda3eae3"
+        },
+        {
+          "name": "struct ExternalTriggerAdmissionCommand",
+          "sha256": "6a4893d70be17e3813945d3bb3898f1d65efd20a9040cf98807b1574956d2235"
+        },
+        {
+          "name": "type ExternalTriggerAdmissionReceiver",
+          "sha256": "eca0d726dd3f7d4d7ddccc5aa43f196523ec6d49673080ae7432dda5898c2e18"
+        },
+        {
+          "name": "struct WomlWebhookServer",
+          "sha256": "5401f61afd629e2771bbaceff2a3485ccee094df525d80fd09cd974da0baa6a1"
+        },
+        {
+          "name": "struct PendingActivation",
+          "sha256": "ab52f4762c472d46920769e3079fc8c248cf9b2d8c2ff5d1ee04a329649fde14"
+        },
+        {
+          "name": "impl WomlWebhookServer::start",
+          "sha256": "49c6482613efc6feaf88cb3e7be551da446d3e8dc0858a220c0896d96305678d"
+        },
+        {
+          "name": "impl WomlWebhookServer::start_with_external_ingress",
+          "sha256": "aa667d325e7a66d10c78de935ce0796eea45abe7b148b709c5e536b6247fcef3"
+        },
+        {
+          "name": "impl WomlWebhookServer::prepare_with_external_ingress",
+          "sha256": "d2dff184b2f76bdd5bd88fc3943e98e99fc58c9396b4fc88d6e1fe1be7a5cda5"
+        },
+        {
+          "name": "impl WomlWebhookServer::prepare_with_external_ingress_unprofiled",
+          "sha256": "afc4a6e03a23b6324796fd7f4a0ab86a9bacef4d79bc3c7c1d80a5d6611637bc"
+        },
+        {
+          "name": "impl WomlWebhookServer::activate",
+          "sha256": "20ea0bc7f70e303e09d787cc4415351d5ab0c02abfab45983c9f243f75b89708"
+        },
+        {
+          "name": "impl WomlWebhookServer::activate_unprofiled",
+          "sha256": "a15f897108fd643a6fb3934a1ce2e4181a1ee1d542fe1035ec5626b849c79059"
+        },
+        {
+          "name": "impl WomlWebhookServer::local_address",
+          "sha256": "bfb1e92a5610f2a1ce49dbb2b7929a40f42ff0fb8dff16d64e79e0967ebf6237"
+        },
+        {
+          "name": "impl WomlWebhookServer::stop",
+          "sha256": "f8ce567b247f63d08d3a78dfa1c2c8a9ce3de6c6b88b49d9b479effb6c15bbdd"
+        },
+        {
+          "name": "impl WomlWebhookServer::stop_with_deadline",
+          "sha256": "1f3950b9ddfdce54a1e9903106200a144e967580b96bce2e76835e2f0ccfe4ab"
+        },
+        {
+          "name": "enum WebhookRuntimeError",
+          "sha256": "4bb4529e65cdaea6c9356b741cb32a8137ffc107569e9929ae481bcffb6eaae5"
+        },
+        {
+          "name": "struct WebhookRuntimeState",
+          "sha256": "d66887cfa0fc604be5cd86c87c26c0421b199d2353423052e673fa110659ac82"
+        },
+        {
+          "name": "struct WhatsAppSubscriber",
+          "sha256": "19f25c147f9497832ad7ec9be308d1d2751547f47ac34afd90135ee971f05a55"
+        },
+        {
+          "name": "fn handle_workflow_call_wakeup",
+          "sha256": "33116cdc02750ac95f5328417e11b5a6dce2ef4d46471f375c74ecdad87799da"
+        },
+        {
+          "name": "fn workflow_routing_acknowledgement",
+          "sha256": "a9fb30585d13f715be608f06a3b8a2feed1b3ce8a1fd5ad1d8b54c15e7126c5f"
+        },
+        {
+          "name": "fn run_workflow_routing_maintenance",
+          "sha256": "c0c3fe26b46d55ceccbfa293b956bceaf796f5850db29f946d73c82c07736c99"
+        },
+        {
+          "name": "fn run_durable_wait_scheduler",
+          "sha256": "df06dadc6fdb74ad93f7e589cdf359700030eb6327b9d87c2b18d5a4462fae41"
+        },
+        {
+          "name": "struct ScheduleRuntimeRegistration",
+          "sha256": "ad26568280292053528c12ed2b505dbface67adda08880a5a9b7c0add2936e8b"
+        },
+        {
+          "name": "struct IntervalRuntimeRegistration",
+          "sha256": "5d12ceb63a56522ef33a82729b842cdd1ef29693a1fc4f3e5fe466b23f4778f6"
+        },
+        {
+          "name": "struct WebhookRoute",
+          "sha256": "6a5152b8f3c86cc8e17e97a1b6f3dc46983d2c002e4fc44e29d22d9fd39affe1"
+        },
+        {
+          "name": "type EventSubscriber",
+          "sha256": "ffc3d5ceb76b92732881c0097c4b52a52f7ce9c3c496dd3e42a1d964b355f277"
+        },
+        {
+          "name": "struct RunProgressIdentity",
+          "sha256": "0ac9c9b14a66166d7544a2d17398a0daa376d4db1b98db50a526fd0501161de3"
+        },
+        {
+          "name": "struct ActiveRunGuard",
+          "sha256": "b46ce11e1addeeb599c9a5376fb990270e5248935d20cde5b50ac218d6950fd7"
+        },
+        {
+          "name": "impl ActiveRunGuard::acquire",
+          "sha256": "d1060030b81872c9c90660f91701760587484448a9eade5c4ebba914f9e7dc7f"
+        },
+        {
+          "name": "impl Drop for ActiveRunGuard::drop",
+          "sha256": "b829fac4d16070e8db0cc70c5f098970ca3a798e459918515aecbaf5fe49eee6"
+        },
+        {
+          "name": "struct StartupManualTrigger",
+          "sha256": "216caf109b65b6de0e635898ae9b1a19c20a7d61793aa6aa632267a4bf7d2ff9"
+        },
+        {
+          "name": "impl WebhookRuntimeState::report",
+          "sha256": "f7cbdcc7fd6aa1e5e25ba017bb2904af69c985b03883cbb24070d91b4fb6e434"
+        },
+        {
+          "name": "impl WebhookRuntimeState::report_accepted",
+          "sha256": "4ad9c690c708ede88c5ce88aaefb7fcfdca6cfb9eb86dfbea83e2a55061d7987"
+        },
+        {
+          "name": "impl WebhookRuntimeState::report_run_started",
+          "sha256": "a575361c7dbfa3dff4c2db9fec1298e0639e9534634548afbabf5227d14d5546"
+        },
+        {
+          "name": "impl WebhookRuntimeState::report_rejected",
+          "sha256": "2c7b07f936ae82ede0f80f5315b976fe4cbde0588ac895f3ae25da924842ff94"
+        },
+        {
+          "name": "impl WebhookRuntimeState::report_event_rejected",
+          "sha256": "2fe22945b0f9212abb5e5714a6c103ea22b432382215a4087aa0e30c78776374"
+        },
+        {
+          "name": "enum WebhookAuthentication",
+          "sha256": "226026fb0ac36e331bd4a4938362674cd62214f7c5766cf98a9268313c2c2f36"
+        },
+        {
+          "name": "struct WebhookAcceptedResponse",
+          "sha256": "8ed647ff8281f87e14c528576efd2598ab531a5c2463f4d05938ba19e1fa15fd"
+        },
+        {
+          "name": "struct WebhookErrorResponse",
+          "sha256": "f11ce7e52f76d2195f4c97999f944a04834d5bcdcb16287afc025bdddb2a6747"
+        },
+        {
+          "name": "struct WebhookErrorBody",
+          "sha256": "beed6b8feba0f0662e1706838c2cf883cfbfcaf7270ee35d9cf44a6ed7151823"
+        },
+        {
+          "name": "struct WebhookSchemaIssue",
+          "sha256": "6d7c4d1f61624fd56fa4ecd47045cabaf23a330c77da0bdaf6d79bf1418793a0"
+        },
+        {
+          "name": "struct SignalHttpRequestV1",
+          "sha256": "533d8555eb6142f83e298a2ddd1ecadfaadeecc01045bc1436f1f0f8d75ebc43"
+        },
+        {
+          "name": "fn signal_http_response",
+          "sha256": "9be3d4b9062890f1a2bdd6ba1387e86bdeaddd3cc1f72bbc18db7c398b13120e"
+        },
+        {
+          "name": "fn handle_external_signal",
+          "sha256": "589b619cfe1eccf3e227f58dc41d443ab25c407e7b70cdbfa6f0d9e21b95d1f1"
+        },
+        {
+          "name": "enum EventDeliveryResponse",
+          "sha256": "89b5bc7677ad0d1a492efd0f6c3fac10a2e7d93ad8ecb302357ec5f65a4a8eeb"
+        },
+        {
+          "name": "struct EventPublishedResponse",
+          "sha256": "7bc855b8650d4acb3d0b2b2f8b673cc786a5bf9a43d4c910215fee6211b4c7e3"
+        },
+        {
+          "name": "fn prepare_state",
+          "sha256": "c2111f1e5ab06e1e63757888360362ccfaeb93d7d45ea0bf78014e8dd963d6b4"
+        },
+        {
+          "name": "fn compile_event_subscriber",
+          "sha256": "761ade615b81fe78fa198449ddb5dfef58c39f008a9bbfd047b0b2d0f50d8549"
+        },
+        {
+          "name": "fn compile_whatsapp_subscriber",
+          "sha256": "66bf4a25f106fe52b18096d014d601e8cfb4883a41f50d4bd4f99ce4b3eb62df"
+        },
+        {
+          "name": "fn valid_event_name",
+          "sha256": "c2dea51072ab45981f3762ff6c32142036075da061a92f42c3906e756d8d6940"
+        },
+        {
+          "name": "fn compile_route",
+          "sha256": "10e4bd1da9275d72442c6f5039efe7b91ab3bdb6395e4979b14a880b0cb3f173"
+        },
+        {
+          "name": "fn object_fields",
+          "sha256": "3b2cd916fb898cde0af7966f84b44f6497a3c9f3b9041baa745b47d2f8cc0dfe"
+        },
+        {
+          "name": "fn literal_string",
+          "sha256": "ac6a996ac1a2e75c53104f798b2117155a4dcc6e4c1ea9214f9fb06cbcdd7e74"
+        },
+        {
+          "name": "fn literal_u64",
+          "sha256": "25dab63b0c16f22a43f1b3491c42695d1f1b024a73e584bfbf4a64486019596a"
+        },
+        {
+          "name": "fn webhook_path",
+          "sha256": "2f909099aabd02cbac4842bbc3a52e1423245235f64c15595cde59a9ea564b39"
+        },
+        {
+          "name": "fn compile_schedule",
+          "sha256": "5a1229e827ccda8562b8b53155bd162913ad0f92f50f813e945ee7fd8b165b39"
+        },
+        {
+          "name": "fn compile_interval",
+          "sha256": "144a50353454c747790c91b1150d3e861a7f3b1c40d7f3b817e9434201d7c51a"
+        },
+        {
+          "name": "fn initialize_schedules",
+          "sha256": "da47f58259e8820d248ba2cec1c1f3e197ddb469971f2333913aba38d4a8829c"
+        },
+        {
+          "name": "fn run_schedule_loop",
+          "sha256": "7c41e9f4df9ea9e991d5762f921ffdf534adb697b18d892afe140255de48a12b"
+        },
+        {
+          "name": "fn schedule_admission",
+          "sha256": "fcaaacd0ea10cdc032b5794f3bcd3fcf42020d04ed9c2c532113e6bf3111e50c"
+        },
+        {
+          "name": "fn schedule_identity",
+          "sha256": "74a1de706fa1de2ec1f4b5dec59a908216c9a0931c338764652a17386fe69092"
+        },
+        {
+          "name": "fn report_schedule_next_due",
+          "sha256": "fe924117ff8bce89238f8a678384f6fb6b486504246a7011ea2235dab3ccc5c3"
+        },
+        {
+          "name": "fn report_schedule_error",
+          "sha256": "a335386f248556015df93822bbf096e770008b78543043358cd09b8564d8f7c3"
+        },
+        {
+          "name": "fn report_schedule_policy_queue_full",
+          "sha256": "e76775ee91a4e2dd187967a800f305df32c803265c60f0e59d82447156159ed6"
+        },
+        {
+          "name": "fn initialize_intervals",
+          "sha256": "3cd39e696162b4b2da99b0da0ea10174f4762e5cda7d05b85e931954583193c3"
+        },
+        {
+          "name": "fn interval_registration_error",
+          "sha256": "c42adc0ec0a8e9d8005dcee35af7a232bf312f24109d8e2e04f3fadfdc586a23"
+        },
+        {
+          "name": "fn run_interval_loop",
+          "sha256": "b04402f7046e185550d7c297e4fc084c91ea396ae43785b0c9ef5ecf2552472c"
+        },
+        {
+          "name": "fn interval_admission",
+          "sha256": "10bbe5f73acfa22bf6c1d4a4e698453476fac969884f9f63ba3049403c5e7fb4"
+        },
+        {
+          "name": "fn interval_identity",
+          "sha256": "a985033a320eff597acbfcdd9a4ea89b454c1c3d50507c2eae2b1795ad38684b"
+        },
+        {
+          "name": "fn report_interval_next_due",
+          "sha256": "7cdb6732f497d33f15310627349d5f6481f66435c054a0606e97b082ca29748c"
+        },
+        {
+          "name": "fn report_interval_error",
+          "sha256": "28f8b58b0a66b1135f02d03a8abc7d22f515fef19b81bc43599262c42655cb6e"
+        },
+        {
+          "name": "fn report_interval_policy_queue_full",
+          "sha256": "f2973e69690d3cd97fe605adca77c62a79aae677e6ae129fee463ca537b5a1b0"
+        },
+        {
+          "name": "struct WhatsAppHandshakeQuery",
+          "sha256": "430fee1a26a0b2e3965b3d2f418b847a75d0eb14b8e7c13839f2d2267ce33bfd"
+        },
+        {
+          "name": "fn whatsapp_callback_error",
+          "sha256": "0b91903989d2419093be285225089b9464d5ee28a59fb3adf45c9af4011cd965"
+        },
+        {
+          "name": "fn whatsapp_signature_valid",
+          "sha256": "049f6fa5a7f3d92d34aca5a8e60c6ef16c7986c5b2729cf11b154d979720e9b4"
+        },
+        {
+          "name": "fn whatsapp_decision_payload",
+          "sha256": "f4dade781917a0dd2697d58838beb2d8c49c56819b1d3856c30306261f03629e"
+        },
+        {
+          "name": "fn bounded_whatsapp_message_id",
+          "sha256": "285353a953171217dd9fc7d8042173cdaa7488e65b6f60ce9933d397a80e9a63"
+        },
+        {
+          "name": "fn handle_whatsapp_callback",
+          "sha256": "02658ced7fe1dd328948c2f1636b964e4312e01f5d7983a18e6488dbc14436c7"
+        },
+        {
+          "name": "fn handle_webhook",
+          "sha256": "4608382711bc6812b1984e271a4f78605b26886e1f5c96666f3f7e2cca6f96ac"
+        },
+        {
+          "name": "fn handle_event_publication",
+          "sha256": "644d7b3dd85a25355664ef197d66ecbec5c31eaf43e5a24d9cd93ddcc37437c0"
+        },
+        {
+          "name": "fn inbound_trace_context",
+          "sha256": "8973e4d8ea69d64c8f7a54ce803e9ef518bfe162cb42b35ae53694589f701a33"
+        },
+        {
+          "name": "fn valid_event_id",
+          "sha256": "c8771549956519fafe3bf0212edcdfda2c190bdf59773a98bc06962e65283d80"
+        },
+        {
+          "name": "fn event_source_identity",
+          "sha256": "6bfa8835c816a31a56f5667873bbaf0c373058997d271c6807f5b4f757700f9b"
+        },
+        {
+          "name": "fn event_admission_failure",
+          "sha256": "e52820dec4a4ff94e2ec449e93062b8d1b43adc592dab82aac755e25fbd76a08"
+        },
+        {
+          "name": "fn admit_startup_manual",
+          "sha256": "07d223a60271cf9d614b87471f7489a5aa8c96609067b87be6761e348f3fb99e"
+        },
+        {
+          "name": "fn run_external_ingress",
+          "sha256": "dbd8985f752fdf062a6106efd31244881a17239f9dc0b5edeab7c2eedccf8e86"
+        },
+        {
+          "name": "fn run_internal_event_dispatch",
+          "sha256": "b4d1ad61e0a0bfc7efe59fd17ebfbecbaad8dc3aad869b91a4fb9539a563b619"
+        },
+        {
+          "name": "fn dispatch_run",
+          "sha256": "f5dbeed26e68ababe9322f428670d7cf8c42be3fb205048f2700f0d17394a0b2"
+        },
+        {
+          "name": "fn execute_trigger_run_with_builtin_notifications",
+          "sha256": "f11f4614648a553e4df24c5fa4dd0431fef72cc8b68ee8e746dae5e5909d1b3f"
+        },
+        {
+          "name": "fn wait_for_active_runs",
+          "sha256": "58e62775891c8de1d3f56bed48e2755fcb24b22092c8a435c86175cbfaa480f2"
+        },
+        {
+          "name": "fn runtime_failure_code",
+          "sha256": "0b804d82191ef9b1ce6d1bfb707b40234b66cee1da616f786149204284e69412"
+        },
+        {
+          "name": "fn authorized",
+          "sha256": "fe9b0769d3c093f7ad484f341403bdb81efc4c1980e26659bb99319df0e16682"
+        },
+        {
+          "name": "fn authorized_bearer",
+          "sha256": "3a4f074e125cedf81dfe6aa351e0a6c374120dd0157c67a702c0588485ebca0f"
+        },
+        {
+          "name": "fn bearer_token_matches",
+          "sha256": "ad0c069f4576e4370a5dcdd139b5cff3f8b50ebcca557f299384207b40c8cd17"
+        },
+        {
+          "name": "fn has_json_content_type",
+          "sha256": "9acd5239dd47eda51f07b654da22736072d82480169fb4258b724f16374755c4"
+        },
+        {
+          "name": "fn schema_issue",
+          "sha256": "a5c0cb30147ca20a1ef62888988568df98db741789423632026ce0e6875681b2"
+        },
+        {
+          "name": "fn escape_json_pointer",
+          "sha256": "fc85276cec1c91187e016aa4d5e0e70480263a498d60580c491544e3646541c0"
+        },
+        {
+          "name": "fn truncate_utf8",
+          "sha256": "136f9508a8f212f3b8c9b004350b203be824a5c1f2c0ef1ccb9ffcd6a229b030"
+        },
+        {
+          "name": "fn rejected_response",
+          "sha256": "1855e88d31ad26b32f2ce3300e5beb40baf92624c48c052f7988691e7a69b3ea"
+        },
+        {
+          "name": "fn event_rejected_response",
+          "sha256": "5506edd8e41d17e02c04c15abd7fddf9137e8884145fd8747a68742aaa300470"
+        },
+        {
+          "name": "fn error_response",
+          "sha256": "a1699345d516f04307b56851276d369c2b421720097a707b5f91b090246e2ad9"
+        }
+      ],
+      "testDeclarations": [
+        {
+          "name": "fn bearer_comparison_hashes_every_candidate_to_the_same_fixed_width",
+          "sha256": "797733db5d9e7059a1f57148f0d765668ed5085eabfe848fa565a7a5e97e09bd"
+        },
+        {
+          "name": "fn whatsapp_signature_uses_the_exact_raw_body_and_decision_payload_is_bounded",
+          "sha256": "d3834095ff9005a9ed18aff45a89b932b057d86179cfdd1b67264163307ddaa5"
+        }
+      ]
+    },
+    "notification_runtime": {
+      "path": "core/woml-engine/src/notification_runtime.rs",
+      "sha256": "c3ed76c40bba9c082363f395d735eb65daafdac1b658d8baf012c1289ea55ccc",
+      "publicTypes": [
+        "CustomNotificationJourneyOptions",
+        "NotificationDeliveryDiagnostic",
+        "NotificationJourneyDiagnostics",
+        "NotificationJourneyError",
+        "NotificationJourneyResult"
+      ],
+      "publicFunctions": [
+        "run_notification_provider_journey",
+        "run_notification_provider_journey_with_custom"
+      ],
+      "publicConstants": [
+        "NOTIFICATION_JOURNEY_DIAGNOSTICS_VERSION"
+      ],
+      "publicTraits": [],
+      "declarations": [
+        {
+          "name": "struct CustomNotificationJourneyOptions",
+          "sha256": "79f223b2326937e82d464da79ace05818210a7ddfd9333842c861f5022d656b8"
+        },
+        {
+          "name": "enum DeliveryHostResult",
+          "sha256": "8892e19912550489718e803c81aaa639e2620d61e67d03f4ac928d78a9909448"
+        },
+        {
+          "name": "struct NotificationJourneyResult",
+          "sha256": "bda0a4995493a780a84014a0caf107d50ea6cb92835f46e35a4980281bd0ffe2"
+        },
+        {
+          "name": "const NOTIFICATION_JOURNEY_DIAGNOSTICS_VERSION",
+          "sha256": "d51f529046e16989304f1c6044426e0025f14f6968dad0b0c1fdba94a83671e2"
+        },
+        {
+          "name": "struct NotificationDeliveryDiagnostic",
+          "sha256": "b6f092a8c007f4b65723281243b931ce832d25a4b4cb496a41b0d0a7c928da1a"
+        },
+        {
+          "name": "struct NotificationJourneyDiagnostics",
+          "sha256": "2f8be358d4a2dd6adebc9fa6db109ce0732454a866cd991d6910c81888d973ba"
+        },
+        {
+          "name": "enum NotificationJourneyError",
+          "sha256": "24ec65a23ac6ba452736af31f36dc015b55c467e370d7f5fa8399a1e62fcfd8f"
+        },
+        {
+          "name": "fn run_notification_provider_journey",
+          "sha256": "60110223ab2f7eb6a7a986f15f778d80df47bcec4fda6e98ab77646094eaacd5"
+        },
+        {
+          "name": "fn run_notification_provider_journey_with_custom",
+          "sha256": "b9137c9c3343a010fe084e951775f5801c89c1d8b24fbdb7bc2d162c3874ea08"
+        },
+        {
+          "name": "fn notification_diagnostics",
+          "sha256": "0ac32ec931c693942519906df24f3859547522143a9600909a40c3a322dce1ce"
+        },
+        {
+          "name": "fn delivery_retry_wait",
+          "sha256": "313fcf831ab745eb4485b52974968b0f4c863f30fba298933dfc4681031b32d6"
+        },
+        {
+          "name": "fn update_retry_wait",
+          "sha256": "b0cbe161cd98f4f7854b0baa9a2acb5eb2e693628915eed3a1227a5c8d79cd25"
+        },
+        {
+          "name": "fn custom_provider_descriptor",
+          "sha256": "5866deb057f1fb5316742b8f7f3fbf6989c0bb8fb2a863562870b335be162b79"
+        },
+        {
+          "name": "fn context_prop_value",
+          "sha256": "a5c424298fc4a2dbb3be7a22b32d458931451966210ad9de9294109bd26c1459"
+        },
+        {
+          "name": "fn custom_provider_props",
+          "sha256": "bda981d7adeabd81f8954b45b52e3b25ffce157570de0ae74588da56497c4c34"
+        },
+        {
+          "name": "fn render_custom_message",
+          "sha256": "bb8fc2fb52fa34dbc35ed02e69970540599c3c974fbb0d3f9fa52254c5c0dd73"
+        },
+        {
+          "name": "fn custom_delivery_message",
+          "sha256": "3320d848837cf3d28869f44873c9f3b3e25ad35e8f90f3e93d4b3b2f48ff9dbc"
+        },
+        {
+          "name": "fn synthetic_provider_message",
+          "sha256": "9bae796393c77b246ab1eea9dfbbfc76dc514f366859e0f78b97bf073266f1e1"
+        },
+        {
+          "name": "fn custom_delivery_result",
+          "sha256": "6910b34da0ccaa078d2843d8bad723203a715041e02abb3208a7ffc896f96f15"
+        },
+        {
+          "name": "fn custom_host_failure",
+          "sha256": "dc486c7db2bd30fd6c9104e1ef5959bf4939342fe03f831f25de372be9aac93f"
+        },
+        {
+          "name": "fn delivery_message",
+          "sha256": "cc05a161d56d9ae749d6a2498253551280d434c00cc8d7d33e8059a632c1b883"
+        },
+        {
+          "name": "fn update_message",
+          "sha256": "b02990e5ca07450df7f82e3268ebe52fec0ee40b2d576e00f4545166795f6a23"
+        },
+        {
+          "name": "fn delivery_result",
+          "sha256": "bcfc6f3af4542899254c36112bea61555732ebb9feed4393aa409252c5e228ca"
+        },
+        {
+          "name": "fn update_result",
+          "sha256": "c4f85f6418a72cb08571a33936f6ea9eee781f36d1e94979d7d9b8f86b4620ee"
+        },
+        {
+          "name": "fn invalid_response_failure",
+          "sha256": "14d87dc4c6f0b485e65f5387606b0f93c43c84ebe02e53abc5c93f914af87bf9"
+        },
+        {
+          "name": "fn host_failure",
+          "sha256": "4cc8fc8dcbf27cf0ea3d7cd0d654d4d903f1fbbcc7a3c6fec574cfc8edebf20a"
+        },
+        {
+          "name": "fn shutdown_shared",
+          "sha256": "1431a54379acc65208ccc782c0d9cc4241e90c41a511667df6026b932a051e0f"
+        },
+        {
+          "name": "fn shutdown_clients",
+          "sha256": "9d5766698194b641454bdde306439c071e7a8317030b693f375c2e3f571b3d11"
+        }
+      ],
+      "testDeclarations": []
+    },
+    "bridge": {
+      "path": "core/woml-native/src/bridge.rs",
+      "sha256": "3bdb572fe54931e474fafa490a4fa9469a19084fa219d69765f865341112cb09",
+      "publicTypes": [],
+      "publicFunctions": [
+        "activate_woml_webhook_runtime",
+        "cancel_woml_run",
+        "create_woml_backup",
+        "enqueue_woml_remote_dispatch",
+        "execute_woml_remote_attempt",
+        "execute_woml_retention",
+        "execute_woml_retention_async",
+        "execute_woml_workflow",
+        "execute_woml_workflow_durable",
+        "execute_woml_workflow_durable_outcome",
+        "execute_woml_workflow_durable_outcome_with_progress",
+        "execute_woml_workflow_durable_with_progress",
+        "export_woml_artifact",
+        "export_woml_artifact_backup",
+        "has_woml_workflow_definition",
+        "inspect_woml_artifact",
+        "inspect_woml_backup_store",
+        "inspect_woml_correction_v1",
+        "inspect_woml_locks_v1",
+        "inspect_woml_operational_progress",
+        "inspect_woml_remote_dispatch",
+        "inspect_woml_run",
+        "inspect_woml_run_artifacts",
+        "inspect_woml_run_presentation",
+        "inspect_woml_run_v2",
+        "inspect_woml_stored_run_requirements",
+        "inspect_woml_waits_v1",
+        "list_woml_run_presentations",
+        "list_woml_runs",
+        "maintain_woml_artifacts",
+        "maintain_woml_remote_dispatches",
+        "observe_woml_artifacts",
+        "observe_woml_corrections_v1",
+        "observe_woml_locks_v1",
+        "observe_woml_operational_output",
+        "observe_woml_runtime",
+        "plan_woml_operational_output_prune",
+        "plan_woml_retention",
+        "prepare_woml_remote_attempt",
+        "prepare_woml_restored_store",
+        "prune_woml_operational_output",
+        "read_woml_last_retention_result",
+        "read_woml_operational_output_page",
+        "read_woml_remote_terminal",
+        "reconcile_woml_remote_dispatch",
+        "record_woml_verified_backup",
+        "recover_woml_correction",
+        "recover_woml_runs",
+        "resolve_woml_approval",
+        "resolve_woml_notification_approval",
+        "resolve_woml_rich_approval",
+        "restore_woml_artifact_backup",
+        "resume_woml_stored_run_with_progress",
+        "resume_woml_workflow_durable_outcome",
+        "resume_woml_workflow_durable_outcome_with_progress",
+        "resume_woml_workflow_durable_with_progress",
+        "run_woml_notification_provider_journey",
+        "settle_woml_approval_timeout",
+        "settle_woml_timer_wait",
+        "start_woml_remote_attempt",
+        "start_woml_remote_loopback_coordinator",
+        "start_woml_webhook_runtime",
+        "stop_woml_remote_loopback_coordinator",
+        "stop_woml_webhook_runtime",
+        "submit_woml_external_signal",
+        "submit_woml_manual_trigger",
+        "submit_woml_trigger_occurrence",
+        "verify_woml_artifact_backup"
+      ],
+      "publicConstants": [],
+      "publicTraits": [],
+      "declarations": [
+        {
+          "name": "enum NativeTimerWaitSettlement",
+          "sha256": "c260ce7c5f6c874c00cbce71da23e2f846f7f5e034a9fd66c5fe229be4ec3da2"
+        },
+        {
+          "name": "struct NativeParallelExecutionErrorDetails",
+          "sha256": "4c96cc23847ad197327bc37341faa1e8d12a50fcae0e03a79351e16a39bd4aba"
+        },
+        {
+          "name": "struct NativeExecutionError",
+          "sha256": "5e0c0c7a9969011b14998ef3c0f402d5a62e9528450824343ff7c618044e8933"
+        },
+        {
+          "name": "fn native_execution_error",
+          "sha256": "3dd3658e936ccf999df97a89fba60b81c07da8f7d18e03e3b4d7a55285f04dd4"
+        },
+        {
+          "name": "struct NativeApprovalDecisionOutcome",
+          "sha256": "e08d352d4f32ac14bb93ba77af7ccbe1d51a921bd4d8a13ad901fef2b4c17ee3"
+        },
+        {
+          "name": "struct NativeRichApprovalDecisionOutcome",
+          "sha256": "83a8cbd924fd9c6b072ad740baff2e16771d926b17ef21e7bf957956f5712514"
+        },
+        {
+          "name": "struct NativeApprovalError",
+          "sha256": "650171e1b9c9881ca00d6a2a9f3a534fad678f3e2719bc7fc602ab238557bcf0"
+        },
+        {
+          "name": "fn native_approval_error",
+          "sha256": "f06ec39c23a541efe159301000438236b4387db4c123d847f659a9b41172408c"
+        },
+        {
+          "name": "struct NativeNotificationError",
+          "sha256": "4a42e75ccdf60ba62c78c6d9010aa1dc3109ec1547b08ced6cd788fd46607fb5"
+        },
+        {
+          "name": "fn native_notification_error",
+          "sha256": "bd0c042bf1578c6f4a01b2fc684202fa88145f13a86674766c472ade9a7cb734"
+        },
+        {
+          "name": "struct NativeWebhookRegistration",
+          "sha256": "cd9fc7292c2a4bde6330f14cb4c38e25b029d0d9b62de1df6693d79bc47590d5"
+        },
+        {
+          "name": "struct NativeWebhookRuntimeStarted",
+          "sha256": "1c8ae31bc11853db7938bc92b491f9c025268d2431197e2d72967a5888c4e320"
+        },
+        {
+          "name": "struct NativeStoredRunRequirements",
+          "sha256": "ab67b52af67042af0e924b2f44c634b1081d3a4210aea9cee637715d51dadc80"
+        },
+        {
+          "name": "struct NativeTriggerRuntimeError",
+          "sha256": "24b1c8b68ace59a33d7aa4084f43a71bd96ef8bb7367bbe1e8f89b244cd3f9fa"
+        },
+        {
+          "name": "struct NativeRuntimeInstanceProgress",
+          "sha256": "10a2bffb91d1e1a5a769ec0608fe93cedb9b64b8c8dbb7a2166cc3deded39a0b"
+        },
+        {
+          "name": "type NativeRuntimeInstanceReporter",
+          "sha256": "faa7f14160a7d0dc25aaeae8a2b11d7d1854d763fba4ecf20a1d43413ec22b45"
+        },
+        {
+          "name": "struct NativeWebhookRuntimeThread",
+          "sha256": "1dea25edbe1308795fb56fb7ba905bc7fa242020a17d7dc754c2c5bce7b89f98"
+        },
+        {
+          "name": "struct NativeManualTarget",
+          "sha256": "09a62b49251a4a2d77ed57d06e02d65b44a62f8343147155a2fe756c0d192a81"
+        },
+        {
+          "name": "enum NativeWebhookRuntimeCommand",
+          "sha256": "e4fb8ead906ba9362bbbba68853b1579d643c3970219936510c0014698d70f42"
+        },
+        {
+          "name": "struct NativeTriggerIngressRequest",
+          "sha256": "912efb1ff2972389fffc6384308d79f765a0029dc902d9ce03dd9832929988ab"
+        },
+        {
+          "name": "struct NativeTriggerIngressAccepted",
+          "sha256": "edb50ae4b0eede9fbbbccfc3bc08e43820431fb9b7cde3110b81702b6b57d538"
+        },
+        {
+          "name": "struct NativeTriggerIngressRejected",
+          "sha256": "f327ff8ae60a95d5ca105c15978061f1994abd6d42378d72bda59e4d4da82a5f"
+        },
+        {
+          "name": "struct NativeTriggerIngressFailure",
+          "sha256": "68d63a00d4eb98601719d3a33e4ac7c87204cbb5ccaab69cabf672ce24343a7e"
+        },
+        {
+          "name": "struct NativeManualAdmissionRequest",
+          "sha256": "2b1397ebcc0c9fa859bbe47dbdf0010ee341a11fe84afa55c62379a659bb4c08"
+        },
+        {
+          "name": "struct NativeManualAdmissionAccepted",
+          "sha256": "d97425d88223d2ef7de6911723e136bbc4f3c70f5020828c73e0da9adfa8a144"
+        },
+        {
+          "name": "struct NativeManualAdmissionRejected",
+          "sha256": "d64339e1c0dda712667f0678162a6deff25d93b689b8b84a0c7de4217aeefad8"
+        },
+        {
+          "name": "fn encode_manual_rejection",
+          "sha256": "80650341522a1cd64b21fa6d652c0a8fed82bfda3904568a0a36e0a5990cfc8a"
+        },
+        {
+          "name": "static WEBHOOK_RUNTIMES",
+          "sha256": "66f8de2537bf53c3cd419370c1342811cf9c1e5248282c53aa9659a32a1e5ada"
+        },
+        {
+          "name": "fn webhook_runtimes",
+          "sha256": "90fc6ec8cc7d03c30bf702178a17d71544d09cc50c2bf32f83c309d3df8e19c1"
+        },
+        {
+          "name": "struct NativeRemoteCoordinatorRuntime",
+          "sha256": "98b3639ae23ee81cffc4f46867db33abe41baffbd9076cc7f07a930e347c015b"
+        },
+        {
+          "name": "static REMOTE_COORDINATORS",
+          "sha256": "56d7234daa3976953d66f0f9cd3ce0200100251981f497cd041777c0fd6a6087"
+        },
+        {
+          "name": "fn remote_coordinators",
+          "sha256": "1da49b97d990c71c5a9eea069dc708234e3548b329ce2847fbcd5292dc229a90"
+        },
+        {
+          "name": "fn native_trigger_runtime_error",
+          "sha256": "c7d0011d9461d5f640ebb4e9846c8b165fc99093a98e029a729b9ff26fb2adc0"
+        },
+        {
+          "name": "fn trigger_runtime_napi_error",
+          "sha256": "97111c2ef629c51a71dfddac7a6860423348da1c15e217c2e6121745d42d0772"
+        },
+        {
+          "name": "fn native_operational_output_reporter",
+          "sha256": "f2af007dd4600a8ffb546843a1a295cb861aadc3628abe0f6d39b5c86d324197"
+        },
+        {
+          "name": "fn native_runtime_progress_reporters",
+          "sha256": "0b2c50c6c7ccf513eb97d5903ba644cb1e4022705901a80b1e3fb9519b0bad68"
+        },
+        {
+          "name": "struct NativeRunInspection",
+          "sha256": "3da075a70575863f8577c952bdf5a84dd80179ccd834bf211de3e3e79463175f"
+        },
+        {
+          "name": "struct NativeRunInspectionError",
+          "sha256": "b4829a4f4bed07bebb3a5774f99fead1e86b979736ff39199787324cdeea6b99"
+        },
+        {
+          "name": "struct NativeRunManagementError",
+          "sha256": "030c70188fb139e4575bdcc5ff9bdf5a28a917c05f73c8d6b2d68c7844515754"
+        },
+        {
+          "name": "struct NativeBackupError",
+          "sha256": "e6067e092387288a60bea8eea9c58906b723e97e2204bdb6f9c5d1ed6a21a539"
+        },
+        {
+          "name": "fn native_backup_error",
+          "sha256": "2833d23b7a14848806685661ba5c6cf6d16b11ef75264fdf1152fffe1fb7b7af"
+        },
+        {
+          "name": "fn native_retention_error",
+          "sha256": "3dca34c551d176c4961bd83579eef80803f73d1c9cfae57424ad7d43c4f3dce8"
+        },
+        {
+          "name": "fn native_run_management_error",
+          "sha256": "411372c44f2eb635a24791e92851f5c143cdec94d6958f1f086940031012dc56"
+        },
+        {
+          "name": "fn native_run_presentation_error",
+          "sha256": "4aa0ba2c2f6851c611282614d2138ad32ad1932ec1aac2f7054088622c90f794"
+        },
+        {
+          "name": "fn native_run_inspection_error",
+          "sha256": "374666d158eb2dc48fef73a6f139da2e587c10e463a11e512d9f329f6e1801e2"
+        },
+        {
+          "name": "fn run_failure_code",
+          "sha256": "459e7c0a442e587094b3a54233f1ac9784d004c0e3531dcd172de04e7e949af7"
+        },
+        {
+          "name": "fn runtime_options",
+          "sha256": "ec7543e61f7aa867f4e27a65257e9e051e1c7eb374656cd6a4438da1786484a3"
+        },
+        {
+          "name": "fn runtime_options_with_secrets",
+          "sha256": "55aaf73c48a109e49acf97c7a475a2434cdb1de014a5daeae68e27257d615edb"
+        },
+        {
+          "name": "struct NativeRuntimeCapabilities",
+          "sha256": "f52e4fcbe16d5c4dd1749c3d1f27ff9930dc578b88fc42ae99d1063a565e18a6"
+        },
+        {
+          "name": "struct NativeInfrastructurePolicyTrust",
+          "sha256": "dfd809331e43a99780355378e3037d65180d38228b133439b9aca4b0c60d2181"
+        },
+        {
+          "name": "impl From<NativeInfrastructurePolicyTrust> for InfrastructurePolicyTrustV1::from",
+          "sha256": "522def0b14dd58dfdb1ab86dd335677581ca58469bb7a6f226cf6d9105c4a5d6"
+        },
+        {
+          "name": "struct NativeInfrastructurePolicyRuntime",
+          "sha256": "0854d29273ad1f14cffacfb4efedd60d9942924819dcc521abb5bc2a125606e4"
+        },
+        {
+          "name": "struct NativeProcessRuntime",
+          "sha256": "b0a02da2b0e373506f2f3b24c0f6b3e4a0328e7e3469f153a1fee7b428926e8c"
+        },
+        {
+          "name": "struct NativeArtifactRuntime",
+          "sha256": "4fff9519feb291a61baa83635d30e4903cb891a67ecc9802be4ec5698426e094"
+        },
+        {
+          "name": "struct NativeReviewerRuntime",
+          "sha256": "30537ebfb9a78d3fada304549c5c9f2014635fcf4e27a1a9ca7d639d77c4a853"
+        },
+        {
+          "name": "fn apply_runtime_capabilities",
+          "sha256": "367d2c9f558aee3b823dce5223c2a65fba1180ec35d837876a9b831cec820b0c"
+        },
+        {
+          "name": "fn runtime_options_with_modules",
+          "sha256": "cee23708ab2cd1a066cdddcf321c46fde21f2e429c951d3f77414340afe7e47f"
+        },
+        {
+          "name": "fn runtime_options_with_progress",
+          "sha256": "d9cdb0ed754efc95d518de59cb61080500d132b1c4d037332113c5afdf40fdf7"
+        },
+        {
+          "name": "fn execute_woml_workflow",
+          "sha256": "82ba2c75080ae009d0165aaa0df007f52c1dcfe53a1c062dc0f82e337e0f475e"
+        },
+        {
+          "name": "fn execute_woml_workflow_durable",
+          "sha256": "1884b85810e0a9183bf98c9da3fd1d88b8f5b732f6fcde030910e104f7678ae9"
+        },
+        {
+          "name": "fn execute_woml_workflow_durable_with_progress",
+          "sha256": "d179432f72a9b7ad067b096bc88236784ba7ed11202754df0034a01a6bda1fe6"
+        },
+        {
+          "name": "fn verify_durable_run_definition",
+          "sha256": "b53152c56b353cd0cea560340267b3f9cee34225afd8c74c8d2843101329ea9d"
+        },
+        {
+          "name": "fn resume_woml_workflow_durable_with_progress",
+          "sha256": "e722f0428b5bb82032fb62e6253c602b0b47bd183ddb6469dc6f952731948c0e"
+        },
+        {
+          "name": "fn execute_woml_workflow_durable_outcome",
+          "sha256": "5e863aa3504380dd89a2a6c7076d8197d1b5f877dff25c806bd780cb99742510"
+        },
+        {
+          "name": "fn execute_woml_workflow_durable_outcome_with_progress",
+          "sha256": "1defa68b1620de0bfcaae9ebce63a8370e3251349c6a6d52d1a118f05660c28e"
+        },
+        {
+          "name": "fn resume_woml_workflow_durable_outcome",
+          "sha256": "2a371719086a20d63f0d60d1a5b17bc6c151d71b857ab17def28b73d5d909d09"
+        },
+        {
+          "name": "fn resume_woml_workflow_durable_outcome_with_progress",
+          "sha256": "b14c738c86952a81b3a358be4821d7f73d6f84d93ef2dc68efc6b1467f46b0d8"
+        },
+        {
+          "name": "fn inspect_woml_stored_run_requirements",
+          "sha256": "9403cc4eecac4a81510762e15dcd71be9d84467c2016a27e5b364f49b929f8c2"
+        },
+        {
+          "name": "fn resume_woml_stored_run_with_progress",
+          "sha256": "99d2267747e051d51e03f1ef7a833975003cf6b0601d14d678bcff73cc9e5858"
+        },
+        {
+          "name": "fn resolve_woml_approval",
+          "sha256": "6bee6cd7a6de2994c44e58506fb3df2351057f050ccde799ccda036d504e6c4d"
+        },
+        {
+          "name": "fn resolve_woml_notification_approval",
+          "sha256": "8268989e004afd595f103c3389bbaf2d871741d427522fa5046d6b53d91b0363"
+        },
+        {
+          "name": "fn resolve_woml_rich_approval",
+          "sha256": "7614858f7920a1d2502e88d5874227fe3e829bfe7b1834ad1583c2ca3cad62c9"
+        },
+        {
+          "name": "fn settle_woml_approval_timeout",
+          "sha256": "d8dec9079d81198aeeb0d8f52b5e8b2706bd4713529bfd03eaac8ab9ed334eca"
+        },
+        {
+          "name": "fn start_woml_webhook_runtime",
+          "sha256": "ff99428b06f537fd0b820093d845a64769102bd88abee404bfde871cf5d42eba"
+        },
+        {
+          "name": "fn activate_woml_webhook_runtime",
+          "sha256": "5cbce29ae241392ec7024de772acde0703a00facfa7eb5e1a564bd6bc2f3aaf6"
+        },
+        {
+          "name": "fn submit_woml_external_signal",
+          "sha256": "2a90a3240e3444a112ab81ec5a79dbff00a80746c0de3f6882376db6e78d9941"
+        },
+        {
+          "name": "fn submit_woml_trigger_occurrence",
+          "sha256": "bc1b78d6b1394d66273cdc5c80821963b5a02471a333d200256410097693ce09"
+        },
+        {
+          "name": "fn submit_woml_manual_trigger",
+          "sha256": "c5a01206c66706672cb67dfaa8e900a13726d79623664769e7f041363b3cdf2b"
+        },
+        {
+          "name": "fn stop_woml_webhook_runtime",
+          "sha256": "3b14dab9015bf725304aeac65fe3e98e4d83981fe35411c425a72d4a7d388af5"
+        },
+        {
+          "name": "fn inspect_woml_run",
+          "sha256": "0b2b610b6eff6b5922488faadc651b5e439ad5e78f4652df8a5b4fe7c0a029f9"
+        },
+        {
+          "name": "fn inspect_woml_remote_dispatch",
+          "sha256": "3f5e02d5a2c5f5d07479b232c2d493a2ee5fd2d83ca1b9e72def36afadac7120"
+        },
+        {
+          "name": "fn start_woml_remote_loopback_coordinator",
+          "sha256": "5dd724e4f40d74a715e33941b3410e901c8a1dc476b1467d546fc1f25fff73a3"
+        },
+        {
+          "name": "fn enqueue_woml_remote_dispatch",
+          "sha256": "21f700383872ec62b87be7b4e7ece532316d0a219f9a22b4da6267cb7a66d970"
+        },
+        {
+          "name": "fn maintain_woml_remote_dispatches",
+          "sha256": "e9527128a71fd02e36e99a518bd2806a35f6bc6fc9cd6b3e939cf1f971feb09b"
+        },
+        {
+          "name": "fn read_woml_remote_terminal",
+          "sha256": "8385725769dd45c7c21bc6bba069e263ce64917e84bc090b2543b7cb759af611"
+        },
+        {
+          "name": "fn stop_woml_remote_loopback_coordinator",
+          "sha256": "1fe4d9dbf208a2dffe1cee7004f62a6a8f3f256d54bfa1675a01289196c01272"
+        },
+        {
+          "name": "fn native_prepared_remote_dispatch",
+          "sha256": "affe2b2f6882cc97f6b49726fa14993a3bcb34e17a7824cab7206e8f4783895c"
+        },
+        {
+          "name": "fn prepare_woml_remote_attempt",
+          "sha256": "3ab8aca0f30a0c02648074fc485cd30e3c7dac74a197863985f12e67befa2840"
+        },
+        {
+          "name": "fn start_woml_remote_attempt",
+          "sha256": "c15f01bd3b3a99de93e35626f529f65bdb74639bddee4d6664dc3498bb391685"
+        },
+        {
+          "name": "fn execute_woml_remote_attempt",
+          "sha256": "220b3b87aa6cbefca5c4fe5029f4d25f815c6f0f106152904a1a06a95192bb98"
+        },
+        {
+          "name": "fn reconcile_woml_remote_dispatch",
+          "sha256": "f1965fc0c28f0b310d0cddea8d7a8bbb804735059210da1b9b4c3bc9de49be00"
+        },
+        {
+          "name": "fn inspect_woml_run_presentation",
+          "sha256": "c6805a29e0bbea0f16944df771ee2fd2b4c4907b186462d68ac13aa9ff78ea5c"
+        },
+        {
+          "name": "fn list_woml_run_presentations",
+          "sha256": "7302ce68403fc542736b0f5739c78fd4ee24ee18b6588e96d1295f3ff2c8c755"
+        },
+        {
+          "name": "fn has_woml_workflow_definition",
+          "sha256": "2201dcaaf422fa3c8c53fa5a95ea866c63dafd527b8f1c702499a7bd02575559"
+        },
+        {
+          "name": "fn list_woml_runs",
+          "sha256": "4e8cb26fa19be050d73aa7403247779da3e069481302e792f6919cf296dcf61c"
+        },
+        {
+          "name": "fn observe_woml_runtime",
+          "sha256": "823ca26cd9ffb99e5bd254b59b34bb52f7a70d34a23e2e9af5e8a3ae111e6a09"
+        },
+        {
+          "name": "fn operational_output_napi_error",
+          "sha256": "899c8d7157c8070beed7ef2b8c5126a4a182355e30949aa3d8d956b8374dd6db"
+        },
+        {
+          "name": "fn operational_cursor",
+          "sha256": "1791f817a32732abdf32c39ba0c023b5a69d516307b84323664c74a5752e0e9f"
+        },
+        {
+          "name": "fn read_woml_operational_output_page",
+          "sha256": "2776a751555a3170b13e0416a93da6c2b9cbd26ac2232a7c1f543ecbc7496d5a"
+        },
+        {
+          "name": "fn inspect_woml_operational_progress",
+          "sha256": "96a538a75c85d1be962d287c53a23d952da831b8d964d1d1c60a05fbb70dbf23"
+        },
+        {
+          "name": "fn observe_woml_operational_output",
+          "sha256": "3ff24a6098fd84ba590dd24b326e57cf411d78e272836f947a88e14a8b696962"
+        },
+        {
+          "name": "fn plan_woml_operational_output_prune",
+          "sha256": "13365af2516e9a5db55f5a2fb7daebc62b5a74d05c85f01fa6b72c64a273de93"
+        },
+        {
+          "name": "fn prune_woml_operational_output",
+          "sha256": "dbd68240555c5213793c08abba321ce4b5ba66fcab37142efd7b937b79f9bcfe"
+        },
+        {
+          "name": "fn create_woml_backup",
+          "sha256": "6caa6cfdd35dfc6ecc8e155cc12b56ad4e5ad8c7c9fa1e427697e0b60780937b"
+        },
+        {
+          "name": "fn inspect_woml_backup_store",
+          "sha256": "a3a0b9c8577035caa1634e953daedf58d7dc91e27fbb1a7e994622bd19f3ed35"
+        },
+        {
+          "name": "fn record_woml_verified_backup",
+          "sha256": "5af6c25ae688ce7e59fcfdb2a076fbdc67c37588a940c9298ac8ffc59270459e"
+        },
+        {
+          "name": "fn prepare_woml_restored_store",
+          "sha256": "590afe10c9a1cd0ae98071e98a2f09a224b4fe4b688e2aac0c47255963c713e3"
+        },
+        {
+          "name": "fn plan_woml_retention",
+          "sha256": "d29ec36879b3b0fe530684a4a8df76a09ee7217b1d19cc9c1ab2534a0f8952ac"
+        },
+        {
+          "name": "fn execute_woml_retention",
+          "sha256": "cfcd8765ce6dbacbe7557ac5e17f9a55b9a8ed459599a2a5e2159aef657f4df1"
+        },
+        {
+          "name": "fn execute_woml_retention_async",
+          "sha256": "5bc301d7a4db53cc7d223c64d6fbd24381cf67dd58323841bc45dfc3b108ce8f"
+        },
+        {
+          "name": "fn read_woml_last_retention_result",
+          "sha256": "1c807c52b083caa3dba60dfbae75ba60321a8b6a5fe771f28a7f945042033ae2"
+        },
+        {
+          "name": "fn maintain_woml_artifacts",
+          "sha256": "00ffda4df8274e8ed15fa64850a65d73feff31b77336fe79706faf70a917fd90"
+        },
+        {
+          "name": "fn inspect_woml_artifact",
+          "sha256": "49fdf8d0a963c4ca67ac5fdc1fc5c33a58e6ff8e4bbc00e80a50d1e0eb4f5843"
+        },
+        {
+          "name": "fn inspect_woml_run_artifacts",
+          "sha256": "21c2c394b600aa7dbfff7782fc9b41e8de8f3265bb6ca6629375e1e02dc224c1"
+        },
+        {
+          "name": "fn export_woml_artifact",
+          "sha256": "273a63f592449d70c5a5a6206c580cef1e0d385e30f401618cf4f448cedc398a"
+        },
+        {
+          "name": "fn observe_woml_artifacts",
+          "sha256": "43ecae6a201acd46540491bf74716a594a9a2778719fac39bfa87adc7f844dc4"
+        },
+        {
+          "name": "fn decode_artifact_maintenance_authority",
+          "sha256": "2b27dbf237fea45498765b8d68f1aea3858126e6539329fccb061b0b3adc7fbc"
+        },
+        {
+          "name": "fn export_woml_artifact_backup",
+          "sha256": "c30c37a01065e90fb0a10338c1cf082bf8779aca7debe53ce75e8cee3d74671f"
+        },
+        {
+          "name": "fn restore_woml_artifact_backup",
+          "sha256": "f2f35b0b78d1b1f8748bec97c5e0291b1085fdc013b3515aee572d045ba13813"
+        },
+        {
+          "name": "fn verify_woml_artifact_backup",
+          "sha256": "12a6b65b36f154a2956133e1b597fc2f6a6ac1dd439234d06718264284df4473"
+        },
+        {
+          "name": "fn inspect_woml_run_v2",
+          "sha256": "0d7b7f10de1634c34297b6ecf8173cb8000c3d849dd28009374f55085bffda57"
+        },
+        {
+          "name": "fn inspect_woml_waits_v1",
+          "sha256": "229252d5b9070a7113d1cd9e7392cc1799d56d58f1c6a66397931fdafe432aea"
+        },
+        {
+          "name": "fn inspect_woml_correction_v1",
+          "sha256": "5d14eb1ea5c8b1cc4e080c0a5e7284c4c62a3e900f012159d27ab0dd4a15ad8f"
+        },
+        {
+          "name": "fn recover_woml_correction",
+          "sha256": "b733bcb54505647b35f6769364edbbfe6cd31780ffbc850c68098f7c7f88a2dd"
+        },
+        {
+          "name": "fn observe_woml_corrections_v1",
+          "sha256": "aa635deb3e71c7d3d9e4fa4196f8688221ea00b5e727120c31e56386acb13781"
+        },
+        {
+          "name": "fn inspect_woml_locks_v1",
+          "sha256": "5d9a70790936590d6aba6cea06521c8c8f5e39e19b7fd234f577eca3433260ba"
+        },
+        {
+          "name": "fn observe_woml_locks_v1",
+          "sha256": "0565a6de741325aca031287981e7229bc84803a8fac8088d4ac0f3f4db83e54a"
+        },
+        {
+          "name": "fn cancel_woml_run",
+          "sha256": "6156f739c6905174fc300140888dba23cc74aa24219291ed74a35ccaa9c71627"
+        },
+        {
+          "name": "fn recover_woml_runs",
+          "sha256": "c655cd748a7051fdf372b35806f104de9fbd723612402997d0304c278e6352a1"
+        },
+        {
+          "name": "fn settle_woml_timer_wait",
+          "sha256": "81327862e1a787bdb025c41aed6e1b0be9eb8ea9831acd250f77976cfcd073f7"
+        },
+        {
+          "name": "fn run_woml_notification_provider_journey",
+          "sha256": "8b0f2c3ab90d31e6cc5923ae9fd0178edfb7950943c088725bd958083d96cddc"
+        }
+      ],
+      "testDeclarations": []
+    }
+  },
+  "retained": [
+    {
+      "path": "core/woml-engine/src/remote_protocol.rs",
+      "sha256": "9907c49b546bbb8eeda7eb8c12434126eb4b346b40e666512d5b768be58c92f2"
+    },
+    {
+      "path": "core/woml-engine/src/remote_coordinator.rs",
+      "sha256": "210d9e3966606435551331575d9d241197b5955f3dc0eefbc481b04788d9b1af"
+    },
+    {
+      "path": "core/woml-engine/src/remote_transport.rs",
+      "sha256": "64d40f217cbda450b6e98d51143c0ee33605866154dfe8f5ac77ac0e80376457"
+    },
+    {
+      "path": "core/woml-engine/src/remote_execution.rs",
+      "sha256": "f9abab85ee808997daf53747da2a6b64773dc5e59e7dd69432424c3e221d1dd6"
+    },
+    {
+      "path": "core/woml-engine/src/remote_worker.rs",
+      "sha256": "9251d0dc4a9bbcfbabcbea82974dc9854419ac44ab61539409b933ea278d6be3"
+    },
+    {
+      "path": "core/woml-engine/src/target_registry.rs",
+      "sha256": "1e20f7872ab275cacc0dccb0cc532efd7e05f0ac1dafe57c8dd5b8f22a8ec1b1"
+    },
+    {
+      "path": "core/woml-engine/src/notification_host.rs",
+      "sha256": "ef49bbf74441d159cb01af2ae9002c069e8a6f79dabb9d9f338300bc6dfa4eb1"
+    },
+    {
+      "path": "core/woml-engine/src/custom_notification_host.rs",
+      "sha256": "7a7b5249b949f01a2d25c8525eae10a8a09363ae3b60b12ed4dd725c13a75774"
+    },
+    {
+      "path": "core/woml-engine/src/notification_protocol.rs",
+      "sha256": "c3a2be341d9fa5b218386dba105faa3bcb3c0a581b6e9242462b3f69d5c72ca3"
+    },
+    {
+      "path": "core/woml-engine/src/custom_notification_provider_protocol.rs",
+      "sha256": "3678afdbac221410475d11174ca6c532cb0cac02e51f99595d6c1d37e1a45e0b"
+    },
+    {
+      "path": "core/woml-engine/src/http.rs",
+      "sha256": "f0abb3c239a0f73ef976033c55cdf7a0728178797201bb37a497d9a4a3ca3771"
+    },
+    {
+      "path": "core/woml-engine/src/database.rs",
+      "sha256": "b0224fb0cf29db9179aa1c3c28f1a21924926fdca1ea03748f696adeb8af2a33"
+    },
+    {
+      "path": "core/woml-engine/src/database_postgres.rs",
+      "sha256": "2348d3a7f45d73e05f1f06dfc359e5dfc7557eb2d2f169006afbed773b8d9d2d"
+    },
+    {
+      "path": "core/woml-engine/src/storage.rs",
+      "sha256": "269a7a5f031e2b6f38dc6f0684d4fdb7d29516583d9cac4a05d097caedb84344"
+    },
+    {
+      "path": "core/woml-engine/src/cache.rs",
+      "sha256": "1c25de9949631e9d6e4a69ba02133e7c958c20f11b3d5103258dfdeeac473ce0"
+    },
+    {
+      "path": "core/woml-engine/src/durable_state.rs",
+      "sha256": "26533a54ae40fa53467c9ed9309a08a135c794ccc5ab6f820911bf4991bd28cc"
+    },
+    {
+      "path": "core/woml-engine/src/infrastructure_policy.rs",
+      "sha256": "bb6623cd13cecdf4bb1cc1161649c842fac341ab2b2c61cc88ee5a99cb9297f6"
+    },
+    {
+      "path": "core/woml-engine/src/infrastructure_policy_runtime.rs",
+      "sha256": "b867023a56cffadd6b6cfc8b51a6415ab1550bb8cd80364a211edcfaba6242d4"
+    },
+    {
+      "path": "core/woml-engine/src/operational_output.rs",
+      "sha256": "c57ad22d3f11cbd79e2c4dc7d46eb70cb7bf5fa45619ccfd0b0a39d12c6deb84"
+    },
+    {
+      "path": "core/woml-engine/src/telemetry.rs",
+      "sha256": "45f6937248b5e08f3ce6e05ab0c3e052059115986de1112d44cd1eff61fc7ac5"
+    },
+    {
+      "path": "core/woml-engine/src/telemetry_propagation.rs",
+      "sha256": "dbc87609c0bf7cd49bf7dcaca01f5833b37c1f9de96ce561b97cad6dba78321f"
+    },
+    {
+      "path": "core/woml-engine/src/presentation.rs",
+      "sha256": "7460a7c32eb6c260d85498095edc882b8445e46beb134455c6db3a130c67b607"
+    },
+    {
+      "path": "core/woml-engine/src/backup.rs",
+      "sha256": "0d79973e6f025c3469aa1f48710687fa896b03c7dd091af742c354cd2c1cfb23"
+    },
+    {
+      "path": "core/woml-engine/src/retention.rs",
+      "sha256": "abf7d3ccc7367deea2927821871e067065726edd992220c9183b4c7eed03f6d7"
+    },
+    {
+      "path": "core/woml-engine/src/events_service.rs",
+      "sha256": "9927e3595d2630259c36cfa686813947f84805970e8ce0f01cd308b0d5d618f3"
+    },
+    {
+      "path": "core/woml-engine/src/workflow_calls.rs",
+      "sha256": "f42590235cd8a87675e3f585b3f4dd90e162bf21b4886535cc3a482aea889dec"
+    },
+    {
+      "path": "core/woml-engine/src/schedule.rs",
+      "sha256": "388b078b50eba205db5febeedd3e9c77d3a05e381008e9c51145c3e6574093cb"
+    },
+    {
+      "path": "core/woml-engine/src/interval.rs",
+      "sha256": "488f35b3cc35753edbf0476e22799e4607d215e7dad9ebc168a90130dff22180"
+    },
+    {
+      "path": "core/woml-engine/src/telegram.rs",
+      "sha256": "8848ea7523dd9e53b092690923700d347ff39e74563e03103fb9cf9fbbe46931"
+    },
+    {
+      "path": "core/woml-engine/src/discord.rs",
+      "sha256": "a3b215fce9a86e930ec9de9bab733024478d14c621f71961f403030b93156f44"
+    },
+    {
+      "path": "core/woml-engine/src/whatsapp.rs",
+      "sha256": "8e7703b3f372a918f14fbf84847f51d6e83ac9cd7c732476134ef8f5718a3065"
+    },
+    {
+      "path": "core/woml-engine/src/locks.rs",
+      "sha256": "be05007eeeb0805acd027087d18f9b1003b93b9c7670d2c7849e8cf755a0e267"
+    },
+    {
+      "path": "core/woml-engine/src/rich_approval.rs",
+      "sha256": "86792c0384bb3f4bbc2b0b2affa36bec83744aaebe6ef8ffa65a874b1b584d9b"
+    },
+    {
+      "path": "core/woml-engine/src/host.rs",
+      "sha256": "452307c73a13c2e9fe292f90b2dd24a4b786d83d2fd7bd469d579c7e4918c1aa"
+    },
+    {
+      "path": "core/woml-engine/src/performance.rs",
+      "sha256": "157c8635a3d383301619b281c23ce4cb1532f6e3ab918c1227f86d4c713a54ca"
+    }
+  ]
+}

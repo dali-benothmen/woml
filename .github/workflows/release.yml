@@ -72,6 +72,8 @@ jobs:
         run: |
           bun test tests/release-identity.test.ts tests/native-platform-release.test.ts --max-concurrency=1
           bun run test:release-automation
+          bun run test:rust-core-modularization-contracts
+          bun run test:rust-core-native
           bun run test:for-each-contracts
           bun run test:process-contracts
           bun scripts/verify-process-release.ts

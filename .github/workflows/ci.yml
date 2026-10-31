@@ -173,12 +173,19 @@ jobs:
           cargo test --config profile.dev.debug=0
           --config profile.dev.incremental=false -j 1 --locked
           -p woml-engine --lib -- --test-threads=1
+      - name: Test native separation serially
+        working-directory: core
+        run: >-
+          cargo test --config profile.dev.debug=0
+          --config profile.dev.incremental=false -j 1 --locked
+          -p woml-native --test separation -- --test-threads=1
       - name: Test durable engine baseline serially
         working-directory: core
         run: >-
           cargo test --config profile.dev.debug=0
           --config profile.dev.incremental=false -j 1 --locked
           -p woml-engine
+          --test core_contract_paths
           --test dag_engine
           --test durable_event_store
           --test script_host_protocol
@@ -465,6 +472,11 @@ jobs:
       - name: Build the local native and portable release candidates
         working-directory: woml-cli
         run: bun run build && bun run build:release
+      - name: Verify Rust modularization contracts and actual native lifecycle
+        working-directory: woml-cli
+        run: >-
+          bun run test:rust-core-modularization-contracts &&
+          bun run test:rust-core-native
       - name: Verify the combined contract and frozen budgets
         working-directory: woml-cli
         run: >-
@@ -573,7 +585,7 @@ jobs:
         run: >-
           cargo test --config profile.dev.debug=0
           --config profile.dev.incremental=false -j 1 --locked
-          -p woml-engine --test locks_and_leases --test backup_restore
+          -p woml-engine --test core_contract_paths --test locks_and_leases --test backup_restore
           --test retention -- --test-threads=1
       - name: Failure diagnostics
         if: failure()

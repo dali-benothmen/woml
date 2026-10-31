@@ -1,0 +1,2124 @@
+{
+  "baseRevision": "a99d1faf44e1c83d2997e121396676887284ed03",
+  "description": "Pre-RCM10/RCM11 public inventories, ordered production declaration fingerprints (attributes and SQL retained), source hashes and unit-test names. Scoped visibility/formatting are ignored; executable tests remain required.",
+  "contracts": {
+    "capability": {
+      "sha256": "4cd050bb8f5f94e67e890f8f29087797f4467f767a528fa0404dfbb865b4ce7e",
+      "publicTypes": [
+        "CapabilityCallFailed",
+        "CapabilityCallIdentity",
+        "CapabilityCallLimits",
+        "CapabilityCallRequest",
+        "CapabilityCallResult",
+        "CapabilityCallSucceeded",
+        "CapabilityCancellationToken",
+        "CapabilityDescriptor",
+        "CapabilityEffect",
+        "CapabilityFailure",
+        "CapabilityFailureKind",
+        "CapabilityIdentityMode",
+        "CapabilityRegistry",
+        "CapabilityRegistryError",
+        "DurableCapabilityAuthority",
+        "DurableCapabilityAuthorityError",
+        "NativeFetchFailure",
+        "NativeFetchFailureKind",
+        "NativeFetchInvocationIdentity",
+        "NativeFetchObservation",
+        "TestCapabilityHandler"
+      ],
+      "publicFunctions": [
+        "capability_transport_failure",
+        "derive_operation_key",
+        "validate_safe_metadata"
+      ],
+      "publicConstants": [
+        "CAPABILITY_CALL_CONTRACT",
+        "CAPABILITY_CALL_CONTRACT_VERSION",
+        "DEFAULT_CAPABILITY_FRAME_BYTES",
+        "DEFAULT_CAPABILITY_INPUT_BYTES",
+        "DEFAULT_CAPABILITY_IN_FLIGHT_GLOBAL",
+        "DEFAULT_CAPABILITY_IN_FLIGHT_PER_INVOCATION",
+        "DEFAULT_CAPABILITY_RESULT_BYTES",
+        "DEFAULT_CAPABILITY_TIMEOUT_MS",
+        "MAX_CAPABILITY_TIMEOUT_MS",
+        "NATIVE_FETCH_OBSERVATION_CONTRACT",
+        "NATIVE_FETCH_OBSERVATION_CONTRACT_VERSION"
+      ],
+      "publicTraits": [
+        "CapabilityHandler"
+      ],
+      "declarations": [
+        {
+          "name": "const CAPABILITY_CALL_CONTRACT",
+          "sha256": "6a9f1cc6cf333d4fad5f400b7662d3d1507a53610bc2f31fe491568fd63f04ae"
+        },
+        {
+          "name": "const CAPABILITY_CALL_CONTRACT_VERSION",
+          "sha256": "eab7251dd2d8b9352f8444dc9729185f43217ff62e4a656f015748eb6f93fceb"
+        },
+        {
+          "name": "const DEFAULT_CAPABILITY_INPUT_BYTES",
+          "sha256": "3cf9a5c9dc9473ed764006d67674f1ac59e3575e54ff0d819058396d4adbd647"
+        },
+        {
+          "name": "const DEFAULT_CAPABILITY_RESULT_BYTES",
+          "sha256": "e4fc0fb37b6bbeb822595f591d9fea305044c7d57a263c10b8932a56105e4210"
+        },
+        {
+          "name": "const DEFAULT_CAPABILITY_FRAME_BYTES",
+          "sha256": "379a3d219c122d559cb6db0a6adc38523e1f48983c6737ac81b61b2b98eec1a7"
+        },
+        {
+          "name": "const DEFAULT_CAPABILITY_TIMEOUT_MS",
+          "sha256": "450f16ce98c98f51705536e748f95a87b901263617fc13cd29a5172e701364dd"
+        },
+        {
+          "name": "const MAX_CAPABILITY_TIMEOUT_MS",
+          "sha256": "1a69b965cf384c83b496448c2db2b75ae6a0dc727fa03689280372ee42fdae26"
+        },
+        {
+          "name": "const DEFAULT_CAPABILITY_IN_FLIGHT_PER_INVOCATION",
+          "sha256": "dd952f75c64bd9d3620a860ee0b83a7bacec3506ff8acf870fd49444bad11635"
+        },
+        {
+          "name": "const DEFAULT_CAPABILITY_IN_FLIGHT_GLOBAL",
+          "sha256": "f4b0da1bc0d5ac0f5973d4fef4db0aadce45301148def3242000b87c0a5577b6"
+        },
+        {
+          "name": "const CAPABILITY_CANCELLATION_CLEANUP_MS",
+          "sha256": "e53c5de8920b5726a46a0382299cdf7036c5d9020cbf180ed4e8245aef1a0800"
+        },
+        {
+          "name": "enum CapabilityIdentityMode",
+          "sha256": "a3210d063f9d71fbe21ea0d447675dcf03536c023fdd8f1065cc9d2241979116"
+        },
+        {
+          "name": "struct CapabilityCallIdentity",
+          "sha256": "6e176f74dee4acd019b3eea4f428673f91680c0748962f5e576a689d7502b32d"
+        },
+        {
+          "name": "struct CapabilityCallLimits",
+          "sha256": "46c13481d64bbb9ca54b119c1cd181df73d25586137caf86f7dd080e6436093f"
+        },
+        {
+          "name": "impl Default for CapabilityCallLimits::default",
+          "sha256": "e4955ecbdf7167aa8b9b4547ee2ecc5538552ab233d5ae42e6c71c2d986fb67e"
+        },
+        {
+          "name": "struct CapabilityCallRequest",
+          "sha256": "3afdce357685e7b5439c3d8267505a925781939a5944ebe950e90d338dd0ab61"
+        },
+        {
+          "name": "enum CapabilityFailureKind",
+          "sha256": "d2c960724101284e282895009dbbf18181a200d374a7caee4e29be36d2572316"
+        },
+        {
+          "name": "struct CapabilityFailure",
+          "sha256": "46ae0859638b7d67098efee1ec89f88e768986ea5960a40795d568adb5b194a5"
+        },
+        {
+          "name": "struct CapabilityCallSucceeded",
+          "sha256": "49e78bad1c1422f899f3699c823f0c3656bd9269b7084fc213149a3fde4fc7c7"
+        },
+        {
+          "name": "struct CapabilityCallFailed",
+          "sha256": "cc33a3936382ab1682747af5f3015c63271b6d5e8ef184c47f56d5eebb3684ae"
+        },
+        {
+          "name": "enum CapabilityCallResult",
+          "sha256": "20456599ccefdf1620ba0c54d69c01d5799c69ebbc2c01fdb88240a475b4a811"
+        },
+        {
+          "name": "impl<'de> Deserialize<'de> for CapabilityCallResult::deserialize",
+          "sha256": "9d6ca0c49d17f88f2bd87d051a23fb27bd617c6f753218f09e42a7321e9f6fa1"
+        },
+        {
+          "name": "impl CapabilityCallResult::invocation_id",
+          "sha256": "eff1deb8fb6ca885908f96df5e410631178237ea75195f453175b7ee9a64a57c"
+        },
+        {
+          "name": "impl CapabilityCallResult::call_id",
+          "sha256": "ebe7671a6b77b719484c5843ec92c4508689275f536df98184e99858dd9aa5e3"
+        },
+        {
+          "name": "impl CapabilityCallResult::validate",
+          "sha256": "6c61b4d3a903916e59d28f331f18c5b38c9ea0fc1ddc63c4bc09422bdb1d98c4"
+        },
+        {
+          "name": "enum CapabilityEffect",
+          "sha256": "066986581d2e624ad076528013cb45286f7d77780de6ad0ed3a74b0d0cd43a29"
+        },
+        {
+          "name": "struct CapabilityDescriptor",
+          "sha256": "b978014c44221b21ce33aa550d42e91803fadba55cd3222a6499d1efe571191e"
+        },
+        {
+          "name": "struct CapabilityCancellationToken",
+          "sha256": "ed70a88042393afee2660f84253f2d1bce1d3c6d04a945e54202a9f703d014a4"
+        },
+        {
+          "name": "struct CancellationState",
+          "sha256": "c7fe66cb3461730c2272ea6d0e939c806df2960a5f49058a1d64df6a4251428a"
+        },
+        {
+          "name": "impl CapabilityCancellationToken::cancel",
+          "sha256": "cd34608204ce212bd245cfc8a8a6a48aed86c1296cd6fcbeedd3d308094f5f9c"
+        },
+        {
+          "name": "impl CapabilityCancellationToken::is_cancelled",
+          "sha256": "6d2cf8c1e00fc71c410ddba41ee548ec4861179fbb6795cb86e81468de7416e0"
+        },
+        {
+          "name": "impl CapabilityCancellationToken::cancelled",
+          "sha256": "e8c638fd8529084777bf611a569b8f3debf73c0543bc0a16a4bf7417410dd150"
+        },
+        {
+          "name": "trait CapabilityHandler",
+          "sha256": "cbb7fd35cbec634ec196daa79cc7999bd125cbffca4782b267efdad7ce646653"
+        },
+        {
+          "name": "enum CapabilityRegistryError",
+          "sha256": "83e406bb14eea602287ac27ea29756bb175eb7227bbb4497ce72dc7833dddbc2"
+        },
+        {
+          "name": "struct CapabilityRegistry",
+          "sha256": "51d34e5862f98b08122c71a4b2d00912cea7e35544a11499b3898b34ea782aff"
+        },
+        {
+          "name": "enum DurableCapabilityAuthorityError",
+          "sha256": "25685ad007b7d280099e4750472422ab7dd2545ad625d137b40162f9bedd5e26"
+        },
+        {
+          "name": "const NATIVE_FETCH_OBSERVATION_CONTRACT",
+          "sha256": "818561b7d19dba7ebe7033e750f1da37b9227a4e6e92eddfe9089868e7244da4"
+        },
+        {
+          "name": "const NATIVE_FETCH_OBSERVATION_CONTRACT_VERSION",
+          "sha256": "e6697b4182afde6b82aae7743ef4f810951aab9e4d978f28936a710af35851a3"
+        },
+        {
+          "name": "struct NativeFetchInvocationIdentity",
+          "sha256": "0c72c44e32ace168a9715ef9884fd5eedcc6571dd7470321deae9be05fd3a7a9"
+        },
+        {
+          "name": "enum NativeFetchFailureKind",
+          "sha256": "d340b821dc9ccfd3df1d5e89afd8b37ae126a921f46b6a65456b406a091263b6"
+        },
+        {
+          "name": "struct NativeFetchFailure",
+          "sha256": "c2c5f752a11d44dcde9c654a1313e266d3ac683547d1210da85b79b2763a53f0"
+        },
+        {
+          "name": "enum NativeFetchObservation",
+          "sha256": "af4df4700b0dcf432a593484fad126943c7da1c3bd97ea9751d11c034a09a888"
+        },
+        {
+          "name": "impl NativeFetchObservation::invocation_id",
+          "sha256": "adfaa4740c124c82b2be9b2fcebec1b16d60eaf03c29244e6584fa23385ef95d"
+        },
+        {
+          "name": "impl NativeFetchObservation::request_id",
+          "sha256": "f011fe530bcfe27ed9b05e6093d440c8d3e4ac11eee954672af9b20e1d291080"
+        },
+        {
+          "name": "impl NativeFetchObservation::validate",
+          "sha256": "7bc2e3939c34346c2eff51e1fa24f4007c7c8a518dc4a741b9f7d2f562de442f"
+        },
+        {
+          "name": "fn iteration_attempt_identity",
+          "sha256": "c739f55fcd5025bed501fbff2c2a58d1e3bbf6441347051fb7cf3f5709cc346e"
+        },
+        {
+          "name": "fn operational_invocation_is_active",
+          "sha256": "abae976a932742238ecfa217022cbbd6e60269bc5fc51823151c6749ee553392"
+        },
+        {
+          "name": "fn operation_with_iteration_scope",
+          "sha256": "0dc28d604aa1c7ede05e336213a23bd49db14a5fe1ccd47072a7b6f88e9745c1"
+        },
+        {
+          "name": "fn infrastructure_policy_execution_mode",
+          "sha256": "1eb878e0466949832a97ae978d95aaad490923d5f0b7a5d614e3338f07793f9a"
+        },
+        {
+          "name": "fn infrastructure_policy_evidence",
+          "sha256": "4a689285e20f3f324599a0f2a07f278d69c42d6752e0b5210c0e01f93bdbcaeb"
+        },
+        {
+          "name": "struct DurableCapabilityAuthority",
+          "sha256": "8fa77e5d8de1fa3272c0903dd3ab917991e2ce0f1e6bcacab649a2dbb08ba737"
+        },
+        {
+          "name": "impl DurableCapabilityAuthority::new",
+          "sha256": "d45fefacc78afd86c3cdab807b769c0d1e9cc40aa8842370683b6cab1c5cbb51"
+        },
+        {
+          "name": "impl DurableCapabilityAuthority::new_with_locks",
+          "sha256": "d6e7e0ecee511f02e8b0e85317d95c5550baaca10c0c242b5f8cc18cb8eac2c4"
+        },
+        {
+          "name": "impl DurableCapabilityAuthority::new_with_locks_and_infrastructure_policy",
+          "sha256": "509b023f7fdbcf339d2e01eadd46d07a9c83fce5e8558df3ab101b7fcc9d342e"
+        },
+        {
+          "name": "impl DurableCapabilityAuthority::new_with_infrastructure_policy_authorities",
+          "sha256": "5fd76a315383741d155d45c4d33dc5985a818ff83e530ebb9b81d954fb28d0d1"
+        },
+        {
+          "name": "impl DurableCapabilityAuthority::with_operational_output",
+          "sha256": "ffb967a5c6f622a34782a1570ce55047739f416f081d34e741ae38216832db10"
+        },
+        {
+          "name": "impl DurableCapabilityAuthority::append_script_operational_record",
+          "sha256": "d0d33cdb305b5a6fc7b510658c89d1eacabe0d8684d8ac93849120fb7a5262ee"
+        },
+        {
+          "name": "impl DurableCapabilityAuthority::force_append_script_operational_record",
+          "sha256": "972945b1f7786eed1b33ac3af4c8aab9f613463487fac98c3bcf8c8e4bfe6287"
+        },
+        {
+          "name": "impl DurableCapabilityAuthority::append_script_operational_record_inner",
+          "sha256": "c3027535e391b9f1a9d35b78aa045ef8848448eb494316b0d447d91ea9c8be32"
+        },
+        {
+          "name": "impl DurableCapabilityAuthority::registry",
+          "sha256": "805f4f06482fb782c73e2dc0dd55e4a86bbbd9415d20dd801ad3e233e2fdc72e"
+        },
+        {
+          "name": "impl DurableCapabilityAuthority::store",
+          "sha256": "431c31d586ed633fa278621c22379344ed5ba25e85b1c63e57564f1b90583d1b"
+        },
+        {
+          "name": "impl DurableCapabilityAuthority::close_programmatic_lock_sessions",
+          "sha256": "aca976378d611eefcda5e44c8ca116c91a23c6ac611fec358700df27ab69c859"
+        },
+        {
+          "name": "impl DurableCapabilityAuthority::execute",
+          "sha256": "d5dc01cf6d1780a64b1f72e0b09b25b63b93dad02b78439365dce27e62b3ff7b"
+        },
+        {
+          "name": "impl DurableCapabilityAuthority::observe_native_fetch",
+          "sha256": "d7044f699d5bf999c205bc64b13a952a8ea7238832f93b1098ccd23c0716e769"
+        },
+        {
+          "name": "impl DurableCapabilityAuthority::close_active_native_fetches",
+          "sha256": "461ab0a67508a96497517275c1c68bc10846520be4548533a274306e421c3c00"
+        },
+        {
+          "name": "impl Default for CapabilityRegistry::default",
+          "sha256": "8388ac236d353c3e6cfda1bee7250222190668b88ba32c20dda1b232a6b4233b"
+        },
+        {
+          "name": "impl CapabilityRegistry::new",
+          "sha256": "fa81ee404851074731bcbd19c4500598cb3ce174a7b1ac5d2d0a76caf52fbac1"
+        },
+        {
+          "name": "impl CapabilityRegistry::register",
+          "sha256": "16c81c3826de4eacd6fbf5dfac2578c7423fc58132005b4d57e8a498c3c8c993"
+        },
+        {
+          "name": "impl CapabilityRegistry::descriptor",
+          "sha256": "ecc6d03d0cd420485125c45400c486cb875ce2a6302762053213d34a95b9cb2c"
+        },
+        {
+          "name": "impl CapabilityRegistry::safe_metadata",
+          "sha256": "2b7263da2b15c3556f1d0384c93eaf3101a6344adaac0281f743940173818303"
+        },
+        {
+          "name": "impl CapabilityRegistry::infrastructure_policy_descriptor",
+          "sha256": "c73325f0dc16bb568c1450d523be46897cb1a7e264460f8949f670ec077f2a0d"
+        },
+        {
+          "name": "impl CapabilityRegistry::execute",
+          "sha256": "0e727e3a0de34ad9609e5430b91bc7e9e76e21443880eb6d7988edb8078768e7"
+        },
+        {
+          "name": "impl CapabilityRegistry::execute_scoped",
+          "sha256": "4deafa450b30d85de8e378dca876c1f643b0a18a49f38905d80bf1817eb9395a"
+        },
+        {
+          "name": "impl CapabilityRegistry::lookup_and_validate",
+          "sha256": "d5944ab33f86d9bf1598d364bd88feeba1ef4ca0fa3a76f9efae157e0f1f4df3"
+        },
+        {
+          "name": "impl CapabilityRegistry::safe_result_metadata",
+          "sha256": "0da4ee6684e28c0a216f2344cfb41f73a285df6b7db4ddf46f74c6c8b455c640"
+        },
+        {
+          "name": "impl CapabilityRegistry::safe_failure_metadata",
+          "sha256": "9fe5906709ebf89b507aeee96d5763cb05a007e71be81f90f5947946977b27ff"
+        },
+        {
+          "name": "impl CapabilityRegistry::acquire",
+          "sha256": "9bd5e22ec18a75b45ccb438a525772853786bd1685d0a94b3c9d63c788354b61"
+        },
+        {
+          "name": "struct CapabilityPermit",
+          "sha256": "724b0e99896a0ad5f94f57a514b8ad9ad5788c1fa32438f527f8ad8045edbf83"
+        },
+        {
+          "name": "impl Drop for CapabilityPermit<'_>::drop",
+          "sha256": "a38cbd977604b51d1fb3a4cf129edf1283419145434fc48dd20d2838d25039c7"
+        },
+        {
+          "name": "impl CapabilityCallRequest::validate",
+          "sha256": "afd8b3e2a6a46881c7925b24a24730a5e0c2d4381ad455aa000b4b8f44b10143"
+        },
+        {
+          "name": "impl CapabilityFailure::validate",
+          "sha256": "3053ce2d4f99338757f3f6b4aca933bdd91c71d5e84bfeea9b0c2d8d452efb96"
+        },
+        {
+          "name": "fn derive_operation_key",
+          "sha256": "8ac741f4805235aaf5028e755ee72f226ed0aa0be88f9127be6fd34a5321e875"
+        },
+        {
+          "name": "fn validate_safe_metadata",
+          "sha256": "d299c73fd74b8a99c101017561c7934088f00ca64b8d101871ba2f90879828c3"
+        },
+        {
+          "name": "fn valid_name",
+          "sha256": "416b3db2c3ab7b8c0b46d6dc944029e8d647075114b6f094308b37ae8ffd3af6"
+        },
+        {
+          "name": "fn valid_digest",
+          "sha256": "80684942d1d3366d95bd38af1dae9f612b72f308986333965c93ed61d797258f"
+        },
+        {
+          "name": "fn serialized_bytes",
+          "sha256": "55daf50472b5885797fecdaa0f164f6f060858c8dd57daaee26aecee0b0386d1"
+        },
+        {
+          "name": "fn validate_result_base",
+          "sha256": "5ba2e0eed160b2cf312c279cc449a7b1785c73a5f62244551f78879bfc253cca"
+        },
+        {
+          "name": "fn generated_event_id",
+          "sha256": "6d223e2ebcca04279632e20e617e6ab7707160bddc675b54ffa8f2c88f24aeab"
+        },
+        {
+          "name": "fn duration_ms",
+          "sha256": "96b2add8c4c81794c53a4571e4b0ead7222ea79df5daa84feb3aabc6f459aec8"
+        },
+        {
+          "name": "fn operational_output_failure",
+          "sha256": "210e35241aba98b5e07413324d5149a06f4fc78b07b1b8ae538c39726f7c23e5"
+        },
+        {
+          "name": "fn redact_operational_body",
+          "sha256": "74ac66eeedc3ac181cd48120b6472f89260ffee3309d8e321c3ce7e7d8817d4c"
+        },
+        {
+          "name": "fn failure",
+          "sha256": "1623ee724a0aebfddef5e3ce9e2c04e7f96285bec4476b314ef6bb8cf30fbe9d"
+        },
+        {
+          "name": "fn failure_with_size",
+          "sha256": "3fb275761c1c29f2787b51c9b9ee9189f9715dd9c3180b31134b8a286fa65c4c"
+        },
+        {
+          "name": "fn failed_fields",
+          "sha256": "67fc42821fe4a8053c67c4b11a70f5b00dcc8147176d2b31114fed6fdd3a76e5"
+        },
+        {
+          "name": "fn failed_result",
+          "sha256": "692df7002f462af1563b0f7b78d9917234a6383867735fc204ef8e46c6fa76fb"
+        },
+        {
+          "name": "fn capability_transport_failure",
+          "sha256": "4ee73170af7468b36cc9c6cd9e8e74eb4f230594fc4b9f72b332a0f7422eb33e"
+        },
+        {
+          "name": "struct TestCapabilityHandler",
+          "sha256": "85773ae0196a171a8880ad65bcef6a4b50094bb20c8af83ad36f6b14a28786a9"
+        },
+        {
+          "name": "impl CapabilityHandler for TestCapabilityHandler::descriptor",
+          "sha256": "fdd503a6c1ced0b0b60a0c299c8b985e11ad0afc70d70ebf888296f90cdf5b1e"
+        },
+        {
+          "name": "impl CapabilityHandler for TestCapabilityHandler::safe_metadata",
+          "sha256": "f2dbff7ea82d67f5fae516b5ac192488842a8ccb4c3afb9be687c7d5b9715cc3"
+        },
+        {
+          "name": "impl CapabilityHandler for TestCapabilityHandler::execute",
+          "sha256": "a47f0a5c56b30aad785d6f38bea225644b24b25f9bac3d229a0a91ca81f317a5"
+        }
+      ],
+      "unitTests": [],
+      "testDeclarations": []
+    },
+    "process": {
+      "sha256": "9adf0bdb0f49590713591961587a76490ce441a91062087a841406c3a2ba9f80",
+      "publicTypes": [
+        "ManagedProcessHandler",
+        "ProcessPolicyEnvironment",
+        "ProcessPolicyError",
+        "ProcessPolicyExecutable",
+        "ProcessPolicyLimits",
+        "ProcessPolicyModes",
+        "ProcessPolicyV1",
+        "ProcessRuntimeMode"
+      ],
+      "publicFunctions": [],
+      "publicConstants": [
+        "PROCESS_CONTRACT",
+        "PROCESS_CONTRACT_VERSION",
+        "PROCESS_CONTRACT_VERSION_V2",
+        "PROCESS_POLICY_CONTRACT",
+        "PROCESS_POLICY_CONTRACT_VERSION"
+      ],
+      "publicTraits": [],
+      "declarations": [
+        {
+          "name": "const PROCESS_TERMINATION_GRACE",
+          "sha256": "2fe820a309000a18e30fdce37a76b39abc8b8238a1323381752faa7952e7546f"
+        },
+        {
+          "name": "const PROCESS_PIPE_DRAIN_GRACE",
+          "sha256": "ef236ce662744ccbb2a679a475f8c674716ea4e7313c9e4bb4dd2a77745e9c4e"
+        },
+        {
+          "name": "const PROCESS_CONTRACT",
+          "sha256": "54468dcacce2ee3fd4611e2c955ff5fe43b2b34b41707837d0303e98ed30d59a"
+        },
+        {
+          "name": "const PROCESS_CONTRACT_VERSION",
+          "sha256": "4cf8e80fca1980189ee16c86ab7274f19a1bcfab8b8f6e7fb4b85602e911db9a"
+        },
+        {
+          "name": "const PROCESS_CONTRACT_VERSION_V2",
+          "sha256": "879a2820071bff59f76c00f2b9ee732619ab324088b828ca720dc45c37a6e93d"
+        },
+        {
+          "name": "const PROCESS_POLICY_CONTRACT",
+          "sha256": "9914da7b930e8b462482d5299002a9016f26f8fdbb85323db04bb64bbaa411dd"
+        },
+        {
+          "name": "const PROCESS_POLICY_CONTRACT_VERSION",
+          "sha256": "2cfde2467c0c500dde2d00e5c1a794131dea0dd0ba05391462d33b2805bfdb8c"
+        },
+        {
+          "name": "const MAX_PROCESS_STREAM_BYTES",
+          "sha256": "962ca528b2e06ecbb21a7070c90a7a0e2471826b0277c5302abcee0f35fb7a46"
+        },
+        {
+          "name": "fn default_process_stream_bytes",
+          "sha256": "7d82d31dba4165a970679a0228589a4488012e901f56923928fb0394552b2c3f"
+        },
+        {
+          "name": "enum ProcessRuntimeMode",
+          "sha256": "31f2a1db8fc08ac532fc4a09dd30f0db75df5a809e4103f224963a0f5e1e78e6"
+        },
+        {
+          "name": "struct ProcessPolicyV1",
+          "sha256": "a21ac7a7c2e43f123ca6a2830f5df03339ae515453354c21898f7361728372f5"
+        },
+        {
+          "name": "struct ProcessPolicyModes",
+          "sha256": "96398b721d127b4ffe99c254c3f43a8f11ac4043c2ce1a1c014abba5efaa6009"
+        },
+        {
+          "name": "struct ProcessPolicyExecutable",
+          "sha256": "a211a74a61e9b0aaf6667dbc200bca3ba5da5fed47b1eb7112a2501727149764"
+        },
+        {
+          "name": "struct ProcessPolicyEnvironment",
+          "sha256": "e424795c3cd3c672fb0a24ba9213d9cb481cd1edc721bf9c5f71f2768d6c42d6"
+        },
+        {
+          "name": "struct ProcessPolicyLimits",
+          "sha256": "4b43dfece554fdb25ff14218516ad3652131122ab9d78e6f645abe9e87fbbff6"
+        },
+        {
+          "name": "enum ProcessPolicyError",
+          "sha256": "283faedf628a34a8bd595e51850dd9ff0b32bcc874bdb7c02dae91fcab9f7f17"
+        },
+        {
+          "name": "enum OutputMode",
+          "sha256": "993584ffa5632e6acf00345ebb014545cddc41aa45a1ecc33351d8332ebacdc0"
+        },
+        {
+          "name": "struct ProcessOutputRequest",
+          "sha256": "cf17f0d0c8b3186f0532874c594b888250b72eab7b2ad00140b5172ba7a58ec5"
+        },
+        {
+          "name": "struct ProcessRunRequest",
+          "sha256": "6e3c2660eb33ec8cdd401f35d60c716437d552c4bb229c225f97badb1a7399fd"
+        },
+        {
+          "name": "struct ProcessRunResultV1",
+          "sha256": "34330949917651e46b4c384e7dac596ce96a0c3c0ba2b804b3f24472cd519edc"
+        },
+        {
+          "name": "struct ProcessRunResultV2",
+          "sha256": "eec48e40869f00154977a39520dde2246c41bc5200a8083652016921942dccf4"
+        },
+        {
+          "name": "struct PreparedProcessPolicy",
+          "sha256": "eae6e4dab51fd2e784b1eb8a4ed2a75527dd4ec17e6552145474c405b0476c20"
+        },
+        {
+          "name": "struct ApprovedExecutable",
+          "sha256": "f152fa6f2a60fed99882cc9e6ae1a7fcb666af2cf802dbc0f5cfb64f2930ff88"
+        },
+        {
+          "name": "struct ExecutableIdentity",
+          "sha256": "4751f4de44113196b2978ce7f3dee0c9ab3630c5e44be1ac52ffc1a957af43c7"
+        },
+        {
+          "name": "struct ManagedProcessHandler",
+          "sha256": "ccf53a68f18a0611c664b6df067f87b79e8adae7d0a6161585e6c69e338e0bd3"
+        },
+        {
+          "name": "impl ManagedProcessHandler::new",
+          "sha256": "226cd6ceab8592b98b2e8b25f38b82e9ebab8074d7337d08f941ac66c6dbdcd1"
+        },
+        {
+          "name": "impl ManagedProcessHandler::new_with_secrets",
+          "sha256": "200ac8ea3cc70d65ab7ea2da8aaee5a0370e474fca5edda437dde8b4b5d6aa71"
+        },
+        {
+          "name": "impl ManagedProcessHandler::configure_output_store",
+          "sha256": "ff5ec73732d40801c2b5e68cec704d3b7d7b129af1ba569338a95d79152b688d"
+        },
+        {
+          "name": "impl ManagedProcessHandler::configure_output_artifacts",
+          "sha256": "66677bf39a1e7167fe061e0aead7833589440097e3e1a5d5d4731b6187c7eaf6"
+        },
+        {
+          "name": "impl ManagedProcessHandler::parse_and_authorize",
+          "sha256": "2558c506cd768a1b912684412555c7afd5206dc9e74993a3cda92556f7a5467a"
+        },
+        {
+          "name": "impl PreparedProcessPolicy::prepare",
+          "sha256": "9e2ddb6ec2fcca0146f6508d462a842b097f160f615a81d7d3af8c8b4676a7e1"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedProcessHandler::descriptor",
+          "sha256": "308c16bc5c3f47acbd412a7a567e36a77dad686a96a26a7e63122b041a39a3f6"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedProcessHandler::validate_request",
+          "sha256": "1c04c6c9ce0c5733e3e48a5341c7054b5ebab41da4ffc3876137e9c158c2adfa"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedProcessHandler::safe_metadata",
+          "sha256": "b246bb94d86ceb0f822d5b16773efd6787a8496778e1cb6431098c273129ffb1"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedProcessHandler::safe_result_metadata",
+          "sha256": "a8be0f2da63d1ad66dbc1027c575273da37841ed715edaaee6e5a5071509c977"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedProcessHandler::safe_failure_metadata",
+          "sha256": "82c082f9e94ae87ac08f40f3ab96e5bbd298466b0e37e225be5a1453e1f4bd29"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedProcessHandler::execute",
+          "sha256": "fd7ea65b68317a208d83d72034fd10b4acf7098a8289167164c24e067c06c1ff"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedProcessHandler::execute_request_scoped",
+          "sha256": "dc1b8ec12c26150d035500532af654a162c93f62304bce91b79a94e972ea8ac6"
+        },
+        {
+          "name": "struct AuthorizedProcess",
+          "sha256": "1ef4b68c7343ec74ad3ce143c04d112f8f02cca9723b51a73dea720b62d22ce5"
+        },
+        {
+          "name": "struct CapturedOutput",
+          "sha256": "9368189b4a5eceb8f93d9929bfec65d68e71c4c131c125c591c3dcae3887d9d3"
+        },
+        {
+          "name": "struct ProcessStreamState",
+          "sha256": "4816764f06db2aa9f6eb966e4072a205343e7de1a49604869a900dec4d129be1"
+        },
+        {
+          "name": "struct ProcessStreamFailure",
+          "sha256": "3ff7b989aa9cd925033ea9bd1ee67b0c8183a6cca35b8abe628135fee0f5346f"
+        },
+        {
+          "name": "impl ProcessStreamFailure::report",
+          "sha256": "f885610f547aae3adddffcf34772ef50b73aab4814891e5f4cca5bebcca72deb"
+        },
+        {
+          "name": "impl ProcessStreamFailure::take",
+          "sha256": "6f428adc9ce6ceac97e9a3fa94ed3a34d0ff9a7a0f834cbd7c18704c015083c4"
+        },
+        {
+          "name": "struct ProcessStreamTarget",
+          "sha256": "0f70cd18e2aa544871ae031165d6ee07b3b351c25466417e75615e1bd8c8ab0d"
+        },
+        {
+          "name": "struct ActiveProcessStream",
+          "sha256": "18de0e83db6298e2e1a5f8e00df6515c1cf34f9233301aa6f1f751e9a5ff42a9"
+        },
+        {
+          "name": "fn execute_process",
+          "sha256": "4bb05a38fd156efbb2eb8fcb2e764fd807081ac8f7db3214c4fa4aaab746daa8"
+        },
+        {
+          "name": "fn collect_output_task",
+          "sha256": "64bb846e4b9443f0d6c2fc38e3dc3b12f5362409a92b2145ac7713c63111d25e"
+        },
+        {
+          "name": "fn wait_for_process_stream_failure",
+          "sha256": "e39503b9862d7e8491894ff61ae7fa17ea741949f3240cbae77dd6775d67eb71"
+        },
+        {
+          "name": "fn terminate_process_tree",
+          "sha256": "8e804e0126fc7d483597fb94063dfdb3f674202e51169ae2084f7ff553e53a79"
+        },
+        {
+          "name": "fn prepare_process_environment",
+          "sha256": "d5a81734cccbd2bb213c08d9e67487f3cf9425227a2d361ea582ea246e077694"
+        },
+        {
+          "name": "fn windows_system_root",
+          "sha256": "1829db35a4839d6a29150e1b2d0fbac4b298fddf098a725c0542bb01eceedbcf"
+        },
+        {
+          "name": "fn prepare_process_containment",
+          "sha256": "eb1f25974f342412c0c1c82d8e1d02bd9ae7646dce062dae0b336d0a4245f200"
+        },
+        {
+          "name": "fn prepare_process_containment",
+          "sha256": "af86e4417c188e5d170cc1302883195faba6822d717a6740e0d58150f4e0ce1c"
+        },
+        {
+          "name": "fn prepare_process_containment",
+          "sha256": "c514306b8ff636430739eb105d0bd31ffb59dd535b1725ea90d8d5335a3bd114"
+        },
+        {
+          "name": "struct ProcessContainment",
+          "sha256": "c010a9b242dc794f32bf43158e3ae5a68ff2a6d2b84292fa6fc47c84b822fff1"
+        },
+        {
+          "name": "impl ProcessContainment::attach",
+          "sha256": "d549480e2b6f94844e2ad1201f6b3d00cd2aad1c1f38c453afdcf2da971bf581"
+        },
+        {
+          "name": "impl ProcessContainment::graceful_terminate",
+          "sha256": "f1a89658f7e69570e349bd6d20f13fc799edac84663ca2abeab20a97f837ea33"
+        },
+        {
+          "name": "impl ProcessContainment::force_terminate",
+          "sha256": "332737bb9080b5b6e69a42115465c799cb2c9654bfb2730cac52476f58155f18"
+        },
+        {
+          "name": "impl ProcessContainment::close_remaining_tree",
+          "sha256": "cfc685df4052d5edb67043f36e1a3fc4526b04a13214e0ddf94b9fa06e96f265"
+        },
+        {
+          "name": "impl Drop for ProcessContainment::drop",
+          "sha256": "be95b21540eaf33bd5475709f8d20bff1562420140aa3979182e8467486da84b"
+        },
+        {
+          "name": "fn signal_process_group",
+          "sha256": "ad9a37679d0e5d0cc654de38eabc59c4f6d3c2a9f98c5f462e8093ce8aa41745"
+        },
+        {
+          "name": "fn process_group_exists",
+          "sha256": "7ca041bfc8942e22ad82390cb109cb31e0f856a88bf38f8a84f6f02d5f280751"
+        },
+        {
+          "name": "struct WindowsJob",
+          "sha256": "9aee7cf7e60acf86ec90a969cdb344511b41ce7a748131f5606dba6c53e5a5c3"
+        },
+        {
+          "name": "#[cfg(windows)]\nimpl WindowsJob::attach",
+          "sha256": "a769d51e01e06aead3716475c915a1cb1a0404f8d17974832e5a53e02518118c"
+        },
+        {
+          "name": "#[cfg(windows)]\nimpl WindowsJob::terminate",
+          "sha256": "3f8a7dbeb7606d8a8f34f866c7a4910f7df3e2c17d258152df9c8da021aaa467"
+        },
+        {
+          "name": "#[cfg(windows)]\n// SAFETY: WindowsJob exclusively owns a kernel handle. Moving that owned\n// handle between executor threads does not change its validity or ownership.\nunsafe impl Send for WindowsJob",
+          "sha256": "8193730e4d5be9f37ed67e32f317377977eaf8c57fd7c506918ceccba26d1716"
+        },
+        {
+          "name": "#[cfg(windows)]\nimpl Drop for WindowsJob::drop",
+          "sha256": "a3cbc23e91542ccb46f0206742b52f21fb766316b59618aad03c52c7aeb1845f"
+        },
+        {
+          "name": "fn drain_output",
+          "sha256": "547fd95f997f015f1f8c6e347109a0aef3f154767a06607212b1b4b6193c5aea"
+        },
+        {
+          "name": "fn sensitive_environment_values",
+          "sha256": "0c89c7c45fa73ff24c144bd3f45fff05cd73dedd5601f2abea341055b80bd67c"
+        },
+        {
+          "name": "struct IncrementalTextRedactor",
+          "sha256": "f907f46bbf1b34557be154e372f619bfd20f1849ff63a1193d28d16191ef0f6c"
+        },
+        {
+          "name": "impl IncrementalTextRedactor::new",
+          "sha256": "c720083cd5ffea70d9b7dae3bbb6bcbc5f98c48a52f87000bad9853b2b5f0c1e"
+        },
+        {
+          "name": "impl IncrementalTextRedactor::push",
+          "sha256": "9d66d8a482da5ccd1d998d1b54dacb94038e2d484c789f9e5c0c977a9ce01c3b"
+        },
+        {
+          "name": "fn append_process_text",
+          "sha256": "02e112033eaf5078c0111568c2b8a84f8aca76cc404c4f5c9e242618233c2f49"
+        },
+        {
+          "name": "fn append_process_output",
+          "sha256": "ebe0c9b0423188e62d48eeb7cf6f8c4bcfb527deae7b10e04e070b62c3af502c"
+        },
+        {
+          "name": "fn close_process_stream",
+          "sha256": "f83dbd8c0dcfc71bb77accd0a4fc4e0440a55471f8445ef86538b4af5aa4e78d"
+        },
+        {
+          "name": "fn output_authority_failure",
+          "sha256": "b4388dff3440f48cb8ec76aac2a9bc2ea09a5b28e756be4c76667a0554abca3d"
+        },
+        {
+          "name": "fn redact_and_bound_output",
+          "sha256": "7638205fd3e2d186e7cd98404c01ec45758254d9ec72bbd4a04d4aa025fd560c"
+        },
+        {
+          "name": "fn parse_request",
+          "sha256": "43e3dd4c1487e4454e2f91735ae8f74431ef9e15510e57e40f2a6530a42c4a62"
+        },
+        {
+          "name": "fn authorize_cwd",
+          "sha256": "4da73f6fb4a0d209560b8fc677f8764082f93264d8bcbe724c4d208100f9e38c"
+        },
+        {
+          "name": "fn validate_relative_cwd",
+          "sha256": "df12a871f782fb4e576ea7c1010c8628ce83404bae0e4731b41c3b703136a124"
+        },
+        {
+          "name": "fn invalid_portable_path_component",
+          "sha256": "9c199f447340436330d8a6b8d23b85e32b3f815a4e2a5fa8311646f015aa75dc"
+        },
+        {
+          "name": "fn validate_alias",
+          "sha256": "8096c622ad77b0871f2a05dd177e65327eeeac556d8346747279bdfaa2b6a336"
+        },
+        {
+          "name": "fn validate_alias_failure",
+          "sha256": "681b48160fd45d252e3c432a83075f0bdd3f449f2b51bc43139df932524552a8"
+        },
+        {
+          "name": "fn validate_alias_text",
+          "sha256": "718cc140def111497b0d6e890e0fa24247c7a67d877933736b48315ca0d260f9"
+        },
+        {
+          "name": "fn validate_environment_name",
+          "sha256": "0e95ecdd8136d209daa2e8f765ecd38ad850f172289c6fd77249c076b598e2bb"
+        },
+        {
+          "name": "fn validate_limits",
+          "sha256": "49ce01ef09117accfcd1f1fe8e23c4ced9f1b74760750031c4942d5b30ec2509"
+        },
+        {
+          "name": "fn canonical_directory",
+          "sha256": "8fc6e6ff86e9c3ad9d261a9702b4ca60cec6340a85515dd919efda3f3d282a21"
+        },
+        {
+          "name": "fn verify_executable_policy",
+          "sha256": "2ce2671dd465526d504490e7edbbbff4996ae4fd4ff1df99108b707e6ad6df20"
+        },
+        {
+          "name": "fn verify_executable",
+          "sha256": "c3bb9efe96c8c8c7c03954f497ad687a7e930cf2e85081ee02681874911b3d88"
+        },
+        {
+          "name": "fn executable_identity",
+          "sha256": "4154eccd889a606c8988ec7b91028ec6175c69f73052046922befa30c0ffda22"
+        },
+        {
+          "name": "fn windows_file_identity",
+          "sha256": "b8648b30a9014ee7c55109679fae0f8cf2cbb7275caf4113bf16f0d6ecb25e44"
+        },
+        {
+          "name": "fn platform_executable",
+          "sha256": "d654e04a1b4d264a7e2caa8581054e3a63797ac6480fa26858138a7b6faa26a2"
+        },
+        {
+          "name": "fn platform_executable",
+          "sha256": "49db7ad25d4baf4284b95ea8e293bf1c460c2e2d9ea13a621947aa9c14c8943c"
+        },
+        {
+          "name": "fn exit_signal",
+          "sha256": "c3c99fc67acae9d170fb6637e1a93102456736646758840ea48881de6e022fdc"
+        },
+        {
+          "name": "fn exit_signal",
+          "sha256": "4bc6ea25bfe56e831443d02d7813f6c86c13bbec379adc871d05d7d414f25c78"
+        },
+        {
+          "name": "fn safe_duration",
+          "sha256": "fdd6b2f8802f8a1131a1c188899564dd2c884583c98ebc77f76d9b7067c970ce"
+        },
+        {
+          "name": "fn output_mode_name",
+          "sha256": "609327cce32dc609259d30546e10c1db81d0937568be86549cdb6f1ae370bf58"
+        },
+        {
+          "name": "fn invalid_input",
+          "sha256": "e6f76282fb04ea6cd33c723f6f1c194ec311c4db97e9922983ef82defee5bf0a"
+        },
+        {
+          "name": "fn rejected",
+          "sha256": "9a2d133fabbf46af6154caf936a82f14ebedc6530b6ae9babce3d058cec2d36e"
+        },
+        {
+          "name": "fn output_failure",
+          "sha256": "a57cddf0375df3581e51e102d4e9a49750ad82f054958bbfd5b2ec53f785fecd"
+        },
+        {
+          "name": "fn failure",
+          "sha256": "a6031486c0e056696c564ccc786feba3b74c367c65341b6d050ef3cced75662d"
+        },
+        {
+          "name": "fn corrective_action",
+          "sha256": "95865f02b73edcc8a16bf14c455e38ed4acaeec6536ad14aaa30aa2aa28793db"
+        }
+      ],
+      "unitTests": [
+        "ambient_environment_is_cleared_unless_explicitly_inherited",
+        "approved_process_returns_bounded_output",
+        "cancellation_terminates_tree_and_cannot_report_success",
+        "concurrency_ceiling_rejects_excess_processes_without_queueing",
+        "cwd_is_resolved_from_the_policy_project_root",
+        "dropped_handler_future_closes_the_process_tree",
+        "durable_metadata_excludes_arguments_environment_and_output",
+        "every_process_failure_has_an_author_facing_corrective_action",
+        "executable_replacement_is_detected_after_preflight",
+        "fixture_child",
+        "generated_process_requests_are_validated_without_panics",
+        "incremental_stream_redaction_covers_every_secret_split_and_invalid_utf8",
+        "inherited_environment_values_are_redacted_from_captured_output",
+        "nonaccepted_exit_code_has_only_safe_failure_metadata",
+        "path_shadowing_cannot_change_the_preflighted_executable",
+        "policy_inherits_only_names_the_operator_approved",
+        "process_v2_streams_redacted_output_and_preserves_bounded_capture",
+        "process_versions_keep_v1_exact_and_accept_the_explicit_v2_shape",
+        "request_environment_is_enforced_again_in_rust",
+        "runtime_policy_caps_the_effective_process_timeout",
+        "symlink_cannot_escape_an_allowed_working_directory",
+        "timeout_terminates_child_and_grandchild_tree",
+        "typescript_and_rust_share_the_frozen_process_v1_payloads",
+        "validation_rejects_device_paths_and_resource_exhaustion",
+        "windows_child_receives_system_root_without_inheriting_the_application_environment"
+      ],
+      "testDeclarations": [
+        {
+          "name": "fn typescript_and_rust_share_the_frozen_process_v1_payloads",
+          "sha256": "75fe10f5e1ca30d195ea6706d41652a4991b85d9d8419c675e5a0fa9fe7ff0de"
+        },
+        {
+          "name": "fn policy",
+          "sha256": "5556178010b894d45e5447f3df9deff7a4d87ab7bd252f94a250cc23a8f518e2"
+        },
+        {
+          "name": "fn request",
+          "sha256": "d89e784d935fc882f88b8f511c34bf18ca523f14a44a3c81a789bf066ac1548f"
+        },
+        {
+          "name": "fn with_cwd",
+          "sha256": "fee350d85f00836ac8b508cf514a02cd8ddf7bc644de9398cc4bf2fdaf60f6df"
+        },
+        {
+          "name": "fn temporary_directory",
+          "sha256": "be059edae3f074573154b39790bb534772ca8540c8036baebe48f00e31495b24"
+        },
+        {
+          "name": "fn fixture_child",
+          "sha256": "37b9e65f1fb6ce2759c03f5000dd1e862e395ffc84af8dec6d89b6a06c4aca2c"
+        },
+        {
+          "name": "fn approved_process_returns_bounded_output",
+          "sha256": "a640e750ceecdf5a33a4b15d6a950a33e383dbc2386f047e9721993c450c3f77"
+        },
+        {
+          "name": "fn process_v2_streams_redacted_output_and_preserves_bounded_capture",
+          "sha256": "394c07572eb1da45f09ede6039b3f3581c7a29eb0c987f863d51e23fb3ceb6aa"
+        },
+        {
+          "name": "fn inherited_environment_values_are_redacted_from_captured_output",
+          "sha256": "cf3ee05bcbf0ad7961e96bdc5805f15a757acf4af9b134dfbddf38f3042ae753"
+        },
+        {
+          "name": "fn ambient_environment_is_cleared_unless_explicitly_inherited",
+          "sha256": "48898b182143900d46049259255b70f25ea937c6ac89cee20840a1594ed22f41"
+        },
+        {
+          "name": "fn policy_inherits_only_names_the_operator_approved",
+          "sha256": "d410fdfd014a05ffe67aa1c963d7e03c5bdf3b08757aa813f42403b6baa2170c"
+        },
+        {
+          "name": "fn path_shadowing_cannot_change_the_preflighted_executable",
+          "sha256": "ce32ead5537c0d1c2a63e44a319a8b6657401da1e48c9556ae91cf13d071d172"
+        },
+        {
+          "name": "fn cwd_is_resolved_from_the_policy_project_root",
+          "sha256": "9e45ea60f2b7e25559b6cfc2b5f16d9b8a0010f61e9fdb8793f831a5ad160f46"
+        },
+        {
+          "name": "fn windows_child_receives_system_root_without_inheriting_the_application_environment",
+          "sha256": "dc3cb43994edb5237a595d282941e6569d61b33cbe138e04535623dbc0b04c0d"
+        },
+        {
+          "name": "fn windows_node_executes_javascript_with_only_the_os_bootstrap_environment",
+          "sha256": "5f03d6821aa803ae9d5da0f43184a3ee7a24dce0d055d44b499b47187760c8a4"
+        },
+        {
+          "name": "fn symlink_cannot_escape_an_allowed_working_directory",
+          "sha256": "0e77de281af8bdcea8cc3d5cd027a84aaf96bf9ed0448ad1db270a330b1a126c"
+        },
+        {
+          "name": "fn executable_replacement_is_detected_after_preflight",
+          "sha256": "4fe53eed4fe4a21b8a5b5b6a057db96bf82625850235a548330d9d41e19a3e1e"
+        },
+        {
+          "name": "fn validation_rejects_device_paths_and_resource_exhaustion",
+          "sha256": "24ddb2fae9f49ff3c96a44555618643daf1e8d7c451022eac66354d819d0b7bd"
+        },
+        {
+          "name": "fn generated_process_requests_are_validated_without_panics",
+          "sha256": "123b7ddb553d166e29db426e877403283c1f673005f9c7fcfa4436af237a8c57"
+        },
+        {
+          "name": "fn every_process_failure_has_an_author_facing_corrective_action",
+          "sha256": "2fbd22751094cfe562f712c603551d0d876fa7f330fc73d5b924b52add8c9645"
+        },
+        {
+          "name": "fn nonaccepted_exit_code_has_only_safe_failure_metadata",
+          "sha256": "fa9286d66ad09fdcef305c9361c982717e6cd4e831c14808562537c6cead145e"
+        },
+        {
+          "name": "fn request_environment_is_enforced_again_in_rust",
+          "sha256": "f2af81138dcefacc7bb2f9a56ad0a59fab040eb942db37793dbf7477e252812e"
+        },
+        {
+          "name": "fn runtime_policy_caps_the_effective_process_timeout",
+          "sha256": "9e6f0f579d0cd1d4b67a1e0566301e7c62ea452e37628a090319f8a5b56484e4"
+        },
+        {
+          "name": "fn process_versions_keep_v1_exact_and_accept_the_explicit_v2_shape",
+          "sha256": "ae698a88eff77a3caba8bb752854cf9ef0dacf12602a82765ccbadaf9e1f5951"
+        },
+        {
+          "name": "fn incremental_stream_redaction_covers_every_secret_split_and_invalid_utf8",
+          "sha256": "0a306f413a8c619c74b8238d68613edc43b7e35467d8e779314db28e441a8ee1"
+        },
+        {
+          "name": "fn durable_metadata_excludes_arguments_environment_and_output",
+          "sha256": "acd36cfb5d08b30d650ceb2ee6b1d6e8faecf87719cde5109d866a5dec47a17c"
+        },
+        {
+          "name": "fn assert_heartbeat_stops",
+          "sha256": "6e77c12b036771a79f59f14c84c97a9c5b37124445d4cc395f4bbe63f3ab4d46"
+        },
+        {
+          "name": "fn tree_request",
+          "sha256": "917e9c2ac04bd7c5be07a4989af2d1676ebe00c2ef7789786011ad4a3fe374d0"
+        },
+        {
+          "name": "fn timeout_terminates_child_and_grandchild_tree",
+          "sha256": "2038fc1555ced1212a80d7ddfc709d9bed63c0159c045311b4a21a544eb81ab3"
+        },
+        {
+          "name": "fn cancellation_terminates_tree_and_cannot_report_success",
+          "sha256": "71f504f829099596c1983e1829705635ea390fdb6413a866ab79c33a3c580139"
+        },
+        {
+          "name": "fn concurrency_ceiling_rejects_excess_processes_without_queueing",
+          "sha256": "822707403b8ada54e8bfc8a101149fd78af71aee47b55654d78f105ab295bb91"
+        },
+        {
+          "name": "fn dropped_handler_future_closes_the_process_tree",
+          "sha256": "a6cb0dd792ef8e87bb39acd5b3e515d58ab73fa02bd07a414a08f0cdc9d46a1a"
+        }
+      ]
+    },
+    "artifacts": {
+      "sha256": "28b5801bcfb7f6247bc220646a2aee6dee7945c29457e9c3163a4546f1d0ec5a",
+      "publicTypes": [
+        "ArtifactBackendPolicy",
+        "ArtifactBackupInventoryV1",
+        "ArtifactExportV1",
+        "ArtifactInspectionV1",
+        "ArtifactLimits",
+        "ArtifactMaintenanceV1",
+        "ArtifactMaterializationPolicy",
+        "ArtifactObservationV1",
+        "ArtifactOperationalOutputPolicy",
+        "ArtifactPolicyError",
+        "ArtifactPolicyModes",
+        "ArtifactPolicyV1",
+        "ArtifactProvenanceV1",
+        "ArtifactReferenceV1",
+        "ArtifactRetentionPolicy",
+        "ArtifactRunInspectionV1",
+        "ArtifactRuntimeMode",
+        "ArtifactSecretScanningPolicy",
+        "KnownSecretAction",
+        "ManagedArtifactPutHandler",
+        "ManagedArtifactReadHandler",
+        "ManagedArtifactStore"
+      ],
+      "publicFunctions": [
+        "export_artifact",
+        "export_artifact_backup",
+        "inspect_artifact",
+        "inspect_run_artifacts",
+        "maintain_artifacts",
+        "observe_artifacts",
+        "restore_artifact_backup",
+        "verify_artifact_backup"
+      ],
+      "publicConstants": [
+        "ARTIFACTS_CONTRACT",
+        "ARTIFACTS_CONTRACT_VERSION",
+        "ARTIFACT_POLICY_CONTRACT",
+        "ARTIFACT_POLICY_CONTRACT_VERSION"
+      ],
+      "publicTraits": [],
+      "declarations": [
+        {
+          "name": "const ARTIFACTS_CONTRACT",
+          "sha256": "0c33a8c6e7a81770392dbd90f0c90247fb2d5b65713a6d16f2d5cfe5b05cbf4c"
+        },
+        {
+          "name": "const ARTIFACTS_CONTRACT_VERSION",
+          "sha256": "5ac08721be49c74612b5c7572003373ec63270668c0336413f533ee114e6c764"
+        },
+        {
+          "name": "const ARTIFACT_POLICY_CONTRACT",
+          "sha256": "2c52aa5d5cb7cba10ae777f6007a7e239cf996b8fcc8c3dbe2bb089accb619da"
+        },
+        {
+          "name": "const ARTIFACT_POLICY_CONTRACT_VERSION",
+          "sha256": "d10b19cf0e1b762165737548a40c76a694443dc6ef0a08514c6a98d9f3c85522"
+        },
+        {
+          "name": "const ARTIFACT_REFERENCE_CONTRACT",
+          "sha256": "2d12cd980e75eaad1807b41c8b8c4b0c6541c66815c81d936a6dbdc137314497"
+        },
+        {
+          "name": "const ARTIFACT_REFERENCE_CONTRACT_VERSION",
+          "sha256": "3474f7b58c6cae43ab578eb2a864cc8bfd652ecd0094e27c873ee6cd1c610f07"
+        },
+        {
+          "name": "const ARTIFACT_STORE_SCHEMA_VERSION",
+          "sha256": "7d5fa32d0c1aed83f3a911fd8c2c97c44b73aff870df9d5f5ba3c4fd9ae68eb3"
+        },
+        {
+          "name": "const ARTIFACT_BUSY_TIMEOUT_MS",
+          "sha256": "0f419efb5ea7dbf37b44cf2569a3e8171f5a27252b8bcf9f5305cdbebea7bac7"
+        },
+        {
+          "name": "const STREAM_BUFFER_BYTES",
+          "sha256": "c44cd2b321a0ddb933ed694bcab04b622ed9ead2599b4f6277e09132cfc01cd6"
+        },
+        {
+          "name": "const MAX_ARTIFACT_BYTES",
+          "sha256": "8dc3af278a9e174e447acfc2f8994172274e2bbf4788e62b70f11fdfee0c3ae4"
+        },
+        {
+          "name": "const MAX_RUN_BYTES",
+          "sha256": "0f97aa8e948cb4cc71ea3ee86d60d4c2b58459a9392219a51b5fc46536e1cfb0"
+        },
+        {
+          "name": "const MAX_STORE_BYTES",
+          "sha256": "89b3354e8b8e897455a9c0dccadb7f878829067c3ef8b374e7c45f67c274e7ae"
+        },
+        {
+          "name": "const MAX_TRANSFER_TIMEOUT_MS",
+          "sha256": "66ea474220ddc0d35bd37935fb6381469fc7d61689750fa80eaef25a0c9d9512"
+        },
+        {
+          "name": "const ARTIFACT_MAINTENANCE_BATCH",
+          "sha256": "9982c76f9a39a7d3831d0fbbed4590eb2502d01629832d9dd0d1c565a95dd501"
+        },
+        {
+          "name": "const ARTIFACT_SCRUB_BATCH",
+          "sha256": "1afa4bfc4e1aca94e0bdc5b6c314da881f54ff114067c1a7e56e9ce4704686d3"
+        },
+        {
+          "name": "const ARTIFACT_ORPHAN_SCAN_BATCH",
+          "sha256": "e83be82f8e9761225cb955d1537a8358516a9925605dcfe8bd599abf61dda5a5"
+        },
+        {
+          "name": "const CROCKFORD",
+          "sha256": "d06759a395dbbe153f3c847f0706f44fc67a22f94194d23574ee261cc9941b5b"
+        },
+        {
+          "name": "enum ArtifactRuntimeMode",
+          "sha256": "0636a4b7d1d48930d303495b2bd2e77ce98c47b58f50b5fcf9be1d76c58e7e9d"
+        },
+        {
+          "name": "struct ArtifactPolicyV1",
+          "sha256": "7eb83276be2a5a86adc564d7170415f78eba62f3f466bb6a3782f97d43131291"
+        },
+        {
+          "name": "struct ArtifactOperationalOutputPolicy",
+          "sha256": "6e1eaf4f4faa4ab9937a7157cae64eb46c031d820ba47742177c839716d6b4c3"
+        },
+        {
+          "name": "struct ArtifactPolicyModes",
+          "sha256": "4eb3b20da5f452f5cbdb82e159f570304c463b3a1960b5163cd972f2e6abcac2"
+        },
+        {
+          "name": "struct ArtifactMaterializationPolicy",
+          "sha256": "0b411a5fb02b7a89bdd20a855bf4e42dcdf7efd3e221ca083c0c81620c630959"
+        },
+        {
+          "name": "struct ArtifactLimits",
+          "sha256": "910770323a56756eef009b3abc072e4fb02be1a49ede4f696b92a21489c25203"
+        },
+        {
+          "name": "struct ArtifactRetentionPolicy",
+          "sha256": "0078933ae93c70a80adb7829154b28d8b535e254a0d77e5225f3b497868d4de9"
+        },
+        {
+          "name": "enum KnownSecretAction",
+          "sha256": "149680f1ff857a7999bc96378e08f9d7e94ccaf6e22fd3b34202c32901388920"
+        },
+        {
+          "name": "struct ArtifactSecretScanningPolicy",
+          "sha256": "eedcb896e9ac00ab72242dd177e9cf7b610b6d24ad7028f8d3f793097177f29b"
+        },
+        {
+          "name": "enum ArtifactBackendPolicy",
+          "sha256": "5c07409265c6e54a3b961e6a2f0133facd920c9505094cf8739f21b67ea220de"
+        },
+        {
+          "name": "struct ArtifactReferenceV1",
+          "sha256": "33a9996c6e25537e41f7e61bd61a077416be08cd79832f70673ce853ea467f52"
+        },
+        {
+          "name": "struct ArtifactMaintenanceV1",
+          "sha256": "f155f5c4997d8dd82b68d88f87cb9204b36ac331887b3f1779c6279037614347"
+        },
+        {
+          "name": "struct ArtifactBackupInventoryV1",
+          "sha256": "fcec3040c45c5c8399b52bbb4ce8112013ba3371b6a8cbf28f257ce349f6e6fd"
+        },
+        {
+          "name": "struct ArtifactInspectionV1",
+          "sha256": "ceea05f80766d8ebd97cdc04107d81c9ceea30c55a16ad599dfe72f13c59b364"
+        },
+        {
+          "name": "struct ArtifactProvenanceV1",
+          "sha256": "4cd4fab86f7215ded6316558445082c04762a6c3f22cfcfb862de367fe1c1b34"
+        },
+        {
+          "name": "struct ArtifactRunInspectionV1",
+          "sha256": "c1860636f83cd7559fed714a6f27481bd17d6157e6b60bc0db546c047c3d11a5"
+        },
+        {
+          "name": "struct ArtifactExportV1",
+          "sha256": "a915d285b00f4307efd50d76a2a1b2c3e50dddd2330a74a34dbb4a850c21b66f"
+        },
+        {
+          "name": "struct ArtifactObservationV1",
+          "sha256": "a84d7a60080ad3e0cb1f5f6dd3dcb36d6771a97ad90e1aca60769b0b55658ad0"
+        },
+        {
+          "name": "enum ArtifactPolicyError",
+          "sha256": "36f2d8d984b36ab2c26942666275e65071d1328abdda3386b2080fb8c436b4af"
+        },
+        {
+          "name": "struct PreparedArtifactPolicy",
+          "sha256": "0d74ab92dc5d89cc04d1c051022c741953baf76f4ab37b15ad2264abd08258d8"
+        },
+        {
+          "name": "impl std::fmt::Debug for PreparedArtifactPolicy::fmt",
+          "sha256": "cec7be9ea9fa27aa014a5ace278480d36b3926564188aa2aec9951fdc5473659"
+        },
+        {
+          "name": "enum PreparedArtifactBackend",
+          "sha256": "4de5a7841ee2145b59102afa332d2352dfd25120911eba576d6d57b5d77395aa"
+        },
+        {
+          "name": "impl std::fmt::Debug for PreparedArtifactBackend::fmt",
+          "sha256": "7f78d4f71d8c904918a7d3fb23c9a981704d9ab199b029e643ac61f95486f400"
+        },
+        {
+          "name": "struct PreparedS3Backend",
+          "sha256": "e49d540511276420af2e5403c5e96aec2dd052c0ee6be00eb2945031734212bc"
+        },
+        {
+          "name": "struct S3Credentials",
+          "sha256": "0d2d618bd42b44e072f92a8469a997254a417ace6a801f245a77156d9dcfb056"
+        },
+        {
+          "name": "enum S3ServerSideEncryption",
+          "sha256": "5d1b49dd26d46eda60b06a5c7b23f171eabe8c88f47c3286743b03f324d9387c"
+        },
+        {
+          "name": "struct ArtifactRequestV1",
+          "sha256": "44941e916a4dff540834fa83e442c2a05c18256ce12daef7e6e4bb0d7ff7c74f"
+        },
+        {
+          "name": "struct ArtifactPutInputV1",
+          "sha256": "424a0d8573af1e172f72e03e953d7ee404bfb0fd46dbdffb7e542b2c16f881ce"
+        },
+        {
+          "name": "struct ArtifactReferenceRequestV1",
+          "sha256": "f7f169faea09310f0652a71b00f2dc5fe6fa53c9f1ea544144be0c930d4a93d7"
+        },
+        {
+          "name": "struct ArtifactReferenceInputV1",
+          "sha256": "c49446bb76d7ddbf47728f2dd1255c9a32c1029d627c77fd4a2ebc51d2b363a9"
+        },
+        {
+          "name": "struct AuthorizedArtifact",
+          "sha256": "ab29f2a647e1b10497342e9459932bed710f2437fca5e817171655f1bab75f5f"
+        },
+        {
+          "name": "type StoredArtifactRow",
+          "sha256": "5f1b6731cf996512d76f109e058df7a2eb6df8dc2cdcdd3f66fbd99f9602b0d6"
+        },
+        {
+          "name": "struct SourceIdentity",
+          "sha256": "083ed66e8306b5e8240acd65283c8e1fd77493b24513d59a04196991417ba61b"
+        },
+        {
+          "name": "struct StoredSettlement",
+          "sha256": "fe4f2c22997be085df79dd47615af1865036fa7d8dee0066131523dae685f0c7"
+        },
+        {
+          "name": "trait ArtifactBackend",
+          "sha256": "b0ee68a001119ec6a82cd08d994dc34ed60829bab19c8ea41427b5da11e11cf5"
+        },
+        {
+          "name": "struct VerifiedArtifactBlob",
+          "sha256": "bb5181c603847fb8a7a5251897b3cea79f0d85e1b7086742ab3149e1f74d274c"
+        },
+        {
+          "name": "impl Drop for VerifiedArtifactBlob::drop",
+          "sha256": "92ea97fb42a9552176d2a4eb48f83d73272791f9cb609a43bb22ede0be536325"
+        },
+        {
+          "name": "struct LocalArtifactBackend",
+          "sha256": "72a1d8ccf9e39b487c3b426d3c11b9a5edd2ecf2909fa7d4c22059adba126a04"
+        },
+        {
+          "name": "struct ArtifactStage",
+          "sha256": "4f92c586c188d265a236e40bb20f3240e5af29af9f055f7398d5a28f27228af7"
+        },
+        {
+          "name": "impl Drop for ArtifactStage::drop",
+          "sha256": "f2798a75a5ef8c0c0359a766c31bb3c2f1cef30587d35315f2b5f557e2dd6175"
+        },
+        {
+          "name": "impl LocalArtifactBackend::open",
+          "sha256": "3cda4d62fc58b3f4dd735c44bf1bf0a90b38c79be8bd3b7f8c97b19668e82040"
+        },
+        {
+          "name": "impl LocalArtifactBackend::blob_path",
+          "sha256": "e8304aeb22d0669802e5631cf2bfc4403724deb1035aa7fab344be3c8e174b7f"
+        },
+        {
+          "name": "impl LocalArtifactBackend::verify_blob",
+          "sha256": "c660697bf74ab2dbc49acfa66e51fb8021a075f4c0342062bc15db45c60ad074"
+        },
+        {
+          "name": "impl LocalArtifactBackend::bind_store",
+          "sha256": "733e0de7531ad41d9ff181dcacae81a485e33470db50efb8bfef4e37488e61b8"
+        },
+        {
+          "name": "impl ArtifactBackend for LocalArtifactBackend::identity",
+          "sha256": "314d4d924d5d1e923de2d3445bd2cdbdaa0a4421da50eed9f5134f5e38d3e799"
+        },
+        {
+          "name": "impl ArtifactBackend for LocalArtifactBackend::bind_store",
+          "sha256": "468c09515b8979e094a084b9487f92b8c789be2928e49dcacafaa616f2cd1ec3"
+        },
+        {
+          "name": "impl ArtifactBackend for LocalArtifactBackend::begin_stage",
+          "sha256": "77a3a881d17fbc2556ed6da77abbefa31c80512e36a759d377ebec963b16027c"
+        },
+        {
+          "name": "impl ArtifactBackend for LocalArtifactBackend::publish",
+          "sha256": "4499328c24dae09bcbc2474b4740f88ab6bbcfa7662ff6dc20a428c8125249ad"
+        },
+        {
+          "name": "impl ArtifactBackend for LocalArtifactBackend::cleanup_startup",
+          "sha256": "a9dbd60f972364a3f2d3c88cc8a8fa3da367952f638769f891525d916d82e14a"
+        },
+        {
+          "name": "impl ArtifactBackend for LocalArtifactBackend::verify",
+          "sha256": "ffb17c8ed308d98cae0190d882fe2b3688f7ec95ec8c48188a0b4c8ca6622a0d"
+        },
+        {
+          "name": "impl ArtifactBackend for LocalArtifactBackend::delete",
+          "sha256": "3e28c501c8481d7b3e6bc9f1dc8fa7eb06558ca854b083a8535942c7cc3221c2"
+        },
+        {
+          "name": "impl ArtifactBackend for LocalArtifactBackend::inventory",
+          "sha256": "f126be4dfc2851c2f21b9d35cb8babdd638b7e6442049ff514a0430498221666"
+        },
+        {
+          "name": "const S3_MULTIPART_THRESHOLD_BYTES",
+          "sha256": "a6a048d472682e98373367b5f32444607f5c66e68aaedd9d09540f71463d01a3"
+        },
+        {
+          "name": "const S3_MULTIPART_PART_BYTES",
+          "sha256": "564861fe605707da87eee397e63022e225b7aaf6c582dae09511cb271ed18146"
+        },
+        {
+          "name": "const S3_RECOVERY_ATTEMPTS",
+          "sha256": "254f53b31d1a71ffd43f39ef8feb107e1ea95a334337a595703a46b416c19464"
+        },
+        {
+          "name": "const S3_CONTROL_RESPONSE_MAX_BYTES",
+          "sha256": "ba54b7fbfd2cabeaab4524cc42381441ecc039c4962b9ff53a9a9f9abbfbb46b"
+        },
+        {
+          "name": "struct S3ArtifactBackend",
+          "sha256": "933702e74244aaa92239c9dc7c8b0a1f7027aef559496307574fbb100de1f1a5"
+        },
+        {
+          "name": "impl S3ArtifactBackend::open",
+          "sha256": "154785621846a2c2e03791c4d0d32b5fc807bfe273e580e9dca4d3e417de1c2a"
+        },
+        {
+          "name": "impl S3ArtifactBackend::object_key",
+          "sha256": "66a66fef1a8d45caf685e721e2f9b7a9a4b4944b2cc196b401b9cd73cc6de1b6"
+        },
+        {
+          "name": "impl S3ArtifactBackend::blob_key",
+          "sha256": "a70e8110ec710be56fe8a0faf8ef90ce8dad55526ac68bd649cd5e9e94aeccba"
+        },
+        {
+          "name": "impl S3ArtifactBackend::endpoint",
+          "sha256": "cc048481990ecb6d95f5ee6dec3bb10e99dd5a855b1d64b763cbc8e720d3ffa6"
+        },
+        {
+          "name": "impl S3ArtifactBackend::send",
+          "sha256": "2bed4dd1dc9a79a8d305efef3ab26848addd11719a68f03ef2fd29d923cb760d"
+        },
+        {
+          "name": "impl S3ArtifactBackend::encryption_headers",
+          "sha256": "bc44f72e1f54427668d3762ab1f2b3370b58bce713e77fbf636e814ac2accef6"
+        },
+        {
+          "name": "impl S3ArtifactBackend::run",
+          "sha256": "ab2074b1dd1e2c62faa6b105fb4ace83316d62092b49c8a0442b66c0f6002d11"
+        },
+        {
+          "name": "impl S3ArtifactBackend::upload",
+          "sha256": "f95fbe4e921903322690e5459df1b1c1f07e2d3de43ef1811f23283e2b305299"
+        },
+        {
+          "name": "impl S3ArtifactBackend::upload_multipart",
+          "sha256": "34dfbb9195b8dbfdd2ba6d3a423d8937bcffdb1619393186a3c4ffdf027e4d24"
+        },
+        {
+          "name": "impl S3ArtifactBackend::download_verified",
+          "sha256": "d72990c60a78d55f682e291c31444d720e7f39d248d16e386182d809ff1a56b4"
+        },
+        {
+          "name": "impl S3ArtifactBackend::list_inventory",
+          "sha256": "970ad1478350fb72a250b134e3d25ef5fd33e155cff7797388c6f20c7d7965dd"
+        },
+        {
+          "name": "impl ArtifactBackend for S3ArtifactBackend::identity",
+          "sha256": "9b8fb38fe318573d3dd0fae4874108594953dba6bd2d95d3c768f33e39147102"
+        },
+        {
+          "name": "impl ArtifactBackend for S3ArtifactBackend::bind_store",
+          "sha256": "1a60f06f23aaac114a2693aefef491f404b54f297bf77c9e8bd3ed183a6feb04"
+        },
+        {
+          "name": "impl ArtifactBackend for S3ArtifactBackend::begin_stage",
+          "sha256": "77a3a881d17fbc2556ed6da77abbefa31c80512e36a759d377ebec963b16027c"
+        },
+        {
+          "name": "impl ArtifactBackend for S3ArtifactBackend::publish",
+          "sha256": "7bf25b65338a6be431ce9a033819299177a49bb58eae196813c89cf0f44eb4bb"
+        },
+        {
+          "name": "impl ArtifactBackend for S3ArtifactBackend::cleanup_startup",
+          "sha256": "79d8648c74150c49071a51d2980a054c1ba976152fe8d6630f357538e6452ccc"
+        },
+        {
+          "name": "impl ArtifactBackend for S3ArtifactBackend::verify",
+          "sha256": "4857cacee2b8531205dcefaa7148c605b2d90f2349277f6361adc32c8f44a82d"
+        },
+        {
+          "name": "impl ArtifactBackend for S3ArtifactBackend::delete",
+          "sha256": "252039851d694af77adf97207dde2f47ce4df0836ddc41c4218e10af39c5d74c"
+        },
+        {
+          "name": "impl ArtifactBackend for S3ArtifactBackend::inventory",
+          "sha256": "2304715d3f6e6da4887cd1e152c73cc1b6b1fba35705403b0f9c3fcfeaf6d684"
+        },
+        {
+          "name": "fn streaming_request_body",
+          "sha256": "469bce75cb54c84afb577070d4744378304245f67a61996fcb98bffd8aac1360"
+        },
+        {
+          "name": "fn bounded_response_text",
+          "sha256": "006c8a5ef085c2b062d9c07672df66e2c8a13888a668a49cd55b6fbc4e1285e4"
+        },
+        {
+          "name": "fn hmac_sha256",
+          "sha256": "820cb46d1829d3a296bd2e1e3d956175fd327a74120b6827458fa3a83990325b"
+        },
+        {
+          "name": "fn aws_percent_encode",
+          "sha256": "2d65e7fd23f028e15b3e31fe90ffaf5ada0fe58db518252c72dfa68743fa0942"
+        },
+        {
+          "name": "fn xml_values",
+          "sha256": "0de41160f4c9b2d6048912d2d163b1a9514f6357efc979c7332a1d4f42ee334b"
+        },
+        {
+          "name": "fn xml_escape",
+          "sha256": "e446c68257cec779a57b8041fab7f67c7258e39e28359f4cbed815b631352b1a"
+        },
+        {
+          "name": "fn xml_unescape",
+          "sha256": "187e4e72244725a3f8e73b379ed5a52ad7bb62ad409de30c20b322d1c39b5cdf"
+        },
+        {
+          "name": "struct ManagedArtifactStore",
+          "sha256": "2946ae998525db2b436383c0c4c0719ef46d316944305e85f4f1ec4393767b0f"
+        },
+        {
+          "name": "impl std::fmt::Debug for ManagedArtifactStore::fmt",
+          "sha256": "52b3f62928f4a6df61ff452194361ca152d94be77ef046d196d19bd4f2c20e48"
+        },
+        {
+          "name": "impl ManagedArtifactStore::configure_for_state",
+          "sha256": "fab2c02ba967757d2e65a989d433697e9d839866666101962b3049cbe183690e"
+        },
+        {
+          "name": "impl ManagedArtifactStore::configured",
+          "sha256": "dffd74110f7b1270ea03458324e3ca32c85ab6c6243648fefbe8093179e0b761"
+        },
+        {
+          "name": "impl ManagedArtifactStore::cleanup_invocation",
+          "sha256": "c60e283f3d53ce69fdacbadc19e016ee64abec5f7ff3aee7e8ccb98da3f19aba"
+        },
+        {
+          "name": "impl ManagedArtifactStore::operational_redactions",
+          "sha256": "3ba27acc8d02fa8feb65c762f7d08d2f374ea936d90b2942937b9930903c01ad"
+        },
+        {
+          "name": "impl ManagedArtifactStore::verify_review_reference",
+          "sha256": "4a9867cad7c2275e67db75196b1b123cc9e2f31c797ce851ddf5078b33555e73"
+        },
+        {
+          "name": "impl ManagedArtifactStore::verify_policy_evidence",
+          "sha256": "e4eb21e3015c1a9c02b93c60fd5e176c1f11c385f279ea8b0a90c0488c558958"
+        },
+        {
+          "name": "struct ArtifactStore",
+          "sha256": "92ef27782f77c9d16072f9b0e1b1a96bdabc7e769d654734103aa306d1e1b297"
+        },
+        {
+          "name": "impl std::fmt::Debug for ArtifactStore::fmt",
+          "sha256": "f4cbed2c6e726b93c2ab0bbc1eff3432969660006d4a16384944b9f82a066aae"
+        },
+        {
+          "name": "impl ArtifactStore::open",
+          "sha256": "deb4755af125d633746e3233d2e3b87dee35b3da15401862682022a70545a8f0"
+        },
+        {
+          "name": "impl ArtifactStore::open_with_startup_cleanup",
+          "sha256": "4e726b1429a3e34fec0d15b40c4037170c1b79349b098b7fd4c76dd4578cb145"
+        },
+        {
+          "name": "impl ArtifactStore::invocation_materialization_directory",
+          "sha256": "84cbf67033b470b5a21028a30ebe9de467c8796460eb117fbee01a00da9f06ce"
+        },
+        {
+          "name": "impl ArtifactStore::cleanup_materialization",
+          "sha256": "0e4ca4e58d80a549d7cb1a93e63fb8af24b4b8433ccf31a4c3623dabbf4ac9ab"
+        },
+        {
+          "name": "impl ArtifactStore::connection",
+          "sha256": "616e2935cd03c5ecff743deb85b7c5d6b53f9d2e561c7aad7079e98d59488809"
+        },
+        {
+          "name": "impl ArtifactStore::maintenance",
+          "sha256": "88b6ba90885d85138024e29516a9e3effbd8c46be35b66e66868ebd720a892c1"
+        },
+        {
+          "name": "impl ArtifactStore::put",
+          "sha256": "70dc1dc0382876fb54c709663484df85c9e9883b2693490dcd22c4ad38b686c8"
+        },
+        {
+          "name": "impl ArtifactStore::put_started",
+          "sha256": "21fed937750b4944fd15edee95b817f05e264ab76aa81b35c0a3ae57c79d2881"
+        },
+        {
+          "name": "impl ArtifactStore::settle_failure",
+          "sha256": "8da78cf87d552779bf14205cc818897667937cdfcc2395d0e8beeda45cf60194"
+        },
+        {
+          "name": "impl ArtifactStore::head",
+          "sha256": "63f4b63ffa74ecfb6aff7a34f2fab194aa9c831f93c84decb96f97a66b6b5a82"
+        },
+        {
+          "name": "impl ArtifactStore::materialize",
+          "sha256": "c326859b684d1dfc16e28828069aa092a24287e7facbcab2128d9eb9797a4660"
+        },
+        {
+          "name": "impl ArtifactStore::authorize_reference",
+          "sha256": "ceda7532967a42044a4e596609d00366335d96e9b28778f97618623bbc80b353"
+        },
+        {
+          "name": "impl ArtifactStore::read_source",
+          "sha256": "c7a51d70b4b6317467813ee9ac27ae3264ac33f71a8d918d03b74ff85a917e5b"
+        },
+        {
+          "name": "struct ManagedArtifactPutHandler",
+          "sha256": "34334e36fe84599c91f9af86d696de6359d45572d6c47ce8a7a0c45a090df83d"
+        },
+        {
+          "name": "struct OperationalArtifactWriter",
+          "sha256": "605898efc8c657a3ff1cf5623efeadcda233e6e9bd84d0e8b22f6890b3a50208"
+        },
+        {
+          "name": "impl std::fmt::Debug for OperationalArtifactWriter::fmt",
+          "sha256": "b23efb740b5a182f0f4d6aaaa771fdc75d204856d884fb903a0f8c5ecb1d67d2"
+        },
+        {
+          "name": "impl OperationalArtifactWriter::append_redacted",
+          "sha256": "f45b1adf9a9a8d207dc8678f45e953e0443f0a7a3a1d3c10c2098a2bb1a6164f"
+        },
+        {
+          "name": "impl OperationalArtifactWriter::finish",
+          "sha256": "7a4a302f2cbae8368959500f18358b21b1a2b03b139c0cd829050abf002de8bb"
+        },
+        {
+          "name": "impl ManagedArtifactPutHandler::new",
+          "sha256": "5ad86563921739092eab6868387b659b690c28c6519299cb09bf6ffb87afcffa"
+        },
+        {
+          "name": "impl ManagedArtifactPutHandler::policy",
+          "sha256": "d81d9b6434e3238fd5395754742074a142303eeba11dda99ed8774242c1efbc7"
+        },
+        {
+          "name": "impl ManagedArtifactPutHandler::begin_operational_output",
+          "sha256": "07acf0de80cbcc45ca3855eb047c5b9dee5d6dea2647a0cb3622cba9bcb1c11e"
+        },
+        {
+          "name": "impl ManagedArtifactPutHandler::head_handler",
+          "sha256": "77b38d516ff14f1fcb9634bf49517f5f69661b0d59c3dd3ccd10f657716f7897"
+        },
+        {
+          "name": "impl ManagedArtifactPutHandler::materialize_handler",
+          "sha256": "b4d953ad81710d8cf6f6a5bc05fa8f05895383bfcf15ffbece583a82d51a8020"
+        },
+        {
+          "name": "fn maintain_artifacts",
+          "sha256": "913d4d5c8ad83098d20dff62ee992a23ddc5363d12dfd009953ffc98291eeb56"
+        },
+        {
+          "name": "const OPERATOR_ARTIFACT_INSPECTION_LIMIT",
+          "sha256": "33d8a68c45bb5a550d15b5d86d6548660df8fc5dc98bad1d23117a3ea550ba01"
+        },
+        {
+          "name": "fn inspect_artifact",
+          "sha256": "9cbdb09fd621af4d8e6a2bea6ce10a96b9177cd5b28e55c3d8c24e3a238c42c3"
+        },
+        {
+          "name": "fn inspect_run_artifacts",
+          "sha256": "ed8d7d9fdba769b48e2fe9189a534a624a8034d8b7c22d183e07131109675c06"
+        },
+        {
+          "name": "fn export_artifact",
+          "sha256": "63c609ab2cbd28f2e57c551a515c7365f440ce30d3929409b0ce89fc81e0426d"
+        },
+        {
+          "name": "fn observe_artifacts",
+          "sha256": "0319670ab4925c177f610f9fcc39d2d5522568a1f1a5ae24785cf85050ce5d25"
+        },
+        {
+          "name": "fn artifact_inspection_row",
+          "sha256": "019ba0eafcb3111a564ac30a16892e0481e07817cde4003e933e191100154aa5"
+        },
+        {
+          "name": "fn record_operator_audit",
+          "sha256": "3a6e274db6c7250af19bf57edbfcf416bb7c97eb26ef416d7f3db3a32e59070c"
+        },
+        {
+          "name": "fn validate_artifact_id",
+          "sha256": "ff14020849e663f7ecda3ad538cbae9030b19d656ca5fdcd1f4967181c865e83"
+        },
+        {
+          "name": "fn export_artifact_backup",
+          "sha256": "0209b221380835ff48d6e6668f48d7a68cb9e8ba0b059b2438f6872f1e2ca344"
+        },
+        {
+          "name": "fn restore_artifact_backup",
+          "sha256": "94a1e61ab9f501a33302ca78107062d5a8814937fb2d662f4fae6a849eb50307"
+        },
+        {
+          "name": "fn verify_artifact_backup",
+          "sha256": "0b2f7ff75823131ce58e6e70e940ad9ef8f895202c4a8b195384a97126ea1186"
+        },
+        {
+          "name": "fn artifact_blob_inventory",
+          "sha256": "562a7f436bdf6671f6291cb5fe8c20b010d8e601ea482f261063c95f4fea7070"
+        },
+        {
+          "name": "fn artifact_backup_inventory",
+          "sha256": "2a4bdc8fd4eb043655299c1879d33a98e8ba5242ac9c1bc6d67b3134b3a95da4"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedArtifactPutHandler::descriptor",
+          "sha256": "aaeb0a962fb400455df50e504f80e6e176da42e518c3d4fcc894e7219da658f6"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedArtifactPutHandler::validate_request",
+          "sha256": "16df3c8003a2abaffdac49c82e71d0ca589bd09319129b50aa0e0374c983a920"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedArtifactPutHandler::safe_request_metadata",
+          "sha256": "eb16c4592402ac401adca8b7a7fadc6c680e3f216bfc212c9b3dca718fd0bf61"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedArtifactPutHandler::safe_result_metadata",
+          "sha256": "c645d158148217824667909b8a7d0516b88d4a8bd510cf326d6f85a23d7a632a"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedArtifactPutHandler::safe_failure_metadata",
+          "sha256": "da778215f72fb9829149bd803bae52317c010c1fde9638fa46520d1a23f0e7ad"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedArtifactPutHandler::execute",
+          "sha256": "f9b82abe9c85f77e6ceda167977253ed1be7474ae604b941085e89e146ea08c5"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedArtifactPutHandler::execute_request_scoped",
+          "sha256": "38721a6f44317b9a08bc1d4a1dcb5a268abdac44a22e0204c9a878a5e72b136e"
+        },
+        {
+          "name": "enum ArtifactReadOperation",
+          "sha256": "f3654bfec8e1b5da34fdc075ca4c0a80cff8c868d7578326ed22ab050de775e2"
+        },
+        {
+          "name": "impl ArtifactReadOperation::as_str",
+          "sha256": "43945db334274fe7e8114a7a376bf5ed4ed7c73d8856e7d1f910f29a507cfdc3"
+        },
+        {
+          "name": "struct ManagedArtifactReadHandler",
+          "sha256": "73e3261bdc48439e1f78f0978a1d823c38fff6f68bdc4c1e70de2909c4f9c055"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedArtifactReadHandler::descriptor",
+          "sha256": "05aef626aa7c46948cb99f6586488e401947f89b994ba00ab187d1ecf52a39bc"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedArtifactReadHandler::validate_request",
+          "sha256": "0b19e6efde8f87a0198a9f658a7cc7ac9386cf42ac4b343e357576132b6286f0"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedArtifactReadHandler::safe_request_metadata",
+          "sha256": "e5a067bcd04eb26519af83b6f08a624984381dd3b6a7b0cac202f3ae988f4fe2"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedArtifactReadHandler::safe_result_metadata",
+          "sha256": "f93a79de03e91e005e1e76dc0764e65bfe464b90ed360b428e7c06f301cc1ac9"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedArtifactReadHandler::safe_failure_metadata",
+          "sha256": "1abd85ec7b98df946fc45a9e7196c65d5bb447fafa9a29d15b0c6caa9de68572"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedArtifactReadHandler::execute",
+          "sha256": "f9b82abe9c85f77e6ceda167977253ed1be7474ae604b941085e89e146ea08c5"
+        },
+        {
+          "name": "impl CapabilityHandler for ManagedArtifactReadHandler::execute_request_scoped",
+          "sha256": "1696a4ab914b605fa931305cf59b573b2b035756d9e4de77bdfdb6870004e52c"
+        },
+        {
+          "name": "impl PreparedArtifactPolicy::prepare",
+          "sha256": "a5e4ed45f8346289900ccde5f315ab2c309d8eee93b943619f363384228c61d5"
+        },
+        {
+          "name": "enum AuthoredS3Authentication",
+          "sha256": "a04ec57506de5f712c56f85c020f56a01da9e86e51828521123731a3fb103245"
+        },
+        {
+          "name": "enum AuthoredS3Encryption",
+          "sha256": "f3eb28f8f90a500d3b3040ffb1464f93982053b15bbbcca99e1433bdf9e73616"
+        },
+        {
+          "name": "fn prepare_s3_backend",
+          "sha256": "b95009e2665594771616bcc6604922f0531fb8bbfb33a2ff6da768191d5a7b14"
+        },
+        {
+          "name": "fn validate_policy_limits",
+          "sha256": "d927bb37a8baefb9d359791991cc63944216cb7c0a63bb801dd0cf76708614c1"
+        },
+        {
+          "name": "fn initialize_schema",
+          "sha256": "07bcbb6be2bec69210d3132a3a0a319305e691959cb7394c66b071cfdbacee46"
+        },
+        {
+          "name": "fn ensure_store_identity",
+          "sha256": "fb4383dd9dd9d45c2d07c03cd6c0b09c849ad658fc96c9d4f1fe32f693839b92"
+        },
+        {
+          "name": "fn artifact_retention_candidates",
+          "sha256": "766534c11cf5334f6aae50f25148fc839f9c04fe852c9ef4e0b15ec28137bdaf"
+        },
+        {
+          "name": "fn validate_schema",
+          "sha256": "aab7c517d119546cea425be5310987a33245e0e1db758cb6e4e5c1b8a36a51f6"
+        },
+        {
+          "name": "fn read_settlement",
+          "sha256": "41c56888483e93c83314cb6469038f3b494f21a0d7044f04d73c65caf895391d"
+        },
+        {
+          "name": "fn validate_settlement_identity",
+          "sha256": "cc947939d05b0ee90e85168fd07f3dbeea3b11efc2bd211099080a003214e309"
+        },
+        {
+          "name": "fn enforce_quotas",
+          "sha256": "dd6f03fed86612c454ca595ff5856d810d6141ad6e322d721ccc7efa32d2759a"
+        },
+        {
+          "name": "fn parse_put",
+          "sha256": "d96151b0ab246f352dd93b43945d409b81a8256e49e5507d577b5d2ccb702739"
+        },
+        {
+          "name": "fn parse_reference_request",
+          "sha256": "de6709bd1faecb62dc25792ca803f23bb7d3773ebf54a8701221f328a29bb4a6"
+        },
+        {
+          "name": "fn validate_reference",
+          "sha256": "3a753eec4991acabe7d1682cddf5474a06f301f049041ac4c7693e542e53b70b"
+        },
+        {
+          "name": "fn authorize_source",
+          "sha256": "c369a3b5bfccf0dd0b60f432647def0e584323ba7e0f693243782379ce33a842"
+        },
+        {
+          "name": "fn validate_authored_path",
+          "sha256": "1e240ccd14c90079677feb8ae82a77f180322d4092a2e95913e619d9e1ea2289"
+        },
+        {
+          "name": "fn validate_name",
+          "sha256": "89b53b8af681ccd75d858b12d4e2a60da490ab8240a64dceaa8078221ea123c9"
+        },
+        {
+          "name": "fn validate_content_type",
+          "sha256": "2c44c8a188ad491adafedee4e5a18dbb19f208659cba2a7fb019bdf82a702519"
+        },
+        {
+          "name": "fn source_identity",
+          "sha256": "71c37690e7122a5ec0023a5f990a49b251c4ef200f73500e77ae3c77244277f3"
+        },
+        {
+          "name": "fn reject_link_components",
+          "sha256": "55ee48686d39715c8e62eb67805ab9ad3a9d5526d0c31e487df52bc2526c08ac"
+        },
+        {
+          "name": "fn cleanup_directory_contents",
+          "sha256": "be11bae59fe24d3544125cad7dcfdc8f5f8de36dcb35d80a8dfe5e15e283f159"
+        },
+        {
+          "name": "fn directory_bytes",
+          "sha256": "8dfbd00fdf6e566db9ab6268d6fcef13e2924a739cfa3482f7f9c574370de24e"
+        },
+        {
+          "name": "fn verify_materialized_file",
+          "sha256": "ab8a7616c24c4e3cb58032a1ba03ae421409389b6af34cabe0a8b951cb803bb8"
+        },
+        {
+          "name": "fn stream_materialization",
+          "sha256": "7e3b8944202c9fc70b145f43ff0a5e5b0eb2f9d2a49ecc925d1229c9b5ff52f3"
+        },
+        {
+          "name": "fn is_windows_reparse",
+          "sha256": "f837dd23b22d72f866ae126051fab2fd172dc77520a41b6e87725d65d137ce1d"
+        },
+        {
+          "name": "fn is_windows_reparse",
+          "sha256": "53d2523d27ef6e502a830cad39bb01aa6f3e9ef9356ea83b24e8df7618f9dabd"
+        },
+        {
+          "name": "fn canonical_directory",
+          "sha256": "3f61ceadd14a07637dee5faf14f176b0fff8697d3230cc9161ff8470ed54ed74"
+        },
+        {
+          "name": "fn ensure_private_directory",
+          "sha256": "4caddf9a4d32d102005a2bc7f59ed0c8cd37b86a61c2392f841379e23cb2627c"
+        },
+        {
+          "name": "fn harden_file_permissions",
+          "sha256": "9da9e0d4c916d90c052ce462478542fc0a94f8ca75f0e9b1316f998cc65b7dd5"
+        },
+        {
+          "name": "fn harden_file_permissions",
+          "sha256": "a893d20b5fd93eaf8737f1b498ed7aa982697df6e437f21fc604062d32b64fb1"
+        },
+        {
+          "name": "fn sync_directory",
+          "sha256": "57ac68a3d3971dad6173d680dce8f12cd1f488c96a44f40e4ec2e4c0bcf291b3"
+        },
+        {
+          "name": "fn sync_directory",
+          "sha256": "2da57ce3e622c9b362eaedb9055bc25c097916a02eba2105312583f1d98f18c4"
+        },
+        {
+          "name": "fn new_artifact_id",
+          "sha256": "250033169efb84d261fb2540f2e5b7e844a7b53dfb71a7daa678ae30268a5d18"
+        },
+        {
+          "name": "fn canonical_digest",
+          "sha256": "0c81e9075ff2e4fee2e30308f4286e1c6e44e5015631bc7535520882a07051b9"
+        },
+        {
+          "name": "fn timestamp",
+          "sha256": "e27a6e161c91785b4f0ec35ae4d5f7b4be6e8f3f9bd5eff5e1f63664ac0f77d0"
+        },
+        {
+          "name": "fn contains_bytes",
+          "sha256": "596bd374c49c30edc4a213357da0b485f6b6adcec961683de7fea4e9b3a89ada"
+        },
+        {
+          "name": "fn artifact_failure",
+          "sha256": "a355d50b9e696f052a9ca3fba8e430fcbaed21ab2c567be41e27059629865bb3"
+        },
+        {
+          "name": "fn artifact_path_invalid",
+          "sha256": "6ae1a404773b8e6bfff11a678dc05dd3a85662640c860d22454fc4db2a7c74ea"
+        },
+        {
+          "name": "fn source_denied",
+          "sha256": "c6bd216528c7a4592b4a9640aee6e10de4be027118b1db23acc4986d5e9cc699"
+        },
+        {
+          "name": "fn source_changed",
+          "sha256": "5e8e4b87fe694cc2f33db815c3f9ca44bbe5d71ba3798421af342d706c7d7e80"
+        },
+        {
+          "name": "fn source_type_unsupported",
+          "sha256": "2c14adbab23d8dde513936da48bbff62f69858b06d614b92bb3568d172780c8d"
+        },
+        {
+          "name": "fn artifact_too_large",
+          "sha256": "09a15be7ac4bf876907ef966776d4085ec79e5df72199fe68b29b646def45e8b"
+        },
+        {
+          "name": "fn quota_exceeded",
+          "sha256": "e04051e2cb30b83e17eaa9f873ac8af1bb6e40b871a3c21b799636e7478ffa81"
+        },
+        {
+          "name": "fn retention_invalid",
+          "sha256": "7f2d875572dd4ef25980bb1e8b7891b99eb7279e34a7f3028dc7ccddf599b205"
+        },
+        {
+          "name": "fn artifact_not_found",
+          "sha256": "072cfa3ead46f4a53472abafcc3eac8021a79446b9fd2ba44509462c86181762"
+        },
+        {
+          "name": "fn artifact_access_denied",
+          "sha256": "525ea6f38f492953489f9782b52ac1b9a1d0970534513dbf11e4a5d7926af5cd"
+        },
+        {
+          "name": "fn artifact_expired",
+          "sha256": "2b39eb47dabc2899c2b833a68daae1ab2d935eddfc1751efe5753fa21c06cb11"
+        },
+        {
+          "name": "fn artifact_quarantined",
+          "sha256": "01e90c10afd9d2001e515bbb1077ac882e08391f4b6434a30e0796b98494c6ed"
+        },
+        {
+          "name": "fn artifact_corrupt",
+          "sha256": "85be53915abe39003c001abee06489d2f57f5c2ccda2837345d020c5e32f9a5e"
+        },
+        {
+          "name": "fn backend_unavailable",
+          "sha256": "e27d7728eebcaf7fc4b528400ed38985eb9ce24af365b22228e476273117bffe"
+        },
+        {
+          "name": "fn materialization_unavailable",
+          "sha256": "fbe9da13c4bd07b35a65a02ea29acf953353e7f784690d6500e6e10bae81af7d"
+        },
+        {
+          "name": "fn artifact_timed_out",
+          "sha256": "00ea96946beadd658495b8625f4ecc5357b87a0b4cdb4b4f02a25e0c9df5e322"
+        },
+        {
+          "name": "fn artifact_cancelled",
+          "sha256": "1725b55f4594c47791b755e1302d6d879178fe4f61f2885a2a12882e780c9adf"
+        },
+        {
+          "name": "fn operation_identity_conflict",
+          "sha256": "9fbeaae979e3f164bf61565a65378bb66ebd2049e5366aa9d05fe5c3961656b5"
+        },
+        {
+          "name": "fn artifact_interrupted",
+          "sha256": "550de4544d01b46c57e9d9a1c60cb7d33c7a2587efb3b9e64f12e580ccbe110f"
+        }
+      ],
+      "unitTests": [
+        "artifact_backend_is_bound_to_one_durable_store",
+        "artifact_backup_round_trips_verified_bytes_and_rejects_corruption",
+        "artifact_reads_reject_unauthorized_forged_expired_and_corrupt_references",
+        "future_artifact_schema_is_rejected",
+        "head_and_materialize_verify_same_run_access_and_cleanup",
+        "local_and_s3_backends_share_the_frozen_conformance_suite",
+        "maintenance_protects_active_runs_then_collects_expired_artifacts_and_orphans",
+        "materialization_cleans_partial_files_and_fails_closed_on_cancellation",
+        "operational_output_rollover_denial_creates_no_fallback_stage",
+        "operational_output_rollover_is_explicit_ordered_redacted_and_atomic",
+        "operator_inspection_export_and_observation_are_bounded_and_audited",
+        "put_enforces_byte_limits_and_known_secret_scanning",
+        "put_is_durable_deduplicated_and_identity_safe",
+        "retries_reconnect_and_startup_recovers_uncommitted_files_fail_closed",
+        "rust_resolves_s3_credentials_symbolically_and_redacts_policy_debugging",
+        "streaming_startup_and_metadata_stay_within_publication_budgets"
+      ],
+      "testDeclarations": [
+        {
+          "name": "struct TempDir",
+          "sha256": "ded9cb2144ee9e0eee8b6512e5bdeeb65ce33e928f68a2fee73b395b13e6057c"
+        },
+        {
+          "name": "impl TempDir::new",
+          "sha256": "084cdeac313f42919d79332b259200431966b71f7b82f4c328c3596358176d2b"
+        },
+        {
+          "name": "impl TempDir::path",
+          "sha256": "5e8250e5a6af88fca167c8b4247ac8bbae2326b8cc98711e7ad5718d1f6b4fff"
+        },
+        {
+          "name": "impl Drop for TempDir::drop",
+          "sha256": "5f897ae8b72c38c131847ba56db71e7e88e5ce753b9c22b05137a8c8fa78c384"
+        },
+        {
+          "name": "struct MockS3Request",
+          "sha256": "5355da1c79c150e29eea1281d04a43f2127bbdbe656b02e269f94886ee16e683"
+        },
+        {
+          "name": "struct MockS3Server",
+          "sha256": "1c032a6b9510686628263287acf3a26a6a80284a43fe95c80dbfd1b739481463"
+        },
+        {
+          "name": "impl MockS3Server::start",
+          "sha256": "45e57c5101b7c08bd0b0abab790cbaab675f28ee7d06faf9ff30df618d01659d"
+        },
+        {
+          "name": "impl Drop for MockS3Server::drop",
+          "sha256": "76dd60a95a77f62f67cf9ada8f740524077343117fca486e617b1bae8ddb0c2e"
+        },
+        {
+          "name": "fn handle_mock_s3_connection",
+          "sha256": "ccf824e2aaa71142cb8b16c33c3451dcfa8b8e5208a9f5e38a32ac139d2a868e"
+        },
+        {
+          "name": "fn decrement_if_positive",
+          "sha256": "0c736a21d33ba312f605c30457ae2f931c959557e6d3baf7d9c4ee7e2c9d2423"
+        },
+        {
+          "name": "fn write_mock_response",
+          "sha256": "1b173f65c749c56822a88f950d6451a3751c4797096a381dfb706e9372479ead"
+        },
+        {
+          "name": "fn write_mock_bytes",
+          "sha256": "4394d501037fcdf9665d3b687dce95296a6315be034141f368ef2c8999254c20"
+        },
+        {
+          "name": "fn percent_decode_test",
+          "sha256": "53452627baff89edc8696c2627cb1f58e415906365a1368029590dc7eb8bde56"
+        },
+        {
+          "name": "fn policy",
+          "sha256": "a180322b00fb505e4edf47cb4d071140ace249fccd83a7de5320282f37955ca2"
+        },
+        {
+          "name": "fn call",
+          "sha256": "c1911e518a7441347f7c3b4f6fc27800d2174fd8d1e8c97b70c7e1ef7fc8e638"
+        },
+        {
+          "name": "fn reference_call",
+          "sha256": "a557f6019f47b727325b75397df54e9135684b8b077a5ce8d1ea4b54db3c34dc"
+        },
+        {
+          "name": "fn put_is_durable_deduplicated_and_identity_safe",
+          "sha256": "ed78b95ab1bc369d51bf13a706016a2e98939fb8cfac18e6bce4173d25fe606c"
+        },
+        {
+          "name": "fn put_enforces_byte_limits_and_known_secret_scanning",
+          "sha256": "84b79da4e5bb9fc0aee57079c555089b6f14ae6cd20c7d68bf9e9499fa7c3b1d"
+        },
+        {
+          "name": "fn head_and_materialize_verify_same_run_access_and_cleanup",
+          "sha256": "f69d62beaf3cbc40d8356eb02695f199fcd0039677024489c28ae237d94da2cf"
+        },
+        {
+          "name": "fn artifact_reads_reject_unauthorized_forged_expired_and_corrupt_references",
+          "sha256": "2e85b80a75ba35b6f54c1815f07cbb9c2065fdffe0ef44e8afe4dece6595419a"
+        },
+        {
+          "name": "fn materialization_cleans_partial_files_and_fails_closed_on_cancellation",
+          "sha256": "d03bad90b3dd193139d242d0b9cb78d0a5dbc99544e4db5a06d0925f5195bdc7"
+        },
+        {
+          "name": "fn retries_reconnect_and_startup_recovers_uncommitted_files_fail_closed",
+          "sha256": "9f82434f0c073a092fdaf3de5668ccc030a1338605274352369626c71a255f9c"
+        },
+        {
+          "name": "fn artifact_backend_is_bound_to_one_durable_store",
+          "sha256": "e9267a53070506ed62b82b59671077e8c860cef76f8b68e379631ccda0e21e69"
+        },
+        {
+          "name": "fn maintenance_protects_active_runs_then_collects_expired_artifacts_and_orphans",
+          "sha256": "4f7a1536745285f302fecc13340027388a1e650a414d91d89559a6efd47a2ef5"
+        },
+        {
+          "name": "fn artifact_backup_round_trips_verified_bytes_and_rejects_corruption",
+          "sha256": "5601d30f62c05b384dbca63a809f9ceb7e7f2140737ed1aef06a4f4e883372e0"
+        },
+        {
+          "name": "fn assert_backend_conformance",
+          "sha256": "044173d209adf14dadfcd00d9bd7a70665ecde2862a7c598124da93af0e6c6f3"
+        },
+        {
+          "name": "fn local_and_s3_backends_share_the_frozen_conformance_suite",
+          "sha256": "fb46cadcef85e5308c527d713c2184e252eb3992e7edee6fca746a762d8c3409"
+        },
+        {
+          "name": "fn rust_resolves_s3_credentials_symbolically_and_redacts_policy_debugging",
+          "sha256": "417b0bd9dcc45ee16f2c00395965c51b33ba8994108796fa4748b5d83f30a6a3"
+        },
+        {
+          "name": "fn future_artifact_schema_is_rejected",
+          "sha256": "3afb7dcfe0627a0b4aa12ef88fc3b6291d451e4daa63b7e9780477f927090e43"
+        },
+        {
+          "name": "fn operator_inspection_export_and_observation_are_bounded_and_audited",
+          "sha256": "0144f1dab6e72a713ad057deb3006e473c9d749c0bd7f8eca5bce79b5f163fd4"
+        },
+        {
+          "name": "fn streaming_startup_and_metadata_stay_within_publication_budgets",
+          "sha256": "0fb51facac4f197eed560ada26eaf0bfcf8ae5de3a0929aa94b52e5960aeebbd"
+        },
+        {
+          "name": "fn operational_output_rollover_is_explicit_ordered_redacted_and_atomic",
+          "sha256": "40f3fc82d5d5d65e55b80a8301398287d7f5ee635ebb4699e3db4b4ff1bbf136"
+        },
+        {
+          "name": "fn operational_output_rollover_denial_creates_no_fallback_stage",
+          "sha256": "5853e51f2c379194b7744d9964e79a2458b265bb08065ad15f735b77157e7948"
+        }
+      ]
+    }
+  }
+}

@@ -62,6 +62,9 @@ frontend, and native-adapter versions match exactly.
 
 ## Architecture rules
 
+For Rust ownership, transaction/context/cancellation rules and precise source
+locations, start with the [core contributor guide](core/README.md).
+
 - Do not parse WOML/XML in Rust. The TypeScript frontend is the single compiler.
 - Do not put markup, interpolation, or editor concerns into the engine.
 - Do not make Bun responsible for graph advancement, retry, or durable truth.

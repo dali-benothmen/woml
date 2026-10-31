@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { resolve } from 'node:path';
+import { readRustModuleSource } from './rust-source';
 
 const repositoryRoot = resolve(import.meta.dir, '../..');
 
@@ -14,7 +15,9 @@ for (const [file, required] of [
   ['woml-cli/src/cli.ts', 'WOML_RUNTIME_STALE_DESCRIPTOR'],
   ['docs/woml-production-runtime.md', 'woml run workflows/ --background'],
 ] as const) {
-  const contents = await Bun.file(resolve(repositoryRoot, file)).text();
+  const contents = file.endsWith('.rs')
+    ? await readRustModuleSource(resolve(repositoryRoot, file))
+    : await Bun.file(resolve(repositoryRoot, file)).text();
   if (!contents.includes(required)) {
     throw new Error(`PRO3 artifact ${file} is missing ${required}.`);
   }

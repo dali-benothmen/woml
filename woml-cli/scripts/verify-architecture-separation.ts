@@ -16,6 +16,7 @@ import {
   expectedNativeExports,
   verifyNativeExports,
 } from './verify-native-exports';
+import { nativeAdapterSourceViolations, readRustSources } from './rust-source';
 
 const sourceExtensions = new Set(['.js', '.cjs', '.mjs', '.ts', '.tsx']);
 const ignoredDirectories = new Set(['dist', 'node_modules', 'target']);
@@ -231,34 +232,9 @@ async function assertNativeSourceSeparation(root: string): Promise<void> {
     );
   }
 
-  const adapter = await readFile(
-    resolve(root, 'core/woml-native/src/bridge.rs'),
-    'utf8'
-  );
-  const legacyModules = [
-    'bridge',
-    'condition_evaluator',
-    'config',
-    'context',
-    'database',
-    'dispatcher',
-    'error',
-    'job',
-    'models',
-    'state',
-    'step_orchestrator',
-    'trigger_executor',
-    'triggers',
-    'webhook_server',
-    'workflow_state_machine',
-  ];
-  if (adapter.includes('crate::')) {
-    throw new Error('The WOML adapter imports a crate-local legacy module.');
-  }
-  for (const module of legacyModules) {
-    if (adapter.includes(`use ${module}::`)) {
-      throw new Error(`The WOML adapter imports legacy module ${module}.`);
-    }
+  const adapter = (await readRustSources(resolve(root, 'core/woml-native/src'))).join('\n');
+  for (const violation of nativeAdapterSourceViolations(adapter)) {
+    throw new Error(`The WOML adapter imports a ${violation}.`);
   }
   if (!adapter.includes('use woml_engine::')) {
     throw new Error('The WOML adapter does not import the authoritative engine.');

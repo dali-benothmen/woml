@@ -1,1094 +1,131 @@
-// WOML-only N-API boundary for the Rust execution path.
+//! Frozen WOML-only N-API exports and engine delegation.
+//!
+//! Keep export attributes, argument order and function bodies here. Private
+//! configuration, errors, progress and registries adapt the boundary; business
+//! rules remain in woml-engine. Helper imports are private to this module tree.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+mod configuration;
+mod contracts;
+mod errors;
+mod progress;
+mod registries;
+mod remote;
+mod validation;
+
+use configuration::{
+  apply_runtime_capabilities, decode_artifact_maintenance_authority, runtime_options,
+  runtime_options_with_modules, runtime_options_with_secrets,
+};
+use contracts::{
+  NativeApprovalDecisionOutcome, NativeManualAdmissionAccepted, NativeManualAdmissionRejected,
+  NativeManualAdmissionRequest, NativeRichApprovalDecisionOutcome, NativeRunInspection,
+  NativeStoredRunRequirements, NativeTimerWaitSettlement, NativeTriggerIngressAccepted,
+  NativeTriggerIngressFailure, NativeTriggerIngressRejected, NativeTriggerIngressRequest,
+  NativeWebhookRegistration, NativeWebhookRuntimeStarted,
+};
+use errors::{
+  native_approval_error, native_backup_error, native_execution_error, native_notification_error,
+  native_retention_error, native_run_inspection_error, native_run_management_error,
+  native_run_presentation_error, native_trigger_runtime_error, operational_output_napi_error,
+  run_failure_code, trigger_runtime_napi_error, NativeTriggerRuntimeError,
+};
+use progress::{
+  native_runtime_progress_reporters, runtime_options_with_progress, NativeRuntimeInstanceProgress,
+};
+use registries::{
+  remote_coordinators, webhook_runtimes, NativeManualTarget, NativeRemoteCoordinatorRuntime,
+  NativeWebhookRuntimeCommand, NativeWebhookRuntimeThread,
+};
+use remote::native_prepared_remote_dispatch;
+use validation::{encode_manual_rejection, operational_cursor, verify_durable_run_definition};
+
+use chrono::DateTime;
+use chrono::Utc;
+use napi::Env;
+use napi::JsFunction;
+use napi::JsObject;
+use napi_derive::napi;
+use serde_json::Map;
+use serde_json::Value;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{
-  atomic::{AtomicBool, AtomicU64, Ordering},
-  mpsc, Arc, Mutex, OnceLock,
-};
-use std::thread::JoinHandle;
-
-use chrono::{DateTime, Utc};
-use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunctionCallMode};
-use napi::{Env, JsFunction, JsObject, Status};
-use napi_derive::napi;
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use std::sync::mpsc;
+use std::sync::Arc;
+use woml_engine::admit_external_signal_durable;
+use woml_engine::create_online_backup;
+use woml_engine::execute_retention;
+use woml_engine::execute_workflow;
+use woml_engine::execute_workflow_durable;
+use woml_engine::execute_workflow_durable_outcome;
+use woml_engine::export_artifact;
+use woml_engine::export_artifact_backup;
+use woml_engine::inspect_artifact;
+use woml_engine::inspect_backup_store;
+use woml_engine::inspect_run_artifacts;
+use woml_engine::last_retention_result;
+use woml_engine::maintain_artifacts;
 use woml_engine::model::ValueExpression;
-use woml_engine::{
-  admit_external_signal_durable, create_online_backup, execute_retention, execute_workflow,
-  execute_workflow_durable, execute_workflow_durable_outcome, export_artifact,
-  export_artifact_backup, inspect_artifact, inspect_backup_store, inspect_run_artifacts,
-  last_retention_result, maintain_artifacts, observe_artifacts, parse_target_registry,
-  plan_retention, prepare_emergency_deny_overlay, prepare_infrastructure_policy,
-  prepare_remote_dispatch, prepare_restored_store, recent_run_presentations_from_store_v1,
-  record_verified_backup, recover_durable_runs, resolve_human_approval_durable,
-  resolve_rich_approval_durable, restore_artifact_backup, resume_workflow_durable,
-  resume_workflow_durable_any_outcome, resume_workflow_durable_outcome,
-  run_notification_provider_journey_with_custom, run_presentation_from_store_v1,
-  settle_approval_timeout_durable, verify_artifact_backup, ApprovalDecision,
-  ApprovalDecisionOutcome, ArtifactPolicyV1, ArtifactRuntimeMode, BackupError,
-  CompiledReusableInvocation, CompiledWorkflowDefinition, CorrectionRecoveryRequestV1,
-  CustomNotificationJourneyOptions, CustomProviderScriptArtifact, DurableEventStore,
-  DurableStoreError, ExternalSignalAdmissionOutcome, ExternalSignalAdmissionRequest,
-  ExternalTriggerAdmissionCommand, InfrastructurePolicyBundleV1, InfrastructurePolicyTrustV1,
-  IntervalProgress, IntervalProgressReporter, LifecycleProgress, NotificationHostClientError,
-  NotificationHostProcessOptions, NotificationJourneyDiagnostics, NotificationJourneyError,
-  OperationalOutputReporter, ParallelFailurePolicy, PreparedRemoteDispatchV1, ProcessPolicyV1,
-  ProcessRuntimeMode, RemoteCoordinatorAuthorityV1, RemoteCoordinatorServerV1,
-  RemoteCoordinatorTlsOptionsV1, RemoteDispatchPackageV1, RemoteDispatchResolutionV1,
-  RemoteDispatchTransportV1, RemoteSessionAuthorityV1, RemoteWorkerAttemptRuntimeV1,
-  RemoteWorkerAuthorityV1, ResolvedRemoteSecretProvider, RetentionError, RetentionPolicyV1,
-  ReviewerDirectoryAuthorityV1, ReviewerDirectoryV1, ReviewerIdentityClaimV1, ReviewerProviderV1,
-  RichApprovalDecisionStatus, RichApprovalIdentityDecision, RunFailure, RunPresentationError,
-  RunStatus, RuntimeExecutionError, RuntimeExecutionOptions, RuntimeModuleArtifact,
-  RuntimePolicyProgress, RuntimePolicyProgressReporter, ScheduleProgress, ScheduleProgressReporter,
-  ScriptHostProcessOptions, SystemEngineClock, TimerWaitSettlement, TriggerAdmissionRequest,
-  TriggerProgress, TriggerProgressReporter, TrustedWorkerIdentityV1, WebhookDefinitionRegistration,
-  WebhookRuntimeError, WomlWebhookServer, WomlWebhookServerConfig, WorkerAttemptStateV1,
-  WorkerJournalV1, WorkflowCallProgress, WorkflowCallProgressReporter, WorkflowCallRunRelations,
-  COMPILED_MODEL_SCHEMA_VERSION_V19,
-};
-
-#[derive(Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-enum NativeTimerWaitSettlement {
-  Resolved,
-  AlreadyResolved,
-  NotDue {
-    #[serde(rename = "deadline")]
-    deadline: DateTime<Utc>,
-  },
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeParallelExecutionErrorDetails {
-  parallel_id: String,
-  policy: ParallelFailurePolicy,
-  primary_node_id: String,
-  failed_node_ids: Vec<String>,
-  cancelled_node_ids: Vec<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeExecutionError {
-  kind: &'static str,
-  code: String,
-  message: String,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  node_id: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  branch_id: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  arm_id: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  reference_path: Option<Vec<String>>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  branch_site: Option<&'static str>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  approval_id: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  request_id: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  attempt: Option<u32>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  max_attempts: Option<u32>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  failure_code: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  details: Option<NativeParallelExecutionErrorDetails>,
-}
-
-fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
-  let envelope = match error {
-    RuntimeExecutionError::DurableStore(DurableStoreError::RuntimePolicyQueueFull) => {
-      NativeExecutionError {
-        kind: "woml_execution_error",
-        code: "WOML_POLICY_QUEUE_FULL".to_string(),
-        message: "The durable WOML policy queue is full; retry this run.".to_string(),
-        node_id: None,
-        branch_id: None,
-        arm_id: None,
-        reference_path: None,
-        branch_site: None,
-        approval_id: None,
-        request_id: None,
-        attempt: None,
-        max_attempts: None,
-        failure_code: None,
-        details: None,
-      }
-    }
-    RuntimeExecutionError::RunFailed(details) => NativeExecutionError {
-      kind: "woml_execution_error",
-      code: details.code.clone(),
-      message: details.message.clone(),
-      node_id: details.node_id.clone(),
-      branch_id: None,
-      arm_id: None,
-      reference_path: None,
-      branch_site: None,
-      approval_id: None,
-      request_id: None,
-      attempt: details.attempt,
-      max_attempts: details.max_attempts,
-      failure_code: Some(details.failure.code.clone()),
-      details: None,
-    },
-    RuntimeExecutionError::BranchFailed(details) => NativeExecutionError {
-      kind: "woml_execution_error",
-      code: details.code.clone(),
-      message: details.message.clone(),
-      node_id: None,
-      branch_id: Some(details.branch_id.clone()),
-      arm_id: details.arm_id.clone(),
-      reference_path: details.path.clone(),
-      branch_site: Some(details.site.as_str()),
-      approval_id: None,
-      request_id: None,
-      attempt: None,
-      max_attempts: None,
-      failure_code: None,
-      details: None,
-    },
-    RuntimeExecutionError::ParallelFailed(details) => NativeExecutionError {
-      kind: "woml_execution_error",
-      code: details.code.clone(),
-      message: details.message.clone(),
-      node_id: Some(details.primary_node_id.clone()),
-      branch_id: None,
-      arm_id: None,
-      reference_path: None,
-      branch_site: None,
-      approval_id: None,
-      request_id: None,
-      attempt: None,
-      max_attempts: None,
-      failure_code: None,
-      details: Some(NativeParallelExecutionErrorDetails {
-        parallel_id: details.parallel_id.clone(),
-        policy: details.policy,
-        primary_node_id: details.primary_node_id.clone(),
-        failed_node_ids: details.failed_node_ids.clone(),
-        cancelled_node_ids: details.cancelled_node_ids.clone(),
-      }),
-    },
-    RuntimeExecutionError::ApprovalFailed(details) => NativeExecutionError {
-      kind: "woml_execution_error",
-      code: details.code.clone(),
-      message: details.message.clone(),
-      node_id: None,
-      branch_id: None,
-      arm_id: None,
-      reference_path: None,
-      branch_site: None,
-      approval_id: Some(details.approval_id.clone()),
-      request_id: Some(details.request_id.clone()),
-      attempt: None,
-      max_attempts: None,
-      failure_code: None,
-      details: None,
-    },
-    RuntimeExecutionError::RunCancelled(details) => NativeExecutionError {
-      kind: "woml_execution_error",
-      code: details.code.clone(),
-      message: format!(
-        "Workflow run {:?} was cancelled by request {:?}.",
-        details.run_id, details.cancellation_request_id
-      ),
-      node_id: None,
-      branch_id: None,
-      arm_id: None,
-      reference_path: None,
-      branch_site: None,
-      approval_id: None,
-      request_id: None,
-      attempt: None,
-      max_attempts: None,
-      failure_code: None,
-      details: None,
-    },
-    error => NativeExecutionError {
-      kind: "woml_execution_error",
-      code: "WOML_RUST_EXECUTION_FAILED".to_string(),
-      message: error.to_string(),
-      node_id: None,
-      branch_id: None,
-      arm_id: None,
-      reference_path: None,
-      branch_site: None,
-      approval_id: None,
-      request_id: None,
-      attempt: None,
-      max_attempts: None,
-      failure_code: None,
-      details: None,
-    },
-  };
-  let reason = serde_json::to_string(&envelope).unwrap_or_else(|_| {
-    "WOML Rust execution failed and its error could not be encoded.".to_string()
-  });
-  napi::Error::from_reason(reason)
-}
-
-#[derive(Serialize)]
-struct NativeApprovalDecisionOutcome {
-  contract: &'static str,
-  version: u32,
-  #[serde(flatten)]
-  outcome: ApprovalDecisionOutcome,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeRichApprovalDecisionOutcome {
-  contract: &'static str,
-  version: u32,
-  status: &'static str,
-  run_id: String,
-  approval_id: String,
-  request_id: String,
-  review_digest: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeApprovalError {
-  kind: &'static str,
-  code: &'static str,
-  message: &'static str,
-}
-
-fn native_approval_error(error: RuntimeExecutionError) -> napi::Error {
-  let (code, message) = match error {
-    RuntimeExecutionError::DurableStore(DurableStoreError::InvalidApprovalToken) => (
-      "WOML_APPROVAL_TOKEN_INVALID",
-      "The approval capability is invalid.",
-    ),
-    RuntimeExecutionError::DurableStore(DurableStoreError::ExpiredApprovalToken) => (
-      "WOML_APPROVAL_TOKEN_EXPIRED",
-      "The approval capability expired.",
-    ),
-    RuntimeExecutionError::DurableStore(DurableStoreError::ApprovalExpired) => {
-      ("WOML_APPROVAL_EXPIRED", "The approval request expired.")
-    }
-    RuntimeExecutionError::DurableStore(DurableStoreError::ApprovalDecisionConflict) => (
-      "WOML_APPROVAL_DECISION_CONFLICT",
-      "A different human decision is already durable.",
-    ),
-    RuntimeExecutionError::DurableStore(DurableStoreError::RichApprovalBindingMismatch) => (
-      "WOML_APPROVAL_BINDING_MISMATCH",
-      "The decision does not match the immutable review.",
-    ),
-    RuntimeExecutionError::DurableStore(DurableStoreError::RichApprovalReviewerConflict) => (
-      "WOML_APPROVAL_DUPLICATE_REVIEWER",
-      "The reviewer already recorded a different decision.",
-    ),
-    RuntimeExecutionError::DurableStore(DurableStoreError::ReviewerDirectory(error)) => (
-      error.code(),
-      "The reviewer identity is not authorized for this review.",
-    ),
-    RuntimeExecutionError::DurableStore(DurableStoreError::RichApprovalNotFound) => (
-      "WOML_APPROVAL_ALREADY_RESOLVED",
-      "The rich approval request is unavailable or already retired.",
-    ),
-    RuntimeExecutionError::InvalidConfiguration(message)
-      if message.starts_with("WOML_APPROVAL_AUTHORITY_UNAVAILABLE") =>
-    {
-      (
-        "WOML_APPROVAL_AUTHORITY_UNAVAILABLE",
-        "The trusted reviewer authority is unavailable.",
-      )
-    }
-    _ => (
-      "WOML_APPROVAL_INTERNAL",
-      "The approval decision could not be safely confirmed.",
-    ),
-  };
-  let envelope = NativeApprovalError {
-    kind: "woml_approval_error",
-    code,
-    message,
-  };
-  let reason = serde_json::to_string(&envelope)
-    .unwrap_or_else(|_| "WOML approval failed and its error could not be encoded.".to_string());
-  napi::Error::from_reason(reason)
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeNotificationError {
-  kind: &'static str,
-  code: &'static str,
-  message: &'static str,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  diagnostics: Option<NotificationJourneyDiagnostics>,
-}
-
-fn native_notification_error(error: NotificationJourneyError) -> napi::Error {
-  let (code, message, diagnostics) = match error {
-    NotificationJourneyError::DeliveryFailed(diagnostics) => (
-      "WOML_NOTIFICATION_DELIVERY_FAILED",
-      "Every configured approval notification delivery failed.",
-      Some(diagnostics),
-    ),
-    NotificationJourneyError::Host(NotificationHostClientError::InteractionTimedOut) => (
-      "WOML_NOTIFICATION_INTERACTION_TIMEOUT",
-      "No provider approval action arrived before the local wait deadline.",
-      None,
-    ),
-    NotificationJourneyError::Host(NotificationHostClientError::Protocol(_)) => (
-      "WOML_NOTIFICATION_RESPONSE_INVALID",
-      "The notification provider host violated its frozen protocol.",
-      None,
-    ),
-    NotificationJourneyError::Host(_) => (
-      "WOML_NOTIFICATION_HOST_CRASHED",
-      "The notification provider host stopped unexpectedly.",
-      None,
-    ),
-    NotificationJourneyError::Store(DurableStoreError::ApprovalDecisionConflict) => (
-      "WOML_APPROVAL_DECISION_CONFLICT",
-      "A different human decision is already durable.",
-      None,
-    ),
-    NotificationJourneyError::Store(DurableStoreError::ExpiredApprovalToken)
-    | NotificationJourneyError::Store(DurableStoreError::ApprovalExpired) => (
-      "WOML_APPROVAL_EXPIRED",
-      "The approval request or provider capability expired.",
-      None,
-    ),
-    _ => (
-      "WOML_NOTIFICATION_INTERNAL",
-      "The notification provider journey could not be completed safely.",
-      None,
-    ),
-  };
-  let envelope = NativeNotificationError {
-    kind: "woml_notification_error",
-    code,
-    message,
-    diagnostics,
-  };
-  let reason = serde_json::to_string(&envelope).unwrap_or_else(|_| {
-    "WOML notification provider journey failed and its error could not be encoded.".to_string()
-  });
-  napi::Error::from_reason(reason)
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct NativeWebhookRegistration {
-  workflow: CompiledWorkflowDefinition,
-  definition_hash: String,
-  resolved_secrets: BTreeMap<String, String>,
-  #[serde(default)]
-  runtime_modules: Vec<RuntimeModuleArtifact>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeWebhookRuntimeStarted {
-  runtime_id: String,
-  host: String,
-  port: u16,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeStoredRunRequirements {
-  contract: &'static str,
-  version: u32,
-  workflow_id: String,
-  definition_hash: String,
-  required_secrets: Vec<String>,
-  module_count: usize,
-  has_approval: bool,
-  has_notifications: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeTriggerRuntimeError {
-  kind: &'static str,
-  code: &'static str,
-  message: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeRuntimeInstanceProgress {
-  profile: &'static str,
-  deployment_id: String,
-  activation_id: String,
-  runtime_instance_id: String,
-  runtime_version: &'static str,
-  native_version: &'static str,
-  lifecycle: &'static str,
-  started_at: DateTime<Utc>,
-  heartbeat_at: DateTime<Utc>,
-  lease_expires_at: DateTime<Utc>,
-}
-
-type NativeRuntimeInstanceReporter = Arc<dyn Fn(NativeRuntimeInstanceProgress) + Send + Sync>;
-
-struct NativeWebhookRuntimeThread {
-  control: mpsc::Sender<NativeWebhookRuntimeCommand>,
-  ingress: tokio::sync::mpsc::UnboundedSender<ExternalTriggerAdmissionCommand>,
-  manual_targets: BTreeMap<(String, String), NativeManualTarget>,
-  join: JoinHandle<()>,
-}
-
-#[derive(Clone)]
-struct NativeManualTarget {
-  definition_hash: String,
-  admission_status: &'static str,
-}
-
-enum NativeWebhookRuntimeCommand {
-  Activate(mpsc::SyncSender<Result<(), NativeTriggerRuntimeError>>),
-  Signal(
-    ExternalSignalAdmissionRequest,
-    mpsc::SyncSender<Result<ExternalSignalAdmissionOutcome, RuntimeExecutionError>>,
-  ),
-  OwnershipLost,
-  Stop,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct NativeTriggerIngressRequest {
-  contract: String,
-  contract_version: u32,
-  message_type: String,
-  request_id: String,
-  workflow_id: String,
-  definition_hash: String,
-  trigger_id: String,
-  trigger_handler: String,
-  source_identity: String,
-  payload: Map<String, Value>,
-  received_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeTriggerIngressAccepted {
-  contract: &'static str,
-  contract_version: u32,
-  message_type: &'static str,
-  request_id: String,
-  occurrence_id: String,
-  run_id: String,
-  duplicate: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeTriggerIngressRejected {
-  contract: &'static str,
-  contract_version: u32,
-  message_type: &'static str,
-  request_id: String,
-  failure: NativeTriggerIngressFailure,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeTriggerIngressFailure {
-  code: &'static str,
-  message: &'static str,
-  retryable: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct NativeManualAdmissionRequest {
-  profile: String,
-  #[serde(rename = "type")]
-  message_type: String,
-  request_id: String,
-  workflow_id: String,
-  trigger_id: String,
-  payload: Map<String, Value>,
-  requested_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeManualAdmissionAccepted {
-  profile: &'static str,
-  #[serde(rename = "type")]
-  message_type: &'static str,
-  request_id: String,
-  occurrence_id: String,
-  run_id: String,
-  status: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeManualAdmissionRejected {
-  profile: &'static str,
-  #[serde(rename = "type")]
-  message_type: &'static str,
-  request_id: String,
-  code: &'static str,
-  message: &'static str,
-}
-
-fn encode_manual_rejection(
-  request_id: String,
-  code: &'static str,
-  message: &'static str,
-) -> napi::Result<String> {
-  serde_json::to_string(&NativeManualAdmissionRejected {
-    profile: "woml.manual-trigger-admission/v1",
-    message_type: "rejected",
-    request_id,
-    code,
-    message,
-  })
-  .map_err(|error| {
-    napi::Error::from_reason(format!(
-      "Could not encode manual admission rejection: {error}"
-    ))
-  })
-}
-
-static WEBHOOK_RUNTIMES: OnceLock<Mutex<HashMap<String, NativeWebhookRuntimeThread>>> =
-  OnceLock::new();
-
-fn webhook_runtimes() -> &'static Mutex<HashMap<String, NativeWebhookRuntimeThread>> {
-  WEBHOOK_RUNTIMES.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-struct NativeRemoteCoordinatorRuntime {
-  server: RemoteCoordinatorServerV1,
-  transport: RemoteDispatchTransportV1,
-}
-
-static REMOTE_COORDINATORS: OnceLock<Mutex<HashMap<String, NativeRemoteCoordinatorRuntime>>> =
-  OnceLock::new();
-
-fn remote_coordinators() -> &'static Mutex<HashMap<String, NativeRemoteCoordinatorRuntime>> {
-  REMOTE_COORDINATORS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn native_trigger_runtime_error(error: WebhookRuntimeError) -> NativeTriggerRuntimeError {
-  let code = match error {
-    WebhookRuntimeError::RouteConflict(_) => "WOML_WEBHOOK_ROUTE_CONFLICT",
-    WebhookRuntimeError::SecretMissing(_) => "WOML_WEBHOOK_SECRET_MISSING",
-    WebhookRuntimeError::DurableStore(DurableStoreError::RuntimePolicyDefinitionConflict(_)) => {
-      "WOML_POLICY_CONFLICT"
-    }
-    WebhookRuntimeError::InvalidSchema { .. } => "WOML_TRIGGER_SCHEMA_INVALID",
-    WebhookRuntimeError::DurableStore(DurableStoreError::WorkflowRuntimeDuplicateOwner(_)) => {
-      "WOML_WORKFLOW_TARGET_AMBIGUOUS"
-    }
-    WebhookRuntimeError::DurableStore(DurableStoreError::DeploymentRuntimeOwned { .. }) => {
-      "WOML_DEPLOYMENT_ALREADY_RUNNING"
-    }
-    WebhookRuntimeError::DurableStore(_) => "WOML_TRIGGER_UNAVAILABLE",
-    WebhookRuntimeError::Io(_) => "WOML_WEBHOOK_BIND_FAILED",
-    WebhookRuntimeError::InvalidRegistration(_) | WebhookRuntimeError::Model(_) => {
-      "WOML_TRIGGER_REGISTRATION_INVALID"
-    }
-  };
-  NativeTriggerRuntimeError {
-    kind: "woml_trigger_runtime_error",
-    code,
-    message: error.to_string(),
-  }
-}
-
-fn trigger_runtime_napi_error(error: NativeTriggerRuntimeError) -> napi::Error {
-  let reason = serde_json::to_string(&error)
-    .unwrap_or_else(|_| "WOML trigger runtime failed to start.".to_string());
-  napi::Error::from_reason(reason)
-}
-
-fn native_operational_output_reporter(
-  env: &Env,
-  progress_callback: &JsFunction,
-) -> napi::Result<OperationalOutputReporter> {
-  let scheduled = Arc::new(AtomicBool::new(false));
-  let newest_sequence = Arc::new(AtomicU64::new(0));
-  let callback_scheduled = Arc::clone(&scheduled);
-  let callback_sequence = Arc::clone(&newest_sequence);
-  let mut wakeup = progress_callback
-    .create_threadsafe_function::<(), String, _, ErrorStrategy::Fatal>(1, move |_| {
-      callback_scheduled.store(false, Ordering::Release);
-      Ok(vec![format!(
-        "{{\"profile\":\"woml.operational-output-wakeup/v1\",\"newestSequence\":{}}}",
-        callback_sequence.load(Ordering::Acquire)
-      )])
-    })?;
-  wakeup.unref(env)?;
-  let wakeup = Arc::new(wakeup);
-  Ok(Arc::new(move |sequence| {
-    newest_sequence.fetch_max(sequence, Ordering::AcqRel);
-    if scheduled
-      .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-      .is_ok()
-    {
-      if wakeup.call((), ThreadsafeFunctionCallMode::NonBlocking) != Status::Ok {
-        scheduled.store(false, Ordering::Release);
-      }
-    }
-  }))
-}
-
-fn native_runtime_progress_reporters(
-  env: &Env,
-  progress_callback: JsFunction,
-  telemetry_enabled: bool,
-) -> napi::Result<(
-  TriggerProgressReporter,
-  ScheduleProgressReporter,
-  IntervalProgressReporter,
-  WorkflowCallProgressReporter,
-  RuntimePolicyProgressReporter,
-  NativeRuntimeInstanceReporter,
-  OperationalOutputReporter,
-  Option<woml_engine::TelemetrySignalReporter>,
-  Option<woml_engine::TelemetryAdmissionLinkReporter>,
-)> {
-  let operational_output_reporter = native_operational_output_reporter(env, &progress_callback)?;
-  let (telemetry_reporter, telemetry_admission_link_reporter) = if telemetry_enabled {
-    let mut telemetry = progress_callback
-      .create_threadsafe_function::<String, String, _, ErrorStrategy::Fatal>(1024, |context| {
-        Ok(vec![context.value])
-      })?;
-    telemetry.unref(env)?;
-    let telemetry = Arc::new(telemetry);
-    let admission_links = Arc::clone(&telemetry);
-    (
-      Some(woml_engine::bounded_telemetry_reporter(
-        1024,
-        Arc::new(move |message| {
-          if let Ok(json) = serde_json::to_string(&message) {
-            let _ = telemetry.call(json, ThreadsafeFunctionCallMode::NonBlocking);
-          }
-        }),
-      )),
-      Some(
-        Arc::new(move |message: woml_engine::TelemetryAdmissionLinkV1| {
-          if let Ok(json) = serde_json::to_string(&message) {
-            let _ = admission_links.call(json, ThreadsafeFunctionCallMode::NonBlocking);
-          }
-        }) as woml_engine::TelemetryAdmissionLinkReporter,
-      ),
-    )
-  } else {
-    (None, None)
-  };
-  let mut progress = progress_callback
-    .create_threadsafe_function::<String, String, _, ErrorStrategy::Fatal>(0, |context| {
-      Ok(vec![context.value])
-    })?;
-  progress.unref(env)?;
-  let progress = Arc::new(progress);
-  let trigger_progress = progress.clone();
-  let schedule_progress = progress.clone();
-  let interval_progress = progress;
-  let workflow_call_progress = interval_progress.clone();
-  let runtime_policy_progress = workflow_call_progress.clone();
-  let runtime_instance_progress = runtime_policy_progress.clone();
-  Ok((
-    Arc::new(move |message: TriggerProgress| {
-      if let Ok(json) = serde_json::to_string(&message) {
-        let _ = trigger_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
-      }
-    }),
-    Arc::new(move |message: ScheduleProgress| {
-      if let Ok(json) = serde_json::to_string(&message) {
-        let _ = schedule_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
-      }
-    }),
-    Arc::new(move |message: IntervalProgress| {
-      if let Ok(json) = serde_json::to_string(&message) {
-        let _ = interval_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
-      }
-    }),
-    Arc::new(move |message: WorkflowCallProgress| {
-      if let Ok(json) = serde_json::to_string(&message) {
-        let _ = workflow_call_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
-      }
-    }),
-    Arc::new(move |message: RuntimePolicyProgress| {
-      if let Ok(json) = serde_json::to_string(&message) {
-        let _ = runtime_policy_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
-      }
-    }),
-    Arc::new(move |message: NativeRuntimeInstanceProgress| {
-      if let Ok(json) = serde_json::to_string(&message) {
-        let _ = runtime_instance_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
-      }
-    }),
-    operational_output_reporter,
-    telemetry_reporter,
-    telemetry_admission_link_reporter,
-  ))
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeRunInspection {
-  run_id: String,
-  workflow_id: String,
-  status: RunStatus,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  terminal_node_id: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  result: Option<Value>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  failure_code: Option<String>,
-  workflow_calls: WorkflowCallRunRelations,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeRunInspectionError {
-  kind: &'static str,
-  code: &'static str,
-  message: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeRunManagementError {
-  kind: &'static str,
-  code: &'static str,
-  message: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeBackupError {
-  kind: &'static str,
-  code: &'static str,
-  message: String,
-}
-
-fn native_backup_error(error: BackupError, fallback: &'static str) -> napi::Error {
-  let code = match error {
-    BackupError::StorePathUnsafe => "WOML_BACKUP_SOURCE_INVALID",
-    BackupError::DestinationUnsafe => "WOML_BACKUP_DESTINATION_INVALID",
-    BackupError::UnsupportedStoreVersion(_) => "WOML_STORE_VERSION_UNSUPPORTED",
-    BackupError::MaintenanceBusy => "WOML_MAINTENANCE_BUSY",
-    BackupError::EmptyDefinitionInventory
-    | BackupError::DefinitionInventoryMismatch
-    | BackupError::IntegrityFailed => "WOML_BACKUP_VERIFICATION_FAILED",
-    _ => fallback,
-  };
-  let reason = serde_json::to_string(&NativeBackupError {
-    kind: "woml_backup_error",
-    code,
-    message: error.to_string(),
-  })
-  .unwrap_or_else(|_| "WOML backup operation failed.".to_string());
-  napi::Error::from_reason(reason)
-}
-
-fn native_retention_error(error: RetentionError) -> napi::Error {
-  let code = match error {
-    RetentionError::StorePathUnsafe => "WOML_RETENTION_STORE_INVALID",
-    RetentionError::InvalidPolicy => "WOML_RETENTION_PLAN_INVALID",
-    RetentionError::MaintenanceBusy | RetentionError::StoreBusy => "WOML_MAINTENANCE_BUSY",
-    RetentionError::IntegrityFailed => "WOML_RETENTION_INTEGRITY_FAILED",
-    RetentionError::DiskFull => "WOML_MAINTENANCE_DISK_FULL",
-    RetentionError::Sqlite(_) | RetentionError::Io(_) => "WOML_RETENTION_FAILED",
-  };
-  let reason = serde_json::to_string(&NativeBackupError {
-    kind: "woml_retention_error",
-    code,
-    message: error.to_string(),
-  })
-  .unwrap_or_else(|_| "WOML retention operation failed.".to_string());
-  napi::Error::from_reason(reason)
-}
-
-fn native_run_management_error(code: &'static str, error: DurableStoreError) -> napi::Error {
-  let reason = serde_json::to_string(&NativeRunManagementError {
-    kind: "woml_run_management_error",
-    code,
-    message: error.to_string(),
-  })
-  .unwrap_or_else(|_| "WOML run management failed.".to_string());
-  napi::Error::from_reason(reason)
-}
-
-fn native_run_presentation_error(error: RunPresentationError) -> napi::Error {
-  let code = match &error {
-    RunPresentationError::Store(DurableStoreError::RunNotFound(_)) => "WOML_RUN_NOT_FOUND",
-    RunPresentationError::Store(DurableStoreError::Sqlite(_)) => "WOML_RUN_STATE_UNAVAILABLE",
-    RunPresentationError::Store(DurableStoreError::UnsupportedStoreVersion(_)) => {
-      "WOML_RUN_PRESENTATION_VERSION_UNSUPPORTED"
-    }
-    RunPresentationError::Store(
-      DurableStoreError::InvalidModel(_) | DurableStoreError::Json(_),
-    ) => "WOML_RUN_PRESENTATION_COMPATIBILITY_FAILED",
-    RunPresentationError::Store(DurableStoreError::InvalidStoredEvent(_))
-    | RunPresentationError::Fold(_)
-    | RunPresentationError::DefinitionMismatch => "WOML_RUN_PRESENTATION_HISTORY_INVALID",
-    RunPresentationError::TooLarge | RunPresentationError::TooMany(_) => {
-      "WOML_RUN_PRESENTATION_SIZE_LIMIT"
-    }
-    RunPresentationError::InvalidRecentLimit => "WOML_RUN_PRESENTATION_LIMIT_INVALID",
-    _ => "WOML_RUN_PRESENTATION_FAILED",
-  };
-  native_run_management_error(code, DurableStoreError::Contract(error.to_string()))
-}
-
-fn native_run_inspection_error(error: DurableStoreError) -> napi::Error {
-  let code = if matches!(error, DurableStoreError::RunNotFound(_)) {
-    "WOML_RUN_NOT_FOUND"
-  } else {
-    "WOML_RUN_INSPECTION_FAILED"
-  };
-  let reason = serde_json::to_string(&NativeRunInspectionError {
-    kind: "woml_run_inspection_error",
-    code,
-    message: error.to_string(),
-  })
-  .unwrap_or_else(|_| "WOML run inspection failed.".to_string());
-  napi::Error::from_reason(reason)
-}
-
-fn run_failure_code(failure: &RunFailure) -> String {
-  match failure {
-    RunFailure::Attempt(failure) => failure.code.clone(),
-    RunFailure::Branch(failure) => failure.code().to_string(),
-    RunFailure::Parallel { failure, .. } => failure.code.clone(),
-    RunFailure::Approval { failure, .. } => failure.code.clone(),
-    RunFailure::Notification { failure, .. } => failure.code.clone(),
-  }
-}
-
-fn runtime_options(
-  bun_executable: String,
-  script_host_path: String,
-  script_timeout_ms: u32,
-) -> RuntimeExecutionOptions {
-  RuntimeExecutionOptions::new(
-    ScriptHostProcessOptions::new(
-      PathBuf::from(bun_executable),
-      PathBuf::from(script_host_path),
-    ),
-    u64::from(script_timeout_ms),
-  )
-}
-
-fn runtime_options_with_secrets(
-  bun_executable: String,
-  script_host_path: String,
-  script_timeout_ms: u32,
-  resolved_secrets_json: String,
-) -> napi::Result<RuntimeExecutionOptions> {
-  let secrets: BTreeMap<String, String> = serde_json::from_str(&resolved_secrets_json)
-    .map_err(|error| napi::Error::from_reason(format!("Invalid resolved secrets JSON: {error}")))?;
-  Ok(
-    runtime_options(bun_executable, script_host_path, script_timeout_ms)
-      .with_resolved_secrets(secrets),
-  )
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NativeRuntimeCapabilities {
-  #[serde(default)]
-  process: Option<NativeProcessRuntime>,
-  #[serde(default)]
-  artifacts: Option<NativeArtifactRuntime>,
-  #[serde(default)]
-  reviewers: Option<NativeReviewerRuntime>,
-  #[serde(default)]
-  infrastructure_policy: Option<NativeInfrastructurePolicyRuntime>,
-  #[serde(default)]
-  emergency_deny: Option<NativeInfrastructurePolicyRuntime>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct NativeInfrastructurePolicyTrust {
-  #[serde(default)]
-  keys: BTreeMap<String, String>,
-  #[serde(default)]
-  revoked_key_ids: BTreeSet<String>,
-  #[serde(default)]
-  require_signature: bool,
-}
-
-impl From<NativeInfrastructurePolicyTrust> for InfrastructurePolicyTrustV1 {
-  fn from(value: NativeInfrastructurePolicyTrust) -> Self {
-    Self {
-      keys: value.keys,
-      revoked_key_ids: value.revoked_key_ids,
-      require_signature: value.require_signature,
-    }
-  }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct NativeInfrastructurePolicyRuntime {
-  policy: InfrastructurePolicyBundleV1,
-  #[serde(default)]
-  trust: NativeInfrastructurePolicyTrust,
-  #[serde(default)]
-  required: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NativeProcessRuntime {
-  mode: ProcessRuntimeMode,
-  policy: ProcessPolicyV1,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NativeArtifactRuntime {
-  mode: ArtifactRuntimeMode,
-  policy: ArtifactPolicyV1,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NativeReviewerRuntime {
-  directory: ReviewerDirectoryV1,
-}
-
-fn apply_runtime_capabilities(
-  options: RuntimeExecutionOptions,
-  runtime_capabilities_json: Option<String>,
-) -> napi::Result<RuntimeExecutionOptions> {
-  let Some(source) = runtime_capabilities_json else {
-    return Ok(options);
-  };
-  let capabilities: NativeRuntimeCapabilities = serde_json::from_str(&source).map_err(|error| {
-    napi::Error::from_reason(format!("Invalid runtime capabilities JSON: {error}"))
-  })?;
-  let options = match capabilities.process {
-    Some(process) => options
-      .with_process_policy(process.policy, process.mode)
-      .map_err(|error| napi::Error::from_reason(error.to_string())),
-    None => Ok(options),
-  }?;
-  let options = match capabilities.artifacts {
-    Some(artifacts) => options
-      .with_artifact_policy(artifacts.policy, artifacts.mode)
-      .map_err(|error| napi::Error::from_reason(error.to_string())),
-    None => Ok(options),
-  }?;
-  let options = match capabilities.reviewers {
-    Some(reviewers) => ReviewerDirectoryAuthorityV1::from_document(reviewers.directory)
-      .map(|authority| options.with_reviewer_directory(Arc::new(authority)))
-      .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code()))),
-    None => Ok(options),
-  }?;
-  let mut base_policy_environment = None;
-  let options = if let Some(policy) = capabilities.infrastructure_policy {
-    let required = policy.required;
-    let prepared = prepare_infrastructure_policy(policy.policy, &policy.trust.into())
-      .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))?;
-    base_policy_environment = Some(prepared.bundle.environment.clone());
-    let options = options.with_infrastructure_policy(prepared);
-    if required {
-      options.require_infrastructure_policy()
-    } else {
-      options
-    }
-  } else {
-    options
-  };
-  match capabilities.emergency_deny {
-    Some(policy) => {
-      let prepared = prepare_emergency_deny_overlay(policy.policy, &policy.trust.into())
-        .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))?;
-      if base_policy_environment.as_deref() != Some(prepared.bundle.environment.as_str()) {
-        return Err(napi::Error::from_reason(
-          "WOML_POLICY_INVALID: an emergency deny overlay requires a base policy in the same environment."
-            .to_string(),
-        ));
-      }
-      Ok(options.with_emergency_deny_overlay(prepared))
-    }
-    None => Ok(options),
-  }
-}
-
-fn runtime_options_with_modules(
-  bun_executable: String,
-  script_host_path: String,
-  script_timeout_ms: u32,
-  resolved_secrets_json: String,
-  runtime_modules_json: Option<String>,
-  runtime_capabilities_json: Option<String>,
-) -> napi::Result<RuntimeExecutionOptions> {
-  let modules: Vec<RuntimeModuleArtifact> =
-    serde_json::from_str(runtime_modules_json.as_deref().unwrap_or("[]")).map_err(|error| {
-      napi::Error::from_reason(format!("Invalid runtime modules JSON: {error}"))
-    })?;
-  apply_runtime_capabilities(
-    runtime_options_with_secrets(
-      bun_executable,
-      script_host_path,
-      script_timeout_ms,
-      resolved_secrets_json,
-    )?
-    .with_runtime_modules(modules),
-    runtime_capabilities_json,
-  )
-}
-
-fn runtime_options_with_progress(
-  env: &Env,
-  bun_executable: String,
-  script_host_path: String,
-  script_timeout_ms: u32,
-  progress_callback: JsFunction,
-  resolved_secrets_json: String,
-  runtime_capabilities_json: Option<String>,
-) -> napi::Result<RuntimeExecutionOptions> {
-  let operational_output_reporter = native_operational_output_reporter(env, &progress_callback)?;
-  let mut progress = progress_callback
-    .create_threadsafe_function::<String, String, _, ErrorStrategy::Fatal>(0, |context| {
-      Ok(vec![context.value])
-    })?;
-  progress.unref(env)?;
-  let lifecycle_progress = progress.clone();
-  let runtime_policy_progress = lifecycle_progress.clone();
-  apply_runtime_capabilities(
-    runtime_options_with_secrets(
-      bun_executable,
-      script_host_path,
-      script_timeout_ms,
-      resolved_secrets_json,
-    )?
-    .with_progress_reporter(Arc::new(move |message| {
-      if let Ok(json) = serde_json::to_string(&message) {
-        let _ = progress.call(json, ThreadsafeFunctionCallMode::Blocking);
-      }
-    }))
-    .with_lifecycle_progress_reporter(Arc::new(move |message: LifecycleProgress| {
-      if let Ok(json) = serde_json::to_string(&message) {
-        let _ = lifecycle_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
-      }
-    }))
-    .with_runtime_policy_progress_reporter(Arc::new(move |message: RuntimePolicyProgress| {
-      if let Ok(json) = serde_json::to_string(&message) {
-        let _ = runtime_policy_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
-      }
-    }))
-    .with_operational_output_reporter(operational_output_reporter),
-    runtime_capabilities_json,
-  )
-}
+use woml_engine::observe_artifacts;
+use woml_engine::parse_target_registry;
+use woml_engine::plan_retention;
+use woml_engine::prepare_restored_store;
+use woml_engine::recent_run_presentations_from_store_v1;
+use woml_engine::record_verified_backup;
+use woml_engine::recover_durable_runs;
+use woml_engine::resolve_human_approval_durable;
+use woml_engine::resolve_rich_approval_durable;
+use woml_engine::restore_artifact_backup;
+use woml_engine::resume_workflow_durable;
+use woml_engine::resume_workflow_durable_any_outcome;
+use woml_engine::resume_workflow_durable_outcome;
+use woml_engine::run_notification_provider_journey_with_custom;
+use woml_engine::run_presentation_from_store_v1;
+use woml_engine::settle_approval_timeout_durable;
+use woml_engine::verify_artifact_backup;
+use woml_engine::ApprovalDecision;
+use woml_engine::ArtifactPolicyV1;
+use woml_engine::ArtifactRuntimeMode;
+use woml_engine::CompiledReusableInvocation;
+use woml_engine::CompiledWorkflowDefinition;
+use woml_engine::CorrectionRecoveryRequestV1;
+use woml_engine::CustomNotificationJourneyOptions;
+use woml_engine::CustomProviderScriptArtifact;
+use woml_engine::DurableEventStore;
+use woml_engine::DurableStoreError;
+use woml_engine::ExternalSignalAdmissionRequest;
+use woml_engine::ExternalTriggerAdmissionCommand;
+use woml_engine::NotificationHostProcessOptions;
+use woml_engine::NotificationJourneyError;
+use woml_engine::RemoteCoordinatorAuthorityV1;
+use woml_engine::RemoteCoordinatorServerV1;
+use woml_engine::RemoteCoordinatorTlsOptionsV1;
+use woml_engine::RemoteDispatchPackageV1;
+use woml_engine::RemoteDispatchResolutionV1;
+use woml_engine::RemoteDispatchTransportV1;
+use woml_engine::RemoteSessionAuthorityV1;
+use woml_engine::RemoteWorkerAttemptRuntimeV1;
+use woml_engine::ResolvedRemoteSecretProvider;
+use woml_engine::RetentionPolicyV1;
+use woml_engine::ReviewerIdentityClaimV1;
+use woml_engine::ReviewerProviderV1;
+use woml_engine::RichApprovalDecisionStatus;
+use woml_engine::RichApprovalIdentityDecision;
+use woml_engine::RunPresentationError;
+use woml_engine::RuntimeExecutionError;
+use woml_engine::RuntimeModuleArtifact;
+use woml_engine::SystemEngineClock;
+use woml_engine::TimerWaitSettlement;
+use woml_engine::TriggerAdmissionRequest;
+use woml_engine::TrustedWorkerIdentityV1;
+use woml_engine::WebhookDefinitionRegistration;
+use woml_engine::WebhookRuntimeError;
+use woml_engine::WomlWebhookServer;
+use woml_engine::WomlWebhookServerConfig;
+use woml_engine::WorkerAttemptStateV1;
+use woml_engine::WorkerJournalV1;
+use woml_engine::COMPILED_MODEL_SCHEMA_VERSION_V19;
 
 #[napi(ts_return_type = "Promise<string>")]
 pub async fn execute_woml_workflow(
@@ -1276,30 +313,6 @@ pub fn execute_woml_workflow_durable_with_progress(
     encode_span.succeed();
     Ok(encoded)
   })
-}
-
-fn verify_durable_run_definition(
-  event_store_path: &str,
-  run_id: &str,
-  definition_hash: &str,
-  workflow: &CompiledWorkflowDefinition,
-) -> napi::Result<()> {
-  let store = DurableEventStore::open(PathBuf::from(event_store_path))
-    .map_err(|error| native_execution_error(RuntimeExecutionError::DurableStore(error)))?;
-  let binding = store
-    .run_binding(run_id)
-    .map_err(|error| native_execution_error(RuntimeExecutionError::DurableStore(error)))?;
-  let stored_workflow = store
-    .definition(&binding.definition_hash)
-    .map_err(|error| native_execution_error(RuntimeExecutionError::DurableStore(error)))?;
-  if binding.definition_hash != definition_hash || stored_workflow != *workflow {
-    return Err(native_execution_error(
-      RuntimeExecutionError::InvalidConfiguration(
-        "the supplied WOML definition does not match the durable run definition".to_string(),
-      ),
-    ));
-  }
-  Ok(())
 }
 
 #[napi(ts_return_type = "Promise<string>")]
@@ -2623,36 +1636,6 @@ pub fn stop_woml_remote_loopback_coordinator(runtime_id: String) -> napi::Result
   Ok(())
 }
 
-fn native_prepared_remote_dispatch(
-  dispatch_package_json: &str,
-  coordinator_authority_json: &str,
-  worker_authority_json: &str,
-  worker_id: &str,
-  target: &str,
-) -> napi::Result<PreparedRemoteDispatchV1> {
-  let package: RemoteDispatchPackageV1 =
-    serde_json::from_str(dispatch_package_json).map_err(|_| {
-      napi::Error::from_reason("WOML_REMOTE_PROTOCOL_INVALID: invalid dispatch package")
-    })?;
-  let coordinator: RemoteCoordinatorAuthorityV1 = serde_json::from_str(coordinator_authority_json)
-    .map_err(|_| {
-      napi::Error::from_reason("WOML_REMOTE_PROTOCOL_INVALID: invalid coordinator authority")
-    })?;
-  let worker: RemoteWorkerAuthorityV1 =
-    serde_json::from_str(worker_authority_json).map_err(|_| {
-      napi::Error::from_reason("WOML_REMOTE_PROTOCOL_INVALID: invalid worker authority")
-    })?;
-  prepare_remote_dispatch(
-    package,
-    &coordinator,
-    worker_id,
-    target,
-    &worker,
-    Utc::now(),
-  )
-  .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))
-}
-
 #[napi]
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_woml_remote_attempt(
@@ -2907,19 +1890,6 @@ pub fn observe_woml_runtime(event_store_path: String) -> napi::Result<String> {
       "Could not encode WOML runtime observation: {error}"
     ))
   })
-}
-
-fn operational_output_napi_error(error: woml_engine::OperationalOutputError) -> napi::Error {
-  napi::Error::from_reason(format!("{}: {error}", error.code()))
-}
-
-fn operational_cursor(value: f64) -> napi::Result<u64> {
-  if !value.is_finite() || value < 0.0 || value.fract() != 0.0 || value > 9_007_199_254_740_991.0 {
-    return Err(napi::Error::from_reason(
-      "WOML_OUTPUT_CURSOR_INVALID: the operational-output cursor is invalid".to_string(),
-    ));
-  }
-  Ok(value as u64)
 }
 
 #[napi]
@@ -3295,24 +2265,6 @@ pub fn observe_woml_artifacts(
   serde_json::to_string(&result).map_err(|error| {
     napi::Error::from_reason(format!("Could not encode artifact observation: {error}"))
   })
-}
-
-fn decode_artifact_maintenance_authority(
-  policy_json: &str,
-  mode_json: &str,
-  resolved_secrets_json: &str,
-) -> napi::Result<(
-  ArtifactPolicyV1,
-  ArtifactRuntimeMode,
-  BTreeMap<String, String>,
-)> {
-  let policy = serde_json::from_str(policy_json)
-    .map_err(|_| napi::Error::from_reason("Artifact Policy v1 is invalid.".to_string()))?;
-  let mode = serde_json::from_str(mode_json)
-    .map_err(|_| napi::Error::from_reason("Artifact runtime mode is invalid.".to_string()))?;
-  let secrets = serde_json::from_str(resolved_secrets_json)
-    .map_err(|_| napi::Error::from_reason("Resolved artifact secrets are invalid.".to_string()))?;
-  Ok((policy, mode, secrets))
 }
 
 #[napi]

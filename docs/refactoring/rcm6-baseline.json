@@ -1,0 +1,229 @@
+{
+  "baseRevision": "35ebd561e79f8759483293cd345f82183b0cfbb0",
+  "description": "Pre-RCM6/RCM7 durable contracts and exact schema/migration DDL literals. No schema, SQL, authority, transaction, cache, or API changes are authorized by extraction.",
+  "contracts": {
+    "durable": {
+      "sha256": "2ce0da6120e8e5b19b44e74e5f35445b186e7dd0614ead2f77839b709e5503da",
+      "publicTypes": [
+        "RuntimeOwnerLease",
+        "RunDefinitionBinding",
+        "TriggerAdmissionRequest",
+        "TriggerOccurrence",
+        "TriggerAdmissionOutcome",
+        "ScheduleCursorRegistration",
+        "ScheduleCursor",
+        "ScheduleCursorRegistrationOutcome",
+        "IntervalCursorRegistration",
+        "IntervalCursor",
+        "IntervalCursorRegistrationOutcome",
+        "TriggerRecoveryWork",
+        "InternalEventAdmissionRequest",
+        "InternalEventAdmissionOutcome",
+        "IssuedApprovalToken",
+        "ApprovalTokenBinding",
+        "NotificationDeliveryWork",
+        "NotificationProviderDeliveryResult",
+        "NotificationUpdateWork",
+        "NotificationProviderUpdateResult",
+        "NotificationDispatchReport",
+        "ApprovalDecisionOutcomeStatus",
+        "ApprovalDecisionOutcome",
+        "ApprovalTimeoutSettlementStatus",
+        "ApprovalTimeoutSettlement",
+        "RecoveryReport",
+        "InfrastructurePolicyRunBindingV1",
+        "PublicRunStatus",
+        "RunSummaryV1",
+        "RunListV1",
+        "PolicyWaitingFor",
+        "RunSummaryV2",
+        "RunListV2",
+        "RuntimeObservationV1",
+        "RunInspectionHookV2",
+        "RunInspectionCancellationV2",
+        "RunInspectionV2",
+        "RunInspectionPolicyV3",
+        "RunInspectionV3",
+        "InspectedForkStatusV4",
+        "InspectedForkJoinModeV4",
+        "RunInspectionForkCountsV4",
+        "RunInspectionForkJoinV4",
+        "RunInspectionForkV4",
+        "RunInspectionForksV4",
+        "RunInspectionV4",
+        "InspectedReusableKindV5",
+        "InspectedReusableStatusV5",
+        "InspectedReusableLifecycleStatusV5",
+        "RunInspectionReusableItemV5",
+        "RunInspectionReusableCountsV5",
+        "RunInspectionReusableDefinitionsV5",
+        "RunInspectionV5",
+        "InspectedForEachStatusV6",
+        "RunInspectionForEachCountsV6",
+        "RunInspectionForEachItemV6",
+        "RunInspectionForEachV6",
+        "RunInspectionV6",
+        "RunInspectionRichApprovalV11",
+        "RunInspectionRichApprovalsV11",
+        "RunInspectionV11",
+        "ForkRecoveryBranchV1",
+        "ForkRecoveryWorkV1",
+        "SchedulerClaimV1",
+        "DurableWaitRecordV1",
+        "InspectedWaitStatusV1",
+        "InspectedWaitV1",
+        "WaitInspectionV1",
+        "CorrectionSagaInspectionV1",
+        "UnresolvedCorrectionActionV1",
+        "CorrectionInspectionV1",
+        "CorrectionRecoveryActionV1",
+        "CorrectionRecoveryRequestV1",
+        "CorrectionRecoveryStatusV1",
+        "CorrectionRecoveryResultV1",
+        "CorrectionRecoveryCandidateV1",
+        "CorrectionObservationV1",
+        "InspectedLockStatusV1",
+        "LockInspectionV1",
+        "LockObservationV1",
+        "LockRecoveryKindV1",
+        "LockRecoveryCandidateV1",
+        "ExternalSignalAdmissionRequest",
+        "ExternalSignalAdmissionStatus",
+        "ExternalSignalResolution",
+        "ExternalSignalAdmissionOutcome",
+        "SignalWaitTimeoutSettlement",
+        "TimerWaitSettlement",
+        "PolicyClaimWaitReason",
+        "PolicyExecutionClaimResult",
+        "InspectedBusinessOutcome",
+        "RunCancellationStatus",
+        "RunTimeoutSettlement",
+        "RunCancellationCode",
+        "RunCancellationResult",
+        "DurableStoreError",
+        "DurableEventStore",
+        "RichApprovalDecisionAdmission",
+        "RichApprovalIdentityDecision",
+        "RichApprovalDecisionStatus",
+        "RichApprovalDecisionOutcome",
+        "RichApprovalDecisionInspection",
+        "RichApprovalInspectionV1",
+        "LockLeaseMaintenance",
+        "ProgrammaticLockLease",
+        "ProgrammaticLockAcquireState",
+        "ProgrammaticLockAcquire",
+        "DurableEngineError",
+        "StepFailureDisposition",
+        "StepFailureCommit",
+        "DurableDagEngine"
+      ],
+      "publicFunctions": [
+        "derive_lifecycle_hook_invocation_id",
+        "correction_invocation_id"
+      ],
+      "publicConstants": [
+        "RUNTIME_POLICY_QUEUE_CEILING",
+        "DURABLE_STORE_SCHEMA_VERSION",
+        "RUN_INSPECTION_RICH_APPROVAL_LIMIT",
+        "CORRECTION_INSPECTION_PROFILE",
+        "CORRECTION_RECOVERY_REQUEST_PROFILE",
+        "CORRECTION_RECOVERY_RESULT_PROFILE",
+        "CORRECTION_OBSERVATION_PROFILE",
+        "CORRECTION_RECOVERY_BATCH_LIMIT",
+        "CORRECTION_UNRESOLVED_STORE_LIMIT",
+        "EXTERNAL_SIGNAL_ADMISSION_PROFILE",
+        "EXTERNAL_SIGNAL_RESULT_PROFILE",
+        "EXTERNAL_SIGNAL_MAX_PAYLOAD_BYTES",
+        "EXTERNAL_SIGNAL_MAX_PAYLOAD_DEPTH",
+        "EXTERNAL_SIGNAL_MAX_EARLY_PER_RUN",
+        "RICH_APPROVAL_INSPECTION_DECISION_LIMIT",
+        "LOCK_WAITERS_PER_KEY_LIMIT",
+        "LOCK_WAITERS_PER_STORE_LIMIT",
+        "LOCK_RECOVERY_BATCH_LIMIT",
+        "MAX_MODULE_ARTIFACT_BYTES",
+        "MAX_MODULE_ARTIFACT_SET_BYTES"
+      ],
+      "publicTraits": [
+        "NotificationProviderAdapter"
+      ]
+    }
+  },
+  "ddl": [
+    {
+      "name": "CREATE_APPROVAL_SCHEMA_V2",
+      "sha256": "2bfb042106ea8463649726be833648c794262a8e268d743118a4d9815189ee5e"
+    },
+    {
+      "name": "CREATE_CORRECTION_SCHEMA_V17",
+      "sha256": "575307a068d3af40a173e821b21e982890062d63f07d9e3f95cbbb8b7c9a8036"
+    },
+    {
+      "name": "CREATE_DURABLE_STATE_SCHEMA_V13",
+      "sha256": "e5827f8271065f64effe0bc664907ff60c44d436bb8b0ced68b43b34cfc9a48e"
+    },
+    {
+      "name": "CREATE_DURABLE_WAIT_SCHEMA_V15",
+      "sha256": "5f779a8dd103aaae2ff64007b680b0209623936794544f4f31936cf6c0d78a09"
+    },
+    {
+      "name": "CREATE_INFRASTRUCTURE_POLICY_SCHEMA_V19",
+      "sha256": "ac3e6303dd1e8d643b5ead09dfed58dd7e9bfc8919efe456935bb3448709f73d"
+    },
+    {
+      "name": "CREATE_INTERNAL_EVENT_SCHEMA_V7",
+      "sha256": "b693bdf58af88f565787fbcd31fbe13baaa8c82b88456c8c7915d7f86b9b5398"
+    },
+    {
+      "name": "CREATE_INTERVAL_SCHEMA_V6",
+      "sha256": "983fdf873c621e5cba8bed8bba382ebeec8609ee3cb7f21cceaabbb398b649f7"
+    },
+    {
+      "name": "CREATE_LOCK_SCHEMA_V16",
+      "sha256": "adeefe646a26dc7d756ff9f56e8f7bd35a592cdd79ed0b61cae29eff1166924c"
+    },
+    {
+      "name": "CREATE_MODULE_ARTIFACT_SCHEMA_V8",
+      "sha256": "6b51de1f75901dafc87705a79c79b50cf2466505a171a366babb0e0a61888227"
+    },
+    {
+      "name": "CREATE_NOTIFICATION_SCHEMA_V3",
+      "sha256": "83d30026372c0664ad5f5913e1a22640e2357cc41fe3ca17b79032cc7987a303"
+    },
+    {
+      "name": "CREATE_PRODUCTION_RUNTIME_SCHEMA_V14",
+      "sha256": "804fffc680b621d799b26bac6b3bcb12c370a3c4cfc4242093a30c0230f91f74"
+    },
+    {
+      "name": "CREATE_RICH_APPROVAL_SCHEMA_V18",
+      "sha256": "c574c23cca1da692a8fd0a8158820a55de962c35c29cb488ecb4f6649c5001c2"
+    },
+    {
+      "name": "CREATE_RUN_SUMMARY_SCHEMA_V11",
+      "sha256": "7efd5b5799708a24ec78e3285a92063ff14d08ed0b45948e4fb625d2cdbcab88"
+    },
+    {
+      "name": "CREATE_SCHEDULE_SCHEMA_V5",
+      "sha256": "834292164ce90125907d2f63012ba7bc322797b7d04ad9332214de0b9eb3756c"
+    },
+    {
+      "name": "CREATE_SCHEMA",
+      "sha256": "3a4eb7c03d268de626473af67d5f6d72ccc72aa17ec8a73efb0a2f2ba09de276"
+    },
+    {
+      "name": "CREATE_TRIGGER_SCHEMA_V4",
+      "sha256": "07d0a9a9350b684e435e26afb74df8f1ccd59d6bc4320a86404d1da608340d21"
+    },
+    {
+      "name": "CREATE_WORKFLOW_CALL_SCHEMA_V9",
+      "sha256": "00f1ec594419955f70bb8266523d0770b36bfef5bdc7de78155967f3f3a610ae"
+    },
+    {
+      "name": "CREATE_WORKFLOW_RUNTIME_SCHEMA_V10",
+      "sha256": "df1083fdbc4ac587640c404610c07bf8c820263fb27c072132f48bd559cd9bee"
+    },
+    {
+      "name": "MIGRATE_RUNTIME_POLICY_SCHEMA_V12",
+      "sha256": "b50a68b2e55e5c722eacf4a22758300f59ada73f4a4eb3adf4c3c9ead4531452"
+    }
+  ]
+}

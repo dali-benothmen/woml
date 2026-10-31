@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { readRustModuleSource } from './rust-source';
 
 const repositoryRoot = resolve(import.meta.dir, '../..');
 const required = [
@@ -60,8 +61,8 @@ for (const schemaName of [
 }
 
 const implementation = await Promise.all([
-  readFile(resolve(repositoryRoot, 'core/woml-engine/src/durable.rs'), 'utf8'),
-  readFile(resolve(repositoryRoot, 'core/woml-engine/src/webhook.rs'), 'utf8'),
+  readRustModuleSource(resolve(repositoryRoot, 'core/woml-engine/src/durable.rs')),
+  readRustModuleSource(resolve(repositoryRoot, 'core/woml-engine/src/webhook.rs')),
   readFile(resolve(repositoryRoot, 'core/woml-engine/src/backup.rs'), 'utf8'),
   readFile(resolve(repositoryRoot, 'woml-cli/src/cli.ts'), 'utf8'),
 ]);

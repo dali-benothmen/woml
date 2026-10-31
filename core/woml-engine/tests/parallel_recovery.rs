@@ -300,62 +300,126 @@ async fn wait_all_resumes_pending_siblings_after_a_recorded_failure_then_fails_t
     return;
   };
   let fixture = events();
-  let database = TemporaryDatabase::new();
-  append_prefix(&database, &fixture, 5);
-  let mut store = DurableEventStore::open(database.path()).unwrap();
-  store
-    .append_payload(
-      "run_parallel_01",
-      "evt_weather_failed_with_soil_pending",
-      Utc::now(),
-      RunEventPayload::StepAttemptFailed(StepAttemptFailedData {
-        node_id: "loadWeather".to_string(),
-        attempt: 1,
-        invocation_id: "inv_weather_01".to_string(),
-        failure: AttemptFailure {
-          kind: AttemptFailureKind::ScriptThrew,
-          code: AttemptFailureKind::ScriptThrew.code().to_string(),
-          message: "weather failed before soil was scheduled".to_string(),
-          details: None,
-          ..AttemptFailure::legacy_defaults()
-        },
-      }),
-    )
-    .unwrap();
-  drop(store);
+  for (failed_node_id, pending_node_id, started_index) in [
+    ("loadWeather", "loadSoil", 4),
+    ("loadSoil", "loadWeather", 5),
+  ] {
+    let database = TemporaryDatabase::new();
+    append_prefix(&database, &fixture, 4);
+    let mut store = DurableEventStore::open(database.path()).unwrap();
+    let RunEventPayload::StepAttemptStarted(started) = &fixture[started_index].payload else {
+      panic!("fixture must start the failed child");
+    };
+    store
+      .append_payload(
+        "run_parallel_01",
+        "evt_child_started_before_crash",
+        Utc::now(),
+        fixture[started_index].payload.clone(),
+      )
+      .unwrap();
+    store
+      .append_payload(
+        "run_parallel_01",
+        "evt_child_failed_with_sibling_pending",
+        Utc::now(),
+        RunEventPayload::StepAttemptFailed(StepAttemptFailedData {
+          node_id: failed_node_id.to_string(),
+          attempt: started.attempt,
+          invocation_id: started.invocation_id.clone(),
+          failure: AttemptFailure {
+            kind: AttemptFailureKind::ScriptThrew,
+            code: AttemptFailureKind::ScriptThrew.code().to_string(),
+            message: "child failed before its sibling was scheduled".to_string(),
+            details: None,
+            ..AttemptFailure::legacy_defaults()
+          },
+        }),
+      )
+      .unwrap();
+    drop(store);
 
-  let error = resume_workflow_durable(
-    database.path().to_path_buf(),
-    "run_parallel_01",
-    options(host),
-  )
-  .await
-  .unwrap_err();
-  let RuntimeExecutionError::ParallelFailed(details) = error else {
-    panic!("expected the resumed wait-all group to fail");
-  };
-  assert_eq!(details.failed_node_ids, ["loadWeather"]);
-  assert!(details.cancelled_node_ids.is_empty());
-  assert_eq!(
-    details
-      .events
-      .iter()
-      .filter(|event| matches!(
-        &event.payload,
-        RunEventPayload::StepAttemptStarted(data) if data.node_id == "loadWeather"
-      ))
-      .count(),
-    1
-  );
-  assert_eq!(
-    details
-      .events
-      .iter()
-      .filter(|event| matches!(
-        &event.payload,
-        RunEventPayload::StepAttemptSucceeded(data) if data.node_id == "loadSoil"
-      ))
-      .count(),
-    1
-  );
+    let error = resume_workflow_durable(
+      database.path().to_path_buf(),
+      "run_parallel_01",
+      options(host.clone()),
+    )
+    .await
+    .unwrap_err();
+    let RuntimeExecutionError::ParallelFailed(details) = error else {
+      panic!("expected the resumed wait-all group to fail with its parallel failure: {error:?}");
+    };
+    assert_eq!(details.primary_node_id, failed_node_id);
+    assert_eq!(details.failed_node_ids, [failed_node_id]);
+    assert!(details.cancelled_node_ids.is_empty());
+    for node_id in [failed_node_id, pending_node_id] {
+      assert_eq!(
+        details
+          .events
+          .iter()
+          .filter(|event| matches!(
+            &event.payload,
+            RunEventPayload::StepAttemptStarted(data) if data.node_id == node_id
+          ))
+          .count(),
+        1,
+        "recovery must not replay {node_id}"
+      );
+    }
+    assert_eq!(
+      details
+        .events
+        .iter()
+        .filter(|event| matches!(
+          &event.payload,
+          RunEventPayload::StepAttemptSucceeded(data) if data.node_id == pending_node_id
+        ))
+        .count(),
+      1
+    );
+    assert!(!details.events.iter().any(|event| matches!(
+      &event.payload,
+      RunEventPayload::StepAttemptStarted(data) if data.node_id == "buildReport"
+    )));
+    assert_eq!(
+      details
+        .events
+        .iter()
+        .filter(|event| matches!(event.payload, RunEventPayload::ParallelGroupCompleted(_)))
+        .count(),
+      1
+    );
+    assert!(matches!(
+      &details.events[details.events.len() - 2].payload,
+      RunEventPayload::ParallelGroupCompleted(data)
+        if data.outcome == ParallelGroupOutcome::Failed
+          && data.failed_node_ids == [failed_node_id]
+          && data.cancelled_node_ids.is_empty()
+    ));
+    assert!(matches!(
+      details.events.last().unwrap().payload,
+      RunEventPayload::RunFailed(_)
+    ));
+
+    let store = DurableEventStore::open(database.path()).unwrap();
+    store.audit_integrity().unwrap();
+    let projection = store.projection("run_parallel_01").unwrap();
+    assert_eq!(projection.status, RunStatus::Failed);
+    assert!(projection.context.steps.contains_key(pending_node_id));
+    assert!(!projection.context.steps.contains_key(failed_node_id));
+    assert_eq!(store.events("run_parallel_01").unwrap(), details.events);
+    drop(store);
+
+    let repeated = resume_workflow_durable(
+      database.path().to_path_buf(),
+      "run_parallel_01",
+      options(host.clone()),
+    )
+    .await
+    .unwrap_err();
+    let RuntimeExecutionError::ParallelFailed(repeated_details) = repeated else {
+      panic!("a settled group must retain its parallel failure: {repeated:?}");
+    };
+    assert_eq!(repeated_details.events, details.events);
+  }
 }

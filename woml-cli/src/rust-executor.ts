@@ -20,6 +20,7 @@ import {
   nativeTargetForRuntime,
 } from './native-platform';
 import { profileAsync, profileSync } from './performance-profiler';
+import { encodeNativeRuntimeCapabilities } from './native-runtime-capabilities';
 import type { ProcessRuntimeAuthorityV1 } from './process-policy';
 import type { ArtifactRuntimeAuthorityV1 } from './artifact-policy';
 import type { InfrastructurePolicyRuntimeAuthorityV1 } from './infrastructure-policy';
@@ -66,7 +67,7 @@ export type RuntimeCapabilitiesV1 = Partial<
 
 export interface RustRunEvent {
   readonly eventSchemaVersion:
-    1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
+    1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20;
   readonly eventId: string;
   readonly runId: string;
   readonly sequence: number;
@@ -2382,10 +2383,21 @@ function executionResult(value: unknown): value is RustWorkflowExecutionResult {
         'occurredAt',
         'type',
         'data',
-      ]) &&
+      ], ['iteration']) &&
       Number.isSafeInteger(event.eventSchemaVersion) &&
       Number(event.eventSchemaVersion) >= 1 &&
-      Number(event.eventSchemaVersion) <= 17 &&
+      Number(event.eventSchemaVersion) <= 20 &&
+      (event.iteration === undefined || (
+        Number(event.eventSchemaVersion) >= 15 &&
+        record(event.iteration) &&
+        exactKeys(event.iteration, ['forEachId', 'index']) &&
+        typeof event.iteration.forEachId === 'string' &&
+        event.iteration.forEachId.length <= 256 &&
+        /^[a-z][A-Za-z0-9]*$/.test(event.iteration.forEachId) &&
+        Number.isSafeInteger(event.iteration.index) &&
+        Number(event.iteration.index) >= 0 &&
+        Number(event.iteration.index) < 10000
+      )) &&
       typeof event.eventId === 'string' &&
       typeof event.runId === 'string' &&
       Number.isSafeInteger(event.sequence) &&
@@ -2499,7 +2511,7 @@ function waitingSignal(value: unknown): value is WaitingSignal {
   );
 }
 
-function parseApprovalRuntimeOutcome(json: string): RustApprovalRuntimeOutcome {
+export function parseApprovalRuntimeOutcome(json: string): RustApprovalRuntimeOutcome {
   const value: unknown = JSON.parse(json);
   if (
     !record(value) ||
@@ -2789,7 +2801,7 @@ export async function executeWorkflowWithRust(
       JSON.stringify(options.runtimeModules ?? []),
       options.runtimeCapabilities === undefined
         ? undefined
-        : JSON.stringify(options.runtimeCapabilities)
+        : encodeNativeRuntimeCapabilities(options.runtimeCapabilities)
     );
   } catch (error) {
     decodeNativeExecutionError(error);
@@ -2875,7 +2887,7 @@ export async function executeWorkflowWithRustDurable(
               request.runtimeModulesJson,
               options.runtimeCapabilities === undefined
                 ? undefined
-                : JSON.stringify(options.runtimeCapabilities)
+                : encodeNativeRuntimeCapabilities(options.runtimeCapabilities)
             )
           : native.executeWomlWorkflowDurableWithProgress(
               ...request.arguments,
@@ -2884,7 +2896,7 @@ export async function executeWorkflowWithRustDurable(
               request.runtimeModulesJson,
               options.runtimeCapabilities === undefined
                 ? undefined
-                : JSON.stringify(options.runtimeCapabilities)
+                : encodeNativeRuntimeCapabilities(options.runtimeCapabilities)
             )
       ).catch(decodeNativeExecutionError);
       if (measurements !== undefined) {
@@ -2939,7 +2951,7 @@ export async function resumeWorkflowWithRustDurable(
       JSON.stringify(options.runtimeModules ?? []),
       options.runtimeCapabilities === undefined
         ? undefined
-        : JSON.stringify(options.runtimeCapabilities)
+        : encodeNativeRuntimeCapabilities(options.runtimeCapabilities)
     )
     .catch(decodeNativeExecutionError);
   return JSON.parse(resultJson) as RustWorkflowExecutionResult;
@@ -3002,7 +3014,7 @@ export async function executeApprovalWorkflowWithRust(
           JSON.stringify(options.runtimeModules ?? []),
           options.runtimeCapabilities === undefined
             ? undefined
-            : JSON.stringify(options.runtimeCapabilities)
+            : encodeNativeRuntimeCapabilities(options.runtimeCapabilities)
         )
       : native.executeWomlWorkflowDurableOutcomeWithProgress(
           ...arguments_,
@@ -3011,7 +3023,7 @@ export async function executeApprovalWorkflowWithRust(
           JSON.stringify(options.runtimeModules ?? []),
           options.runtimeCapabilities === undefined
             ? undefined
-            : JSON.stringify(options.runtimeCapabilities)
+            : encodeNativeRuntimeCapabilities(options.runtimeCapabilities)
         )
   ).catch(decodeNativeExecutionError);
   return parseApprovalRuntimeOutcome(resultJson);
@@ -3045,7 +3057,7 @@ export async function resumeApprovalWorkflowWithRust(
           JSON.stringify(options.runtimeModules ?? []),
           options.runtimeCapabilities === undefined
             ? undefined
-            : JSON.stringify(options.runtimeCapabilities)
+            : encodeNativeRuntimeCapabilities(options.runtimeCapabilities)
         )
       : native.resumeWomlWorkflowDurableOutcomeWithProgress(
           ...arguments_,
@@ -3054,7 +3066,7 @@ export async function resumeApprovalWorkflowWithRust(
           JSON.stringify(options.runtimeModules ?? []),
           options.runtimeCapabilities === undefined
             ? undefined
-            : JSON.stringify(options.runtimeCapabilities)
+            : encodeNativeRuntimeCapabilities(options.runtimeCapabilities)
         )
   ).catch(decodeNativeExecutionError);
   return parseApprovalRuntimeOutcome(resultJson);
@@ -3337,7 +3349,7 @@ export async function startWebhookRuntimeWithRust(
           options.startSuspended ?? false,
           options.runtimeCapabilities === undefined
             ? undefined
-            : JSON.stringify(options.runtimeCapabilities),
+            : encodeNativeRuntimeCapabilities(options.runtimeCapabilities),
           options.signalIngressToken,
           options.telemetryEnabled ?? false,
           options.telemetryPropagation ?? false,
@@ -6331,7 +6343,7 @@ export async function resumeStoredRunWithRust(
       JSON.stringify(options.resolvedSecrets ?? {}),
       options.runtimeCapabilities === undefined
         ? undefined
-        : JSON.stringify(options.runtimeCapabilities)
+        : encodeNativeRuntimeCapabilities(options.runtimeCapabilities)
     )
     .catch(decodeNativeExecutionError);
   return parseApprovalRuntimeOutcome(json);

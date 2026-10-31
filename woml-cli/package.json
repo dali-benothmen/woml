@@ -64,6 +64,8 @@
     "test:cli:candidate": "bun run build && bun scripts/run-cli-test-shards.ts --shard candidate",
     "test:cli": "bun scripts/run-cli-test-shards.ts",
     "test:portable": "bun test ../woml/tests --max-concurrency=1 && bun run test:cli:contracts",
+    "test:rust-core-modularization-contracts": "bun test tests/rust-core-modularization-contracts.test.ts tests/rust-source-contracts.test.ts tests/rust-core-native-cleanup.test.ts tests/architecture-separation.test.ts tests/release-automation.test.ts --max-concurrency=1",
+    "test:rust-core-native": "bun scripts/verify-rust-core-native.ts",
     "prepublishOnly": "bun scripts/guard-source-publish.ts",
     "test": "bun test",
     "test:reusable-definitions": "bun test ../woml/tests/reusable-definition-contracts.test.ts ../woml/tests/reusable-definitions.test.ts tests/reusable-definitions-cli.test.ts",

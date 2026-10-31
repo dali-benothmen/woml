@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { resolve } from 'node:path';
+import { readRustModuleSource } from './rust-source';
 
 const repositoryRoot = resolve(import.meta.dir, '../..');
 
@@ -16,7 +17,9 @@ for (const [file, required] of [
   ['docs/woml-observability.md', 'Failure isolation'],
   ['woml-cli/tests/fixtures/production-runtime/runtime-snapshot.v1.json', 'runtime_observability'],
 ] as const) {
-  const contents = await Bun.file(resolve(repositoryRoot, file)).text();
+  const contents = file.endsWith('.rs')
+    ? await readRustModuleSource(resolve(repositoryRoot, file))
+    : await Bun.file(resolve(repositoryRoot, file)).text();
   if (!contents.includes(required)) {
     throw new Error(`PRO5 artifact ${file} is missing ${required}.`);
   }

@@ -1,0 +1,132 @@
+{
+  "baseRevision": "2c485ab",
+  "contracts": {
+    "engine": {
+      "sha256": "b79223b2374101ce651994d078b5ebbdd575b97a48bdcfd9e99b86179071e092",
+      "publicTypes": [
+        "EngineError",
+        "InMemoryDagEngine"
+      ],
+      "publicFunctions": [
+        "step_effect_idempotency_key"
+      ],
+      "publicConstants": [],
+      "publicTraits": []
+    },
+    "projection": {
+      "sha256": "d0f5f318b395868f3534f99ce1ea38a646dbcfcd72423e2496ace91d191e1629",
+      "publicTypes": [
+        "RunStatus",
+        "LifecycleStatus",
+        "LifecycleActionStatus",
+        "LifecycleActionProjection",
+        "LifecycleHookStatus",
+        "LifecycleHookProjection",
+        "ReusableLifecycleStatus",
+        "ReusableLifecycleProjection",
+        "WorkflowContext",
+        "LockContext",
+        "AttemptIdentity",
+        "AttemptStatus",
+        "AttemptProjection",
+        "OperationIdentity",
+        "OperationStatus",
+        "OperationProjection",
+        "RetryScheduleProjection",
+        "ParallelGroupStatus",
+        "ParallelGroupProjection",
+        "ForkJoinStatus",
+        "ForkBranchProjection",
+        "ForkProjection",
+        "ForEachStatus",
+        "ForEachIterationStatus",
+        "ForEachProjection",
+        "ForEachIterationExecutionProjection",
+        "ApprovalRequestStatus",
+        "ApprovalRequestProjection",
+        "RichApprovalRequestStatus",
+        "RichApprovalReviewerDecisionProjection",
+        "RichApprovalRequestProjection",
+        "DurableWaitStatus",
+        "DurableWaitProjection",
+        "LockStatus",
+        "LockProjection",
+        "SagaPhase",
+        "CorrectionActionStatus",
+        "CorrectionActionProjection",
+        "SagaProjection",
+        "NotificationDeliveryStatus",
+        "NotificationDeliveryProjection",
+        "NotificationMessageUpdateStatus",
+        "NotificationMessageUpdateProjection",
+        "RunFailure",
+        "RunProjection",
+        "FoldError"
+      ],
+      "publicFunctions": [
+        "fold_events"
+      ],
+      "publicConstants": [],
+      "publicTraits": []
+    },
+    "runtime": {
+      "sha256": "0b9723abc727ece501aa8d6ca85a22d340d74ac794307ae2b147a213ee4d7ad0",
+      "publicTypes": [
+        "ExecutionProgress",
+        "ExecutionProgressReporter",
+        "LifecycleProgressPhase",
+        "LifecycleProgress",
+        "LifecycleProgressReporter",
+        "RuntimePolicyProgressPhase",
+        "RuntimePolicyProgress",
+        "RuntimePolicyProgressReporter",
+        "RuntimeModuleArtifact",
+        "SystemEngineClock",
+        "FixedEngineClock",
+        "RuntimeExecutionOptions",
+        "WorkflowExecutionResult",
+        "WorkflowRuntimeOutcome",
+        "WaitingWorkflowApproval",
+        "WaitingRichApprovalAuthority",
+        "WaitingWorkflowTimer",
+        "WaitingWorkflowSignal",
+        "RuntimeExecutionError",
+        "CancelledRunDetails",
+        "FailedRunDetails",
+        "FailedBranchDetails",
+        "FailedParallelDetails",
+        "FailedApprovalDetails",
+        "FailedNotificationDetails",
+        "BranchFailureSite",
+        "ExternalSignalRuntimeOutcome"
+      ],
+      "publicFunctions": [
+        "execute_workflow",
+        "execute_workflow_durable",
+        "execute_workflow_durable_outcome",
+        "resume_workflow_durable",
+        "resume_workflow_durable_outcome",
+        "resume_workflow_durable_any_outcome",
+        "execute_admitted_trigger_run_durable",
+        "execute_reusable_provider_lifecycle_durable",
+        "recover_durable_runs",
+        "resume_due_timer_waits_durable",
+        "admit_external_signal_durable",
+        "resolve_human_approval_durable",
+        "resolve_rich_approval_durable",
+        "settle_approval_timeout_durable"
+      ],
+      "publicConstants": [
+        "EXECUTION_PROGRESS_CONTRACT",
+        "EXECUTION_PROGRESS_VERSION",
+        "LIFECYCLE_PROGRESS_PROFILE",
+        "RUNTIME_POLICY_PROGRESS_PROFILE",
+        "RUNTIME_OUTCOME_CONTRACT",
+        "RUNTIME_OUTCOME_VERSION"
+      ],
+      "publicTraits": [
+        "EngineClock"
+      ]
+    }
+  }
+}
