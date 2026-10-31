@@ -106,8 +106,10 @@ impl Drop for LocalJsonServer {
 
 fn respond(mut stream: TcpStream) {
   let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-  let mut request = [0_u8; 16_384];
-  let _ = stream.read(&mut request);
+  let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+  if read_fixture_request_head(&mut stream).is_err() {
+    return;
+  }
   let body = br#"{"customer":"Alex"}"#;
   let response = format!(
     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -116,6 +118,86 @@ fn respond(mut stream: TcpStream) {
   if stream.write_all(response.as_bytes()).is_ok() {
     let _ = stream.write_all(body);
   }
+}
+
+// This fixture only serves bodyless GET requests. TCP reads are not HTTP
+// messages: replying after a partial head can close the socket while Bun or
+// reqwest is still writing, which is a reset on macOS/Windows.
+fn read_fixture_request_head(reader: &mut impl Read) -> std::io::Result<()> {
+  let mut head = Vec::new();
+  let mut chunk = [0_u8; 512];
+  while head.len() < 16_384 {
+    let remaining = (16_384 - head.len()).min(chunk.len());
+    let count = match reader.read(&mut chunk[..remaining]) {
+      Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+      result => result?,
+    };
+    if count == 0 {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::UnexpectedEof,
+        "incomplete fixture HTTP head",
+      ));
+    }
+    head.extend_from_slice(&chunk[..count]);
+    if head.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+      return Ok(());
+    }
+  }
+  Err(std::io::Error::new(
+    std::io::ErrorKind::InvalidData,
+    "fixture HTTP head exceeds its limit",
+  ))
+}
+
+#[test]
+fn fixture_http_head_handles_fragmentation_and_enforces_bounds() {
+  struct OneByteAtATime<'a>(&'a [u8]);
+  impl Read for OneByteAtATime<'_> {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+      let count = output.len().min(self.0.len()).min(1);
+      output[..count].copy_from_slice(&self.0[..count]);
+      self.0 = &self.0[count..];
+      Ok(count)
+    }
+  }
+  let request = b"GET /data HTTP/1.1\r\nHost: localhost\r\n\r\n";
+  read_fixture_request_head(&mut OneByteAtATime(request)).unwrap();
+  for end in 0..request.len() {
+    assert_eq!(
+      read_fixture_request_head(&mut OneByteAtATime(&request[..end]))
+        .unwrap_err()
+        .kind(),
+      std::io::ErrorKind::UnexpectedEof
+    );
+  }
+  assert_eq!(
+    read_fixture_request_head(&mut std::io::repeat(b'x'))
+      .unwrap_err()
+      .kind(),
+    std::io::ErrorKind::InvalidData
+  );
+}
+
+#[test]
+fn fixture_http_server_rejects_a_truncated_request() {
+  let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+  let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+  client
+    .set_read_timeout(Some(Duration::from_secs(2)))
+    .unwrap();
+  let (server, _) = listener.accept().unwrap();
+  let response = thread::spawn(move || respond(server));
+  client
+    .write_all(b"GET /data HTTP/1.1\r\nHost: localhost\r\n")
+    .unwrap();
+  client.shutdown(std::net::Shutdown::Write).unwrap();
+  let mut bytes = Vec::new();
+  client.read_to_end(&mut bytes).unwrap();
+  response.join().unwrap();
+  assert!(
+    bytes.is_empty(),
+    "a partial HTTP head must not receive a successful response"
+  );
 }
 
 fn host_options() -> Option<ScriptHostProcessOptions> {
@@ -229,6 +311,51 @@ async fn wait_for_terminal(database: &TemporaryDatabase, run_id: &str) -> RunSta
   }
 }
 
+fn run_failure_diagnostics(store: &DurableEventStore) -> String {
+  store
+    .list_runs(20)
+    .unwrap()
+    .runs
+    .into_iter()
+    .map(|run| {
+      let projection = store.projection(&run.run_id).unwrap();
+      let attempts = projection
+        .attempts
+        .iter()
+        .filter_map(|attempt| {
+          if let woml_engine::projection::AttemptStatus::Failed { failure } = &attempt.status {
+            Some(format!(
+              "{}: {} ({})",
+              attempt.identity.node_id, failure.code, failure.message
+            ))
+          } else {
+            None
+          }
+        })
+        .collect::<Vec<_>>();
+      let operations = projection
+        .operations
+        .values()
+        .filter_map(|operation| {
+          if let woml_engine::OperationStatus::Failed { failure, .. } = &operation.status {
+            Some(format!(
+              "{}.{}: {} ({})",
+              operation.capability, operation.operation, failure.code, failure.message
+            ))
+          } else {
+            None
+          }
+        })
+        .collect::<Vec<_>>();
+      format!(
+        "workflow={} status={:?} attempts={attempts:?} operations={operations:?}",
+        run.workflow_id, projection.status
+      )
+    })
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
 #[actix_web::test]
 async fn nested_cross_process_calls_compose_with_branch_and_parallel_targets() {
   let Some(host) = host_options() else {
@@ -323,7 +450,12 @@ async fn nested_cross_process_calls_compose_with_branch_and_parallel_targets() {
   let store = DurableEventStore::open(database.path()).unwrap();
   let status = wait_for_terminal(&database, &top_run_id).await;
   let top_projection = store.projection(&top_run_id).unwrap();
-  assert_eq!(status, RunStatus::Succeeded, "{top_projection:#?}");
+  assert_eq!(
+    status,
+    RunStatus::Succeeded,
+    "{top_projection:#?}\n{}",
+    run_failure_diagnostics(&store)
+  );
   assert_eq!(
     top_projection.result,
     Some(json!({
@@ -368,25 +500,26 @@ async fn nested_cross_process_calls_compose_with_branch_and_parallel_targets() {
     );
   }
 
-  let messages = call_progress.lock().unwrap();
-  assert_eq!(
-    messages
-      .iter()
-      .filter(|message| matches!(message, WorkflowCallProgress::CallAdmitted { .. }))
-      .count(),
-    4
-  );
-  let encoded_progress = serde_json::to_string(&*messages).unwrap();
-  for private in [
-    "wc6-order",
-    "record-42",
-    "wc6:record",
-    raw_service_url.as_str(),
-    application_database.as_str(),
-  ] {
-    assert!(!encoded_progress.contains(private));
+  {
+    let messages = call_progress.lock().unwrap();
+    assert_eq!(
+      messages
+        .iter()
+        .filter(|message| matches!(message, WorkflowCallProgress::CallAdmitted { .. }))
+        .count(),
+      4
+    );
+    let encoded_progress = serde_json::to_string(&*messages).unwrap();
+    for private in [
+      "wc6-order",
+      "record-42",
+      "wc6:record",
+      raw_service_url.as_str(),
+      application_database.as_str(),
+    ] {
+      assert!(!encoded_progress.contains(private));
+    }
   }
-  drop(messages);
 
   caller_runtime.stop().await;
   target_runtime.stop().await;

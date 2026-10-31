@@ -1293,3 +1293,43 @@ policy-slot release/resume, explicit parent deadlines with an independent child,
 and concurrent/lost host settlement acknowledgements. The existing correction
 matrix runs workflow-call, policy-scheduler, and host integration targets serially
 on Linux, macOS, and Windows. Local results do not certify the remote platforms.
+
+### CI fixture and cancellation synchronization corrections
+
+A subsequent Windows CI run timed out while testing cancellation of two
+parallel children. The test observed durable `StepAttemptStarted` records,
+which precede actual Worker startup. It now waits for a successful, named cache
+operation from each child before requesting cancellation. The children then
+wait indefinitely, so natural completion cannot make the assertion pass.
+Readiness has a separate ten-second watchdog; the original three-second
+cancellation deadline and all terminal/group/downstream assertions remain.
+A failed watchdog aborts and joins the runtime task and reports its projection.
+The other cancellation tests still request cancellation without this readiness
+handshake.
+
+The macOS nested-call failure reported only that the middle workflow failed,
+not the child's underlying operation error. Its synthetic HTTP server had a
+reproducible framing defect: it replied after a single TCP read, even if the
+request head was incomplete. A new raw-socket regression failed before the
+repair. The fixture now consumes a complete, bounded HTTP head before replying;
+tests cover byte-by-byte fragmentation, every truncated prefix, and the size
+limit. The fixture serves only bodyless GETs, not arbitrary production HTTP.
+
+Nested-call failures now include bounded workflow, attempt, and operation
+failure summaries, without dumping payloads or capability inputs. The original
+macOS child cause remains unconfirmed until the platform rerun; fixing the
+independently reproduced fixture defect is not proof of that platform's root
+cause. Both affected suites pass locally, including a run with a symlinked
+temporary directory to exercise macOS-style path aliases. These changes do not
+modify production scheduling, cancellation, host settlement, schemas, frozen
+fixtures, or modularization baselines.
+
+Local verification passes 41 Rust tests across cancellation, compensation,
+policy scheduling, Script Host protocol, and composition, plus 33 source/CI
+contract tests. Three additional serial repetitions of both affected paths
+also pass, with nested composition using the symlinked temporary directory.
+The focused integration-test Clippy check uses the established allowance list
+without new exemptions; the progress mutex now has a lexical scope ending
+before asynchronous server shutdown. Documentation/example checks, formatting,
+and diff checks pass. macOS/Windows CI and full release validation remain
+separate from this Linux evidence.
