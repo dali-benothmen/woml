@@ -110,7 +110,7 @@ const packageJson = JSON.parse(
 );
 if (
   packageJson.name !== 'woml-cli' ||
-  packageJson.version !== '1.1.0' ||
+  packageJson.version !== '1.1.1' ||
   packageJson.private !== false ||
   packageJson.bin?.woml !== './dist/cli.js' ||
   !packageJson.files?.includes('dist') ||

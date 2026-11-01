@@ -3195,7 +3195,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "woml-engine"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "actix-web",
  "base64",
@@ -3231,7 +3231,7 @@ dependencies = [
 
 [[package]]
 name = "woml-native"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "actix-web",
  "chrono",

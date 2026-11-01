@@ -48,10 +48,10 @@ async function createMain(root: string): Promise<void> {
     resolve(root, 'package.json'),
     `${JSON.stringify({
       name: 'woml-cli',
-      version: '1.1.0',
+      version: '1.1.1',
       files: publicPackageFiles,
       optionalDependencies: Object.fromEntries(
-        womlNativeTargets.map(target => [nativePackageName(target), '1.1.0']),
+        womlNativeTargets.map(target => [nativePackageName(target), '1.1.1']),
       ),
     })}\n`,
   );
@@ -94,14 +94,14 @@ describe('collected WOML release family', () => {
     await createNativeFamily(platforms);
 
     await expect(
-      verifyCollectedRelease(main, platforms, 'v1.1.0'),
+      verifyCollectedRelease(main, platforms, 'v1.1.1'),
     ).resolves.toBeUndefined();
 
     await rm(resolve(platforms, `native-${womlNativeTargets[0]}`), {
       recursive: true,
     });
     await expect(
-      verifyCollectedRelease(main, platforms, 'v1.1.0'),
+      verifyCollectedRelease(main, platforms, 'v1.1.1'),
     ).rejects.toThrow(`Collected release is missing: ${womlNativeTargets[0]}`);
   }, 30_000);
 });
