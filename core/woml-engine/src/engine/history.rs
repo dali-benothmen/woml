@@ -1,5 +1,11 @@
 //! engine history.
 
+mod prefix;
+#[cfg(test)]
+mod tests;
+
+use prefix::HistoryPrefix;
+
 use super::{
   node_is_complete, ready_node_ids_for_projection, ready_node_ids_for_projection_at,
   step_effect_idempotency_key, validate_payload_against_definition,
@@ -30,7 +36,19 @@ pub(crate) fn validate_event_history_against_definition(
   definition_hash: &str,
   events: &[RunEvent],
 ) -> Result<(), String> {
+  validate_history_with_prefixes(workflow, definition_hash, events, HistoryPrefix::new)
+}
+
+fn validate_history_with_prefixes<'a>(
+  workflow: &CompiledWorkflowDefinition,
+  definition_hash: &str,
+  events: &'a [RunEvent],
+  make_prefixes: impl FnOnce(&'a [RunEvent]) -> HistoryPrefix<'a>,
+) -> Result<(), String> {
+  // Preserve the full structural gate and its error precedence. Prefix state
+  // belongs only to this immutable slice and never escapes to a store/cache.
   crate::fold_events(events).map_err(|error| error.to_string())?;
+  let mut prefixes = make_prefixes(events);
   let mut child_states: HashMap<String, ParallelChildState> = HashMap::new();
 
   for (index, event) in events.iter().enumerate() {
@@ -64,8 +82,8 @@ pub(crate) fn validate_event_history_against_definition(
           .iter()
           .find(|choice| choice.choice_id == data.choice_id)
           .ok_or_else(|| format!("Unknown control choice {:?}.", data.choice_id))?;
-        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
-        let ready = ready_node_ids_for_projection(workflow, definition_hash, &prefix)?;
+        let prefix = prefixes.at(index)?;
+        let ready = ready_node_ids_for_projection(workflow, definition_hash, prefix)?;
         if !ready.contains(&choice.selector_node_id) {
           return Err(format!(
             "Control choice {:?} was selected before its selector was ready.",
@@ -82,8 +100,8 @@ pub(crate) fn validate_event_history_against_definition(
           .iter()
           .find(|fork| fork.fork_id == data.fork_id)
           .ok_or_else(|| format!("Unknown fork {:?}.", data.fork_id))?;
-        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
-        let ready = ready_node_ids_for_projection(workflow, definition_hash, &prefix)?;
+        let prefix = prefixes.at(index)?;
+        let ready = ready_node_ids_for_projection(workflow, definition_hash, prefix)?;
         if !ready.contains(&fork.open_node_id) {
           return Err(format!(
             "Fork {:?} opened before it was ready.",
@@ -106,7 +124,7 @@ pub(crate) fn validate_event_history_against_definition(
           .find(|branch| branch.branch_id == data.branch_id)
           .ok_or_else(|| format!("Unknown fork branch {:?}.", data.branch_id))?;
         if data.outcome == ForkBranchOutcome::Succeeded {
-          let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+          let prefix = prefixes.at(index)?;
           let terminal_ready = workflow
             .graph
             .edges
@@ -115,7 +133,7 @@ pub(crate) fn validate_event_history_against_definition(
             .all(|edge| {
               workflow
                 .node(&edge.from)
-                .is_some_and(|node| node_is_complete(workflow, node, &prefix))
+                .is_some_and(|node| node_is_complete(workflow, node, prefix))
             });
           if !terminal_ready {
             return Err(format!(
@@ -134,7 +152,7 @@ pub(crate) fn validate_event_history_against_definition(
           .iter()
           .find(|fork| fork.fork_id == data.fork_id)
           .ok_or_else(|| format!("Unknown fork {:?}.", data.fork_id))?;
-        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let prefix = prefixes.at(index)?;
         let projected = prefix
           .forks
           .get(&data.fork_id)
@@ -158,8 +176,8 @@ pub(crate) fn validate_event_history_against_definition(
         let saga = workflow
           .saga(&data.saga_id)
           .ok_or_else(|| format!("Unknown saga {:?}.", data.saga_id))?;
-        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
-        let ready = ready_node_ids_for_projection(workflow, definition_hash, &prefix)?;
+        let prefix = prefixes.at(index)?;
+        let ready = ready_node_ids_for_projection(workflow, definition_hash, prefix)?;
         if !ready.contains(&saga.open_node_id) {
           return Err(format!(
             "Saga {:?} started before its open node was ready.",
@@ -171,7 +189,7 @@ pub(crate) fn validate_event_history_against_definition(
         let saga = workflow
           .saga(&data.saga_id)
           .ok_or_else(|| format!("Unknown saga {:?}.", data.saga_id))?;
-        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let prefix = prefixes.at(index)?;
         let state = prefix
           .sagas
           .get(&data.saga_id)
@@ -245,7 +263,7 @@ pub(crate) fn validate_event_history_against_definition(
         let saga = workflow
           .saga(&data.saga_id)
           .ok_or_else(|| format!("Unknown saga {:?}.", data.saga_id))?;
-        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let prefix = prefixes.at(index)?;
         let state = prefix
           .sagas
           .get(&data.saga_id)
@@ -268,7 +286,7 @@ pub(crate) fn validate_event_history_against_definition(
         }
       }
       RunEventPayload::RunOutcomeDecided(_) => {
-        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let prefix = prefixes.at(index)?;
         for fork in workflow.graph.forks.as_deref().unwrap_or_default() {
           let Some(projected) = prefix.forks.get(&fork.fork_id) else {
             continue;
@@ -290,8 +308,8 @@ pub(crate) fn validate_event_history_against_definition(
         let group = workflow
           .parallel_group(&data.parallel_id)
           .ok_or_else(|| format!("Unknown parallel group {:?}.", data.parallel_id))?;
-        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
-        let ready = ready_node_ids_for_projection(workflow, definition_hash, &prefix)?;
+        let prefix = prefixes.at(index)?;
+        let ready = ready_node_ids_for_projection(workflow, definition_hash, prefix)?;
         if !ready.iter().any(|node_id| node_id == &group.start_node_id) {
           return Err(format!(
             "Parallel group {:?} was started before its fork was ready.",
@@ -300,9 +318,9 @@ pub(crate) fn validate_event_history_against_definition(
         }
       }
       RunEventPayload::StepAttemptStarted(data) => {
-        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let prefix = prefixes.at(index)?;
         let ready =
-          ready_node_ids_for_projection_at(workflow, definition_hash, &prefix, event.occurred_at)?;
+          ready_node_ids_for_projection_at(workflow, definition_hash, prefix, event.occurred_at)?;
         if !ready.iter().any(|node_id| node_id == &data.node_id) {
           return Err(format!(
             "Node {:?} started before it was ready.",
@@ -475,8 +493,8 @@ pub(crate) fn validate_event_history_against_definition(
         let approval = workflow
           .approval(&data.approval_id)
           .ok_or_else(|| format!("Unknown approval {:?}.", data.approval_id))?;
-        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
-        let ready = ready_node_ids_for_projection(workflow, definition_hash, &prefix)?;
+        let prefix = prefixes.at(index)?;
+        let ready = ready_node_ids_for_projection(workflow, definition_hash, prefix)?;
         if !ready.iter().any(|node_id| node_id == &data.approval_id) {
           return Err(format!(
             "Approval {:?} was requested before its wait node was ready.",
@@ -505,8 +523,8 @@ pub(crate) fn validate_event_history_against_definition(
         }
       }
       RunEventPayload::ApprovalReviewRequested(data) => {
-        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
-        let ready = ready_node_ids_for_projection(workflow, definition_hash, &prefix)?;
+        let prefix = prefixes.at(index)?;
+        let ready = ready_node_ids_for_projection(workflow, definition_hash, prefix)?;
         if !ready.iter().any(|node_id| node_id == &data.approval_id) {
           return Err(format!(
             "Rich approval {:?} was requested before its wait node was ready.",
@@ -516,9 +534,9 @@ pub(crate) fn validate_event_history_against_definition(
       }
       RunEventPayload::ApprovalResolved(_) => {}
       RunEventPayload::WaitRegistered(data) => {
-        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let prefix = prefixes.at(index)?;
         let ready =
-          ready_node_ids_for_projection_at(workflow, definition_hash, &prefix, event.occurred_at)?;
+          ready_node_ids_for_projection_at(workflow, definition_hash, prefix, event.occurred_at)?;
         if !ready.iter().any(|node_id| node_id == &data.node_id) {
           return Err(format!(
             "Durable wait {:?} was registered before its node was ready.",
@@ -568,8 +586,7 @@ pub(crate) fn validate_event_history_against_definition(
       }
       RunEventPayload::ExternalSignalReceived(_) => {}
       RunEventPayload::RunSucceeded(_) => {
-        let projection =
-          crate::fold_events(&events[..=index]).map_err(|error| error.to_string())?;
+        let projection = prefixes.at(index + 1)?;
         if projection.parallel_groups.values().any(|group| {
           !matches!(
             group.status,
@@ -652,7 +669,7 @@ pub(crate) fn validate_event_history_against_definition(
         }
       }
       RunEventPayload::LifecycleActionAttemptStarted(data) => {
-        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let prefix = prefixes.at(index)?;
         let hook_projection = prefix
           .lifecycle_hooks
           .get(&data.hook_invocation_id)
@@ -671,7 +688,7 @@ pub(crate) fn validate_event_history_against_definition(
         }
       }
       RunEventPayload::LifecycleHookCompleted(data) => {
-        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let prefix = prefixes.at(index)?;
         let hook_projection = prefix
           .lifecycle_hooks
           .get(&data.hook_invocation_id)
@@ -742,6 +759,7 @@ pub(crate) fn validate_event_history_against_definition(
       | RunEventPayload::RunFailed(_) => {}
     }
   }
+  prefixes.succeed();
   Ok(())
 }
 

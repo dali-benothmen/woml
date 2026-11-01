@@ -25,6 +25,11 @@
     "scripts/performance-measurement.ts",
     "scripts/performance-regression.ts",
     "scripts/performance-runtime-child.ts",
+    "scripts/runtime-profile-child.ts",
+    "scripts/runtime-profile-fixtures.ts",
+    "scripts/profile-runtime-investigation.ts",
+    "scripts/runtime-session-profile-child.ts",
+    "scripts/profile-runtime-sessions.ts",
     "scripts/run-performance-regression.ts"
   ]
 }
