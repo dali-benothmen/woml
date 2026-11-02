@@ -124,6 +124,63 @@ fn lazy_store_has_no_filesystem_cost_until_first_output() {
 }
 
 #[test]
+fn state_output_identity_is_stable_before_and_after_first_state_creation() {
+  let temporary = TemporaryStore::new();
+  // The spelling changes on canonicalization even on Linux, reproducing
+  // /var -> /private/var on macOS and verbatim path prefixes on Windows.
+  let state = temporary.directory.join(".").join("state.sqlite");
+  let pending = woml_engine::operational_output_store_for_state(&state).unwrap();
+  assert!(!state.exists());
+  assert!(!pending.path().exists());
+  fs::write(&state, b"state identity fixture").unwrap();
+  let writer = pending.activate().unwrap();
+  let record = writer.append(output("run-first", "first output")).unwrap();
+  let canonical_state = state.canonicalize().unwrap();
+  let reader = woml_engine::operational_output_store_for_state(&canonical_state)
+    .unwrap()
+    .activate()
+    .expect("first-run output must be readable through the canonical state path");
+  assert_eq!(writer.deployment_id(), reader.deployment_id());
+  assert_eq!(
+    reader.read_run_page("run-first", 0, 100).unwrap().records,
+    vec![record]
+  );
+}
+
+#[cfg(unix)]
+#[test]
+fn first_output_through_an_ancestor_alias_reopens_through_the_canonical_state() {
+  use std::os::unix::fs::symlink;
+  let temporary = TemporaryStore::new();
+  let real = temporary.directory.join("real");
+  fs::create_dir_all(real.join("child")).unwrap();
+  let alias = temporary.directory.join("alias");
+  symlink(&real, &alias).unwrap();
+  // Match /var/folders/... versus /private/var/folders/... on macOS: the
+  // immediate store parent is a real directory, but an ancestor is aliased.
+  let state = alias.join("child").join("custom.sqlite");
+  let pending = woml_engine::operational_output_store_for_state(&state).unwrap();
+  assert!(!state.exists());
+  assert!(!pending.path().exists());
+  fs::write(&state, b"state identity fixture").unwrap();
+  let writer = pending.activate().unwrap();
+  writer.append(output("run-alias", "alias output")).unwrap();
+  let reader = woml_engine::operational_output_store_for_state(&state.canonicalize().unwrap())
+    .unwrap()
+    .activate()
+    .unwrap();
+  assert_eq!(writer.deployment_id(), reader.deployment_id());
+  assert_eq!(
+    reader
+      .read_run_page("run-alias", 0, 100)
+      .unwrap()
+      .records
+      .len(),
+    1
+  );
+}
+
+#[test]
 fn concurrent_appenders_receive_one_strictly_increasing_sequence() {
   let temporary = TemporaryStore::new();
   let store = Arc::new(OperationalOutputStore::open(temporary.path(), "deployment-a").unwrap());

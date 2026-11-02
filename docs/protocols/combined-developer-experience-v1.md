@@ -355,3 +355,24 @@ These changes improve comparison and diagnosis, not production performance.
 Linux measurements cannot certify Windows performance; if the Windows median
 still exceeds the budget, its retained absolute timings must guide further
 investigation rather than raising the threshold or selecting a passing cohort.
+
+### First-run output replay and path identity
+
+Output replay enforces the deployment identity derived from the canonical
+durable-state path. Runtime attachment happens before first state-file
+creation, so that derivation must use the canonical existing parent plus the
+new file name when the file itself cannot yet be canonicalized. Otherwise the
+writer hashes one spelling and a later reader hashes another: macOS can resolve
+`/var/...` to `/private/var/...`, and Windows can add a verbatim path prefix.
+Relative paths and dot components can expose the same issue on Linux.
+
+The first-run replay checks exercise a genuinely new state file, including an
+explicit dot-component spelling in the native lifecycle verifier. Rust
+regressions also cover an aliased ancestor and verify that output created
+before canonicalization remains readable afterward. The original mismatch
+was reproduced as a failing regression before correcting the derivation.
+
+This correction does not weaken deployment checks or rewrite existing metadata.
+Existing canonical identities are unchanged; foreign output stores still fail
+closed. A previously mismatched output database is not silently rebound to
+another deployment. No performance limit or durability setting changes.

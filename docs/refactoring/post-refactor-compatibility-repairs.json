@@ -48,6 +48,13 @@
       "sha256": "fe2eba7f7b8f1d719d709f4b2f09e0b68045e1c4fb1740800b8e79895547fbf3",
       "reason": "Portable managed storage: preserve file-content syncing before atomic publication and Unix directory fsync, while avoiding unsupported regular-file directory opens on Windows, matching the local artifact backend.",
       "regression": "core/woml-engine/src/storage.rs"
+    },
+    {
+      "path": "core/woml-engine/src/operational_output.rs",
+      "originalSha256": "c57ad22d3f11cbd79e2c4dc7d46eb70cb7bf5fa45619ccfd0b0a39d12c6deb84",
+      "sha256": "2a27510150263d594f1171aae5d9e4435ea1a3b2da16efd6b78ba4c58fce6ac9",
+      "reason": "Stable first-run output identity: canonicalize the existing state parent before first state-file creation so later replay derives the same deployment ID on aliased and Windows verbatim paths; existing canonical identities and mismatch rejection remain unchanged.",
+      "regression": "core/woml-engine/tests/operational_output_store.rs"
     }
   ],
   "declarationRepairs": {

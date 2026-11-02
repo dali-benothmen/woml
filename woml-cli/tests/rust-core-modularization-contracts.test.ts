@@ -123,6 +123,7 @@ test('the reviewed cohesive families retain their baselines with explicit behavi
     'core/woml-engine/src/durable_state.rs',
     'core/woml-engine/src/host.rs',
     'core/woml-engine/src/infrastructure_policy_runtime.rs',
+    'core/woml-engine/src/operational_output.rs',
     'core/woml-engine/src/storage.rs',
   ]);
   for (const retained of featureBridgeBaseline.retained) {
@@ -131,6 +132,7 @@ test('the reviewed cohesive families retain their baselines with explicit behavi
       expect(repair.originalSha256).toBe(retained.sha256);
       expect(repair.reason).toContain(repair.path.endsWith('/storage.rs')
         ? 'Portable managed storage:'
+        : repair.path.endsWith('/operational_output.rs') ? 'Stable first-run output identity:'
         : repair.path.endsWith('/host.rs') ? 'F04:' : 'F03:');
       expect((await readFile(resolve(root, repair.regression), 'utf8')).length).toBeGreaterThan(0);
     }
