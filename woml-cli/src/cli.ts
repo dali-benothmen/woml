@@ -15,7 +15,7 @@ import {
 } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 
-import packageMetadata from '../package.json' with { type: 'json' };
+import { version as WOML_CLI_VERSION } from '../package.json' with { type: 'json' };
 
 import {
   buildWomlDefinitionPackage,
@@ -359,7 +359,6 @@ const processIo: CliIo = {
   columns: process.stderr.columns,
 };
 
-const WOML_CLI_VERSION = packageMetadata.version;
 const COMPILED_WORKFLOW_CACHE_COMPILER_IDENTITY = `woml-cli@${WOML_CLI_VERSION}:cache-v1:model-v16:definition-package-v11`;
 
 class CliInputError extends Error {

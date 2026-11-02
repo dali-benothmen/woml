@@ -81,5 +81,23 @@
         "regression": "core/woml-engine/tests/correction_authority/mod.rs"
       }
     ]
+  },
+  "testDeclarationRepairs": {
+    "artifacts": [
+      {
+        "name": "fn handle_mock_s3_connection",
+        "originalSha256": "ccf824e2aaa71142cb8b16c33c3451dcfa8b8e5208a9f5e38a32ac139d2a868e",
+        "sha256": "1ed9dc51b00e89a4e77482af5014d95661832afdc236f08a92f87f050abcfb76",
+        "reason": "Windows mock S3 socket: normalize accepted sockets to blocking mode and check bounded read/write timeout setup before synchronous HTTP parsing; production artifact code is unchanged.",
+        "regression": "core/woml-engine/src/artifacts/tests/backends.rs"
+      },
+      {
+        "name": "fn mock_s3_reads_delayed_fragmented_requests_on_an_inherited_nonblocking_socket",
+        "originalSha256": null,
+        "sha256": "195d55f378ff319b9f56cf56144d404c7829fdd23d4d584ba6a65c3bf9234850",
+        "reason": "Windows mock S3 socket: force inherited nonblocking mode on every platform, then verify delayed, fragmented request headers and body receive a complete response.",
+        "regression": "core/woml-engine/src/artifacts/tests/backends.rs"
+      }
+    ]
   }
 }

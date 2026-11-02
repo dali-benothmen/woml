@@ -178,8 +178,33 @@ test('relocated process, artifact, and ingress tests retain assertions, fixtures
       items.map(item => `${item.name}:${item.sha256}`).sort();
     const contract = module === 'webhook' ? featureBridgeBaseline.contracts.webhook
       : capabilityArtifactBaseline.contracts[module];
-    expect(sort(actual)).toEqual(sort(contract.testDeclarations));
+    const expected = [...contract.testDeclarations];
+    const repairs = (compatibilityRepairs.testDeclarationRepairs as Record<string, {
+      name: string; originalSha256: string | null; sha256: string;
+      reason: string; regression: string;
+    }[]>)[module] ?? [];
+    expect(new Set(repairs.map(repair => repair.name)).size).toBe(repairs.length);
+    for (const repair of repairs) {
+      const index = expected.findIndex(declaration => declaration.name === repair.name);
+      expect(repair.sha256).toMatch(/^[a-f0-9]{64}$/);
+      if (repair.originalSha256 === null) {
+        expect(index).toBe(-1);
+        expected.push({ name: repair.name, sha256: repair.sha256 });
+      } else {
+        expect(expected[index]?.sha256).toBe(repair.originalSha256);
+        expected[index] = { name: repair.name, sha256: repair.sha256 };
+      }
+      expect(repair.reason).toContain('Windows mock S3 socket:');
+      expect(await readFile(resolve(root, repair.regression), 'utf8'))
+        .toContain('fn mock_s3_reads_delayed_fragmented_requests_on_an_inherited_nonblocking_socket');
+    }
+    expect(sort(actual)).toEqual(sort(expected));
   }
+  expect(Object.keys(compatibilityRepairs.testDeclarationRepairs)).toEqual(['artifacts']);
+  expect(compatibilityRepairs.testDeclarationRepairs.artifacts.map(repair => repair.name).sort()).toEqual([
+    'fn handle_mock_s3_connection',
+    'fn mock_s3_reads_delayed_fragmented_requests_on_an_inherited_nonblocking_socket',
+  ]);
 });
 
 function orderedDeclarationHash(source: string, name: string): string {

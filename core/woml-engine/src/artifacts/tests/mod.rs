@@ -144,7 +144,15 @@ fn handle_mock_s3_connection(
   failed_deletes: &AtomicUsize,
   failed_inventory_reads: &AtomicUsize,
 ) {
-  let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+  // The listener polls in nonblocking mode, which accepted sockets can inherit
+  // on Windows. This fixture reads complete HTTP messages synchronously.
+  stream.set_nonblocking(false).unwrap();
+  stream
+    .set_read_timeout(Some(Duration::from_secs(2)))
+    .unwrap();
+  stream
+    .set_write_timeout(Some(Duration::from_secs(2)))
+    .unwrap();
   let mut received = Vec::new();
   let mut buffer = [0_u8; 8192];
   let (header_end, content_length) = loop {
