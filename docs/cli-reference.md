@@ -136,7 +136,7 @@ advanced command only for a custom path or an explicit refresh.
 ## Observe and control runs
 
 ```bash
-woml inspect [--state <path>] [--no-color]
+woml inspect [workflow.woml] [--state <path>] [--no-color]
 woml list [--workflow <workflowId>] [--status <status>] \
   [--limit <1-200>] [--state <path>] [--json]
 woml get <runId> [--state <path>] [--json]
@@ -147,6 +147,11 @@ woml stop [--state <path>] [--json]
 ```
 
 - `inspect` is the live, colored terminal view of runtime and run health.
+  It opens the runs dashboard; select a run and press Right to open workflow
+  analytics, then Left to return. Tab or V selects other operational views.
+  An optional `.woml` file filters by its declared workflow ID without starting
+  it. See the [inspector guide](woml-inspector.md) for controls and analytics
+  coverage limits. The selected state store must have an active runtime.
 - `list` filters recent durable runs.
 - `get` shows one redacted run, its steps, attempts, waits, control flow,
   bounded artifact metadata, and Rich Approval review/quorum/audit state.

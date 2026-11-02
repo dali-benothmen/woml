@@ -2,6 +2,64 @@
 
 use super::*;
 
+#[test]
+fn mock_s3_reads_delayed_fragmented_requests_on_an_inherited_nonblocking_socket() {
+  let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+  let address = listener.local_addr().unwrap();
+  let requests = Arc::new(Mutex::new(Vec::new()));
+  let observed = Arc::clone(&requests);
+  let (accepted, ready) = std::sync::mpsc::channel();
+  let server = std::thread::spawn(move || {
+    let (stream, _) = listener.accept().unwrap();
+    // Force the Windows inheritance behavior on every test platform. The
+    // handler must normalize it before trying to read any HTTP bytes.
+    stream.set_nonblocking(true).unwrap();
+    accepted.send(()).unwrap();
+    handle_mock_s3_connection(
+      stream,
+      &Arc::new(Mutex::new(BTreeMap::new())),
+      &observed,
+      &AtomicUsize::new(0),
+      &AtomicUsize::new(0),
+      &AtomicUsize::new(0),
+      &AtomicUsize::new(0),
+      &AtomicUsize::new(0),
+    );
+  });
+  let mut client = TcpStream::connect(address).unwrap();
+  client
+    .set_read_timeout(Some(Duration::from_secs(3)))
+    .unwrap();
+  client
+    .set_write_timeout(Some(Duration::from_secs(3)))
+    .unwrap();
+  ready.recv_timeout(Duration::from_secs(3)).unwrap();
+  let wire = b"PUT /woml-test/tenant-a/store-id HTTP/1.1\r\nHost: localhost\r\nContent-Length: 6\r\n\r\nabc123";
+  let mut failure = None;
+  for part in wire.chunks(13) {
+    std::thread::sleep(Duration::from_millis(10));
+    if let Err(error) = client.write_all(part) {
+      failure = Some(error);
+      break;
+    }
+  }
+  let mut response = String::new();
+  let read = client.read_to_string(&mut response);
+  // Join even when transport assertions fail, so the fixture cannot leave a
+  // background connection thread alive for the next test.
+  server.join().unwrap();
+  assert!(
+    failure.is_none(),
+    "fragmented request write failed: {failure:?}"
+  );
+  read.unwrap();
+  assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+  let requests = requests.lock().unwrap();
+  assert_eq!(requests.len(), 1);
+  assert_eq!(requests[0].method, "PUT");
+  assert_eq!(requests[0].target, "/woml-test/tenant-a/store-id");
+}
+
 fn assert_backend_conformance(backend: &dyn ArtifactBackend, store_id: &str) {
   let connection = Connection::open_in_memory().unwrap();
   initialize_schema(&connection).unwrap();

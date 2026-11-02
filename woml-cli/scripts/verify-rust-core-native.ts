@@ -117,6 +117,27 @@ export async function verifyRustCoreNative(source: string) {
     assert.equal(inspection.status, 'succeeded');
     assert.deepEqual(inspection.result, { message: 'native bridge unchanged' });
     assert.equal(native.hasWomlWorkflowDefinition!(state, workflow.workflowId), true);
+
+    // Do not prime this database with inspection: derive output authority on
+    // its very first execution. Preserve /./ deliberately (join normalizes it)
+    // so the post-creation path spelling changes on every platform, not just
+    // macOS /var aliases or Windows verbatim paths.
+    const firstOutputState = `${directory}/./first-output.sqlite`;
+    assert.equal(await Bun.file(firstOutputState).exists(), false);
+    const firstOutput = json(await promise(native.executeWomlWorkflowDurable!(
+      encoded, definitionHash, '{}', executable, host, 5_000,
+      firstOutputState, '{}', '[]', undefined,
+    )));
+    const firstPage = json(native.readWomlOperationalOutputPage!(
+      firstOutputState, firstOutput.runId, 0, 100,
+    ));
+    assert.equal(firstPage.hasMore, false);
+    assert.ok(Array.isArray(firstPage.records));
+    assert.ok(firstPage.records.some((record: Record<string, unknown>) =>
+      record.kind === 'output' && typeof record.text === 'string'
+        && record.text.trimEnd() === 'RCM13 output'
+    ), 'first-run output must remain readable after state creation');
+
     const waitingWorkflow = compileWoml(parseWoml(`<woml>
       <workflow id="rcm13-outcome" version="1.0.0">
         <triggers><manual id="start" /></triggers>

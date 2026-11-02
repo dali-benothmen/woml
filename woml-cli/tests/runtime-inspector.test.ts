@@ -10,6 +10,8 @@ import {
 } from '../src/runtime-inspector';
 import type { RuntimeDescriptorV1 } from '../src/runtime-control';
 import { openTelemetryInspectorView } from '../src/opentelemetry-runtime';
+import { createInspectorAnalytics } from '../src/runtime-inspector/analytics';
+import { fit, safeText } from '../src/runtime-inspector/terminal';
 
 const snapshot: InspectorSnapshotV1 = {
   profile: 'woml.runtime-operations-snapshot/v1',
@@ -175,6 +177,55 @@ describe('WOML terminal inspector', () => {
     });
     expect(parseInspectArguments(['inspect', '--no-color']).color).toBe(false);
     expect(() => parseInspectArguments(['top'])).toThrow('Usage: woml inspect');
+    expect(parseInspectArguments(['inspect', 'orders.woml', '--state', 'custom.sqlite', '--no-color'])).toMatchObject({ workflowFile: expect.stringContaining('orders.woml'), statePath: expect.stringContaining('custom.sqlite'), color: false });
+    for (const args of [['inspect', 'one.woml', 'two.woml'], ['inspect', 'orders'], ['inspect', '--state'], ['inspect', '--no-color', '--no-color']]) expect(() => parseInspectArguments(args)).toThrow('Usage');
+  });
+
+  test('matches the reference dashboard hierarchy, green header and gray selection', () => {
+    const colored = renderInspectorFrame(snapshot, { ...baseState, view: 'runs' }, 140, 34, true);
+    const plain = safeText(colored.replaceAll('\r\n', '\n')).replaceAll(' ', '');
+    for (const marker of ['WOMLINSPECT', 'Active', 'Queue', 'Waits', 'Failed', 'runtime:healthy', 'Uptime:02:03:04', 'View[Runs▾]',
+      'STATUS', 'WORKFLOW', 'RUNID', 'WORK', 'DURATION', 'Selected:run_running', 'Execution:order-processing→chargeCustomer[running]', '→Analytics', '←BackToList']) expect(plain).toContain(marker);
+    expect(colored).toContain('\x1b[30;48;2;0;204;51m');
+    expect(colored).toContain('\x1b[30;48;2;166;166;166m');
+    expect(colored).toContain('\x1b[K');
+  });
+
+  test('renders real analytics with all reference sections and honest partial coverage', async () => {
+    const provider = createInspectorAnalytics({ workflows: [{ workflowId: 'order-processing', name: 'Order processing', file: 'orders.woml', triggerTypes: ['manual'] }],
+      listRuns: () => ({ profile: 'woml.run-list/v1', runs: [] }), inspectRun: () => { throw new Error('not called'); } });
+    const analytics = await provider.get('order-processing');
+    const frame = renderInspectorFrame(snapshot, { ...baseState, analyticsWorkflowId: 'order-processing', analytics }, 140, 44, false);
+    for (const marker of ['WORKFLOW / ANALYTICS', 'Last 24 hours · UTC', 'Order processing', 'orders.woml', 'Finished runs', 'Success rate', 'Avg. duration', 'Retried runs', 'RUN ACTIVITY', '4-hour intervals', 'STEP PERFORMANCE', 'RECENT FAILURES', 'Median', 'Longest', 'Back To List', 'latest 0 finished runs']) expect(frame).toContain(marker);
+    expect(frame).not.toContain('Sample data');
+    expect(frame).not.toContain('NaN');
+    expect(frame).not.toContain('100.0%');
+  });
+
+  test('keeps every rendered line within the physical terminal and sanitizes hostile workflow text', () => {
+    const hostile = { ...snapshot, runs: snapshot.runs.map(run => ({ ...run, workflowId: '\x1b[31m工作流👩‍💻\x1b]52;c;PRIVATE_CLIPBOARD\x07' })) };
+    for (const [width, height] of [[140, 34], [100, 24], [80, 24], [40, 12], [20, 8], [1, 1]]) {
+      for (const color of [true, false]) {
+        const frame = renderInspectorFrame(hostile, { ...baseState, view: 'runs' }, width!, height!, color);
+        const lines = frame.split('\r\n');
+        expect(lines.length).toBeLessThanOrEqual(height!);
+        for (const line of lines) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(width!);
+        expect(frame).not.toContain('PRIVATE_CLIPBOARD');
+        if (!color) expect(frame).not.toMatch(/\x1b\[[0-9;]*m/);
+      }
+    }
+    expect(Bun.stringWidth(fit('雪👩‍💻café', 6))).toBe(6);
+  });
+
+  test('keeps selection visible when scrolling and filters the file workflow by exact ID', () => {
+    const many = { ...snapshot, runs: Array.from({ length: 100 }, (_, i) => ({ ...snapshot.runs[0]!, runId: `run_${i}` })) };
+    const frame = renderInspectorFrame(many, { ...baseState, view: 'runs', selected: 99 }, 100, 24, false);
+    expect(frame).toContain('Selected: run_99');
+    expect(frame).not.toContain('run_0 ');
+    expect(frame).toContain('┃');
+    const scoped = renderInspectorFrame(snapshot, { ...baseState, view: 'runs', workflowId: 'order-processing' }, 140, 30, false);
+    expect(scoped).not.toContain('inventory-sync');
+    expect(scoped).toContain('Runs: 3');
   });
 
   test('renders every operations view in narrow and normal terminals', () => {
@@ -294,6 +345,67 @@ describe('WOML terminal inspector', () => {
     expect(terminal.rawModes).toEqual([true, false]);
     expect(terminal.writes.at(0)).toContain('\u001b[?1049h');
     expect(terminal.writes.at(-1)).toContain('\u001b[?1049l');
+  });
+
+  test('opens analytics lazily, scrolls, returns to selection, and keeps view selection accessible', async () => {
+    const terminal = new VirtualTerminal();
+    const provider = createInspectorAnalytics({ workflows: [{ workflowId: 'order-processing', triggerTypes: ['manual'] }],
+      listRuns: () => ({ profile: 'woml.run-list/v1', runs: [] }), inspectRun: () => { throw new Error('not called'); } });
+    const analytics = await provider.get('order-processing');
+    let reads = 0;
+    const base = inspectorFetch();
+    const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('/v1/inspector/analytics')) { reads++; expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${descriptor.capability}`); return Response.json(analytics); }
+      return base(input, init);
+    }) as typeof fetch;
+    const running = runRuntimeInspector({ args: { statePath: '/tmp/inspect/state.sqlite', color: false }, terminal, fetcher, readDescriptor: async () => descriptor });
+    await eventually(() => terminal.rawModes.includes(true));
+    expect(reads).toBe(0);
+    terminal.input('\x1b[C');
+    await eventually(() => terminal.writes.some(write => write.includes('Finished runs')));
+    terminal.input('\x1b[6~');
+    await eventually(() => terminal.writes.at(-1)?.includes('Step/retry/failure details') === true);
+    expect(reads).toBe(1);
+    terminal.input('\x1b[D');
+    await eventually(() => terminal.writes.at(-1)?.includes('Selected: run_running') === true);
+    terminal.input('v');
+    await eventually(() => terminal.writes.at(-1)?.includes('7 Runtime') === true);
+    terminal.input('7');
+    await eventually(() => terminal.writes.at(-1)?.includes('COMPONENT') === true);
+    terminal.input('q');
+    expect(await running).toBe(0);
+  });
+
+  test('shows unavailable analytics without crashing and permits Ctrl+C while searching', async () => {
+    const terminal = new VirtualTerminal();
+    const running = runRuntimeInspector({ args: { statePath: '/tmp/inspect/state.sqlite', color: false }, terminal, fetcher: inspectorFetch(), readDescriptor: async () => descriptor });
+    await eventually(() => terminal.rawModes.includes(true));
+    terminal.input('\x1b[C');
+    await eventually(() => terminal.writes.some(write => write.includes('Analytics unavailable')));
+    terminal.input('\x1b[D'); terminal.input('/'); terminal.input('\x03');
+    expect(await running).toBe(0);
+    expect(terminal.rawModes).toEqual([true, false]);
+  });
+
+  test('does not apply a late analytics response after returning to the list', async () => {
+    const terminal = new VirtualTerminal();
+    let release!: (response: Response) => void;
+    let requested = false;
+    const base = inspectorFetch();
+    const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('/v1/inspector/analytics')) {
+        requested = true;
+        return await new Promise<Response>(resolve => { release = resolve; });
+      }
+      return base(input, init);
+    }) as typeof fetch;
+    const running = runRuntimeInspector({ args: { statePath: '/tmp/inspect/state.sqlite', color: false }, terminal, fetcher, readDescriptor: async () => descriptor });
+    await eventually(() => terminal.rawModes.includes(true));
+    terminal.input('\x1b[C'); await eventually(() => requested);
+    terminal.input('\x1b[D'); release(Response.json({ invalid: true }));
+    await eventually(() => terminal.writes.at(-1)?.includes('Selected: run_running') === true);
+    expect(terminal.writes.at(-1)).not.toContain('Analytics unavailable');
+    terminal.input('q'); expect(await running).toBe(0);
   });
 
   test('rejects non-TTY use with a scriptable alternative and does not connect', async () => {

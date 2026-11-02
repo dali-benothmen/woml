@@ -48,6 +48,13 @@
       "sha256": "fe2eba7f7b8f1d719d709f4b2f09e0b68045e1c4fb1740800b8e79895547fbf3",
       "reason": "Portable managed storage: preserve file-content syncing before atomic publication and Unix directory fsync, while avoiding unsupported regular-file directory opens on Windows, matching the local artifact backend.",
       "regression": "core/woml-engine/src/storage.rs"
+    },
+    {
+      "path": "core/woml-engine/src/operational_output.rs",
+      "originalSha256": "c57ad22d3f11cbd79e2c4dc7d46eb70cb7bf5fa45619ccfd0b0a39d12c6deb84",
+      "sha256": "2a27510150263d594f1171aae5d9e4435ea1a3b2da16efd6b78ba4c58fce6ac9",
+      "reason": "Stable first-run output identity: canonicalize the existing state parent before first state-file creation so later replay derives the same deployment ID on aliased and Windows verbatim paths; existing canonical identities and mismatch rejection remain unchanged.",
+      "regression": "core/woml-engine/tests/operational_output_store.rs"
     }
   ],
   "declarationRepairs": {
@@ -79,6 +86,24 @@
         "sha256": "b0d2ae68e2d052df0a54cfb7bcf28215020c813e94311a27b3522f5f13753e91",
         "reason": "F02: recognize corrective ownership for native-fetch observations while keeping the existing policy-enforced fetch prohibition.",
         "regression": "core/woml-engine/tests/correction_authority/mod.rs"
+      }
+    ]
+  },
+  "testDeclarationRepairs": {
+    "artifacts": [
+      {
+        "name": "fn handle_mock_s3_connection",
+        "originalSha256": "ccf824e2aaa71142cb8b16c33c3451dcfa8b8e5208a9f5e38a32ac139d2a868e",
+        "sha256": "1ed9dc51b00e89a4e77482af5014d95661832afdc236f08a92f87f050abcfb76",
+        "reason": "Windows mock S3 socket: normalize accepted sockets to blocking mode and check bounded read/write timeout setup before synchronous HTTP parsing; production artifact code is unchanged.",
+        "regression": "core/woml-engine/src/artifacts/tests/backends.rs"
+      },
+      {
+        "name": "fn mock_s3_reads_delayed_fragmented_requests_on_an_inherited_nonblocking_socket",
+        "originalSha256": null,
+        "sha256": "195d55f378ff319b9f56cf56144d404c7829fdd23d4d584ba6a65c3bf9234850",
+        "reason": "Windows mock S3 socket: force inherited nonblocking mode on every platform, then verify delayed, fragmented request headers and body receive a complete response.",
+        "regression": "core/woml-engine/src/artifacts/tests/backends.rs"
       }
     ]
   }

@@ -1,0 +1,35 @@
+<woml>
+  <workflow
+    id="send-welcome"
+    name="Send welcome"
+    description="Simulate a slow welcome task; concurrency one makes extra runs queue."
+    version="1.0.0"
+  >
+    <config concurrency="1" timeout="2m" queue="inspector-demo" />
+    <triggers>
+      <webhook id="welcome" path="/demo/welcome" method="POST" auth="none">
+        <schema>{ "type": "object", "additionalProperties": false }</schema>
+      </webhook>
+    </triggers>
+    <steps>
+      <step id="prepareWelcome" name="Prepare welcome">
+        <script>
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          return { prepared: true };
+        </script>
+      </step>
+      <step id="simulateDelivery" name="Simulate delivery">
+        <script>
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          return { delivered: true, realMessageSent: false };
+        </script>
+      </step>
+      <step id="recordDelivery" name="Record delivery">
+        <script>
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          return { status: "complete", realMessageSent: false };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

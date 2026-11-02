@@ -11,6 +11,12 @@ truncation, artifact handoff, and stream closure. See
 [Streaming Output and Progress](woml-streaming-output-and-progress.md) for its
 cursor, retention, filtering, and Ctrl+C behavior.
 
+The inspector opens a runs dashboard with status meters, a selectable run
+table, and a workflow analytics screen. See the [terminal inspector
+guide](woml-inspector.md) for navigation and the bounded, cached analytics
+coverage. This does not change Runtime Operations Snapshot v1 or the metrics
+contracts.
+
 ## What operators can observe
 
 Runtime Operations Snapshot v1 combines the durable recent-run projection with
@@ -56,6 +62,7 @@ runtime descriptor:
 
 - `GET /v1/health` — detailed component health;
 - `GET /v1/snapshot` — Runtime Operations Snapshot v1;
+- `GET /v1/inspector/analytics?workflow=<id>` — read-only Inspector Analytics v1;
 - `GET /v1/stream?after=<sequence>` — Runtime Operations Stream v1 over SSE;
 - `GET /v1/metrics` — Runtime Metrics v1 JSON records;
 - `GET /metrics` — Prometheus text exposition.

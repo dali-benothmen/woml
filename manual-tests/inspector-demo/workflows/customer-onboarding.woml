@@ -1,0 +1,42 @@
+<woml>
+  <workflow
+    id="customer-onboarding"
+    name="Customer onboarding"
+    description="Create an account, provision its workspace, and record the onboarding outcome."
+    version="1.0.0"
+  >
+    <triggers>
+      <webhook id="newCustomer" path="/demo/onboarding" method="POST" auth="none">
+        <schema>
+          {
+            "type": "object",
+            "properties": { "fail": { "type": "boolean" } },
+            "additionalProperties": false
+          }
+        </schema>
+      </webhook>
+    </triggers>
+    <steps>
+      <step id="createAccount" name="Create account">
+        <script>
+          await new Promise(resolve => setTimeout(resolve, 200));
+          return { created: true };
+        </script>
+      </step>
+      <step id="provisionWorkspace" name="Provision workspace">
+        <script>
+          await new Promise(resolve => setTimeout(resolve, 500));
+          if (context.payload.fail) {
+            throw new Error("Intentional demo failure: no real workspace was changed.");
+          }
+          return { provisioned: true };
+        </script>
+      </step>
+      <step id="recordOnboarding" name="Record onboarding">
+        <script>
+          return { status: "onboarded", realInfrastructureChanged: false };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

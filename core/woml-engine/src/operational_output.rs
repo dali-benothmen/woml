@@ -1440,6 +1440,18 @@ pub fn operational_output_store_for_state(
   }
   let identity_source = state_path
     .canonicalize()
+    // Runtime attachment precedes first state-file creation. Canonicalize its
+    // existing parent now so later readers hash the same identity: macOS temp
+    // aliases and Windows verbatim prefixes otherwise change after creation.
+    // Keep the existing-file identity and deployment-mismatch gate unchanged.
+    .or_else(|_| {
+      state_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .canonicalize()
+        .map(|parent| parent.join(file_name))
+    })
     .unwrap_or_else(|_| state_path.to_path_buf());
   let digest = Sha256::digest(identity_source.to_string_lossy().as_bytes());
   Ok(LazyOperationalOutputStore::new(

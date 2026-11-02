@@ -15,7 +15,7 @@ import {
 } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 
-import packageMetadata from '../package.json' with { type: 'json' };
+import { version as WOML_CLI_VERSION } from '../package.json' with { type: 'json' };
 
 import {
   buildWomlDefinitionPackage,
@@ -240,6 +240,7 @@ import {
   type RuntimeControlHandle,
 } from './runtime-control';
 import { RuntimeObservability } from './runtime-observability';
+import { createInspectorAnalytics } from './runtime-inspector/analytics';
 import {
   renderOperationalRecord,
   RuntimeOperationalOutput,
@@ -358,7 +359,6 @@ const processIo: CliIo = {
   columns: process.stderr.columns,
 };
 
-const WOML_CLI_VERSION = packageMetadata.version;
 const COMPILED_WORKFLOW_CACHE_COMPILER_IDENTITY = `woml-cli@${WOML_CLI_VERSION}:cache-v1:model-v16:definition-package-v11`;
 
 class CliInputError extends Error {
@@ -7938,6 +7938,17 @@ async function activateWorkflows(
             host: args.adminHost,
             port: args.adminPort,
             observability,
+            inspectorAnalytics: createInspectorAnalytics({
+              workflows: productionSources.map(source => ({
+                workflowId: source.workflow.workflowId,
+                name: source.workflow.metadata?.name,
+                description: source.workflow.metadata?.description,
+                file: basename(source.filePath),
+                triggerTypes: [...new Set(source.workflow.triggers.map(trigger => observedTriggerType(trigger.handler)).filter((type): type is NonNullable<typeof type> => type !== undefined))],
+              })),
+              listRuns: workflowId => listRunsWithRust(args.statePath, { workflowId, limit: 200 }, { nativeCorePath: dependencies.nativeCorePath }),
+              inspectRun: runId => inspectRunPresentationWithRust(args.statePath, runId, { nativeCorePath: dependencies.nativeCorePath }),
+            }),
             output: operationalOutput,
             healthEnabled: args.observabilityHealth,
             metricsEnabled: args.observabilityMetrics,
@@ -9200,6 +9211,20 @@ async function runCliUnprofiled(
     } catch {
       io.stderr(`${inspectUsage}\n`);
       return 2;
+    }
+    if (parsed.workflowFile !== undefined) {
+      try {
+        // Read markup only: inspection must not import modules, activate a
+        // workflow, refresh generated bindings, or change project authority.
+        const document = parseWoml(await readWorkflow(parsed.workflowFile), { file: parsed.workflowFile });
+        const inspected = inspectWomlDocument(document);
+        const workflowId = inspected.definition.attributes.id?.value;
+        if (inspected.kind !== 'workflow' || !workflowId) throw new Error('Expected a workflow ID.');
+        parsed = { ...parsed, workflowId };
+      } catch {
+        io.stderr('WOML inspect could not read the workflow ID from the selected file. No workflow was started.\n');
+        return 2;
+      }
     }
     return await runRuntimeInspector({
       args: parsed,

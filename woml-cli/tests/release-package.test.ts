@@ -62,6 +62,19 @@ describe('WOML release package', () => {
 
     const cli = await readFile(resolve(directory, 'dist/cli.js'), 'utf8');
     expect(cli.startsWith('#!/usr/bin/env bun')).toBe(true);
+    const sourceManifest = await Bun.file(resolve(cliRoot, 'package.json')).json();
+    // Import only the version field, not the entire development manifest.
+    // Otherwise every test/release command is shipped in the runtime bundle.
+    expect(cli).not.toContain(sourceManifest.scripts['test:runtime-inspector']);
+    expect(cli).not.toContain(sourceManifest.scripts.prepublishOnly);
+    const version = Bun.spawnSync({
+      cmd: [process.execPath, resolve(directory, 'dist/cli.js'), '--version'],
+      cwd: directory,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(version.exitCode, version.stderr.toString()).toBe(0);
+    expect(version.stdout.toString()).toBe(`woml ${sourceManifest.version}\n`);
 
     const projectDirectory = resolve(directory, 'clean-project');
     const initialized = Bun.spawnSync({

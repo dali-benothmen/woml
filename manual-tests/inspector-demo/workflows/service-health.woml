@@ -1,0 +1,34 @@
+<woml>
+  <workflow
+    id="service-health"
+    name="Service health"
+    description="Simulate two transient failures, retry, and recover on the third attempt."
+    version="1.0.0"
+  >
+    <triggers>
+      <webhook id="checkHealth" path="/demo/health" method="POST" auth="none">
+        <schema>{ "type": "object", "additionalProperties": false }</schema>
+      </webhook>
+    </triggers>
+    <steps>
+      <step
+        id="checkService"
+        name="Check service"
+        retry="3"
+        retry-delay="4s"
+      >
+        <script>
+          if (attempt.number < 3) {
+            throw new Error("Intentional transient demo failure.");
+          }
+          return { healthy: true, attempts: attempt.number };
+        </script>
+      </step>
+      <step id="publishReport" name="Publish health report">
+        <script>
+          return { status: "healthy", attempts: context.steps.checkService.attempts };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>
