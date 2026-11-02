@@ -319,3 +319,39 @@ timings available in failing CI jobs. The method is identical on Linux,
 macOS, and Windows. More samples improve measurement resolution; they do not
 prove that an observed Windows overrun was noise or that runtime performance
 has improved. Native platform validation remains the responsibility of CI.
+
+## Streamed-output performance measurement
+
+The output benchmark is independent of the warm activation gate. It compares
+one-step quiet execution with the same script emitting 20 console records.
+Each execution uses a fresh durable database; noisy execution also pays for
+lazy output-store initialization, record persistence, and stream closure.
+Script-host isolation and SQLite durability settings remain unchanged.
+
+Both variants receive two fixed warm-up pairs, followed by 12 measured pairs.
+Pairs alternate quiet/noisy and noisy/quiet, with six measured pairs in each
+order. All calls run sequentially with distinct store paths, including warm-ups.
+This replaces the four-sample, always-quiet-first comparison; it does not
+reuse the activation database or preinitialize output storage.
+
+For each variant, the median averages the sixth and seventh sorted timings.
+The gate remains the ratio of those medians:
+`max(0, (noisyMedian - quietMedian) / quietMedian * 100)`.
+The previous calculation selected only the lower middle timing for its even
+cohort. The frozen limit is still 200 percent, meaning noisy execution may take
+at most three times the quiet median. This is not a limit on individual log
+write latency, and a percentage can increase if the quiet baseline gets faster.
+
+Before enforcing the limit, stderr diagnostics under
+`woml.combined-output-diagnostics/v1` retain both warm-up pairs, all measured
+pairs and their order, each variant's summary, the overhead, and its limit.
+No measured samples are removed or retried. Sustained overhead above the
+limit still fails; the harness does not classify a failing ratio as runner
+noise. Outside the timed execution boundary, every noisy run must replay all
+20 ordered script records followed by a successful stream closure. Missing,
+truncated, or incomplete output fails rather than yielding a faster result.
+
+These changes improve comparison and diagnosis, not production performance.
+Linux measurements cannot certify Windows performance; if the Windows median
+still exceeds the budget, its retained absolute timings must guide further
+investigation rather than raising the threshold or selecting a passing cohort.

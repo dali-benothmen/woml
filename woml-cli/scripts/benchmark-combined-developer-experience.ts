@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { createHash, randomUUID } from 'node:crypto';
+import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -9,12 +10,14 @@ import { compileWoml, parseWoml } from '@woml/compiler';
 
 import { publicJavaScriptFiles } from './release-contract';
 import { measureWarmActivation } from './combined-activation-measurement';
+import { measureStreamedOutput } from './combined-output-measurement';
 import { runCli } from '../src/cli';
 import { localNativeBinaryName } from '../src/native-platform';
 import { resolveWomlProject } from '../src/project';
 import {
   executeWorkflowWithRustDurable,
   prepareRemoteAttemptWithRust,
+  readOperationalOutputPageWithRust,
 } from '../src/rust-executor';
 
 const root = resolve(import.meta.dir, '../..');
@@ -167,26 +170,52 @@ try {
     budgets.runtime.localWarmActivationP95MillisecondsMax
   );
 
-  const quietSamples: number[] = [];
-  const noisySamples: number[] = [];
-  for (let index = 0; index < 4; index += 1) {
-    quietSamples.push(await duration(() => executeWorkflowWithRustDurable(
-      quiet,
-      join(temporary, `quiet-${index}.sqlite`),
+  const output = await measureStreamedOutput(async (variant, { phase, index }) => {
+    // Every call, including warm-ups, owns a fresh store. Never precreate the
+    // noisy output database: its lazy initialization remains part of the cost.
+    const state = join(temporary, `output-${phase}-${variant}-${index}.sqlite`);
+    const started = performance.now();
+    const execution = await executeWorkflowWithRustDurable(
+      variant === 'quiet' ? quiet : noisy,
+      state,
       { nativeCorePath, scriptHostPath }
-    )));
-    noisySamples.push(await duration(() => executeWorkflowWithRustDurable(
-      noisy,
-      join(temporary, `noisy-${index}.sqlite`),
-      { nativeCorePath, scriptHostPath }
-    )));
-  }
-  const quietMedian = percentile(quietSamples, 0.5);
-  const noisyMedian = percentile(noisySamples, 0.5);
-  const streamedOutputOverhead = Math.max(
-    0,
-    ((noisyMedian - quietMedian) / quietMedian) * 100
-  );
+    );
+    const elapsed = performance.now() - started;
+    assert.deepEqual(execution.result, { ok: true });
+    if (variant === 'noisy') {
+      // Correctness checks are outside the timed execution boundary. Fewer
+      // persisted records must never make the performance gate look faster.
+      const page = readOperationalOutputPageWithRust(
+        state, { runId: execution.runId, limit: 100 }, { nativeCorePath }
+      );
+      assert.equal(page.hasMore, false);
+      assert.equal(page.gap, undefined);
+      assert.equal(page.records.length, 21);
+      for (let recordIndex = 0; recordIndex < 20; recordIndex += 1) {
+        const record = page.records[recordIndex]!;
+        assert.equal(record.kind, 'output');
+        assert.ok(record.kind === 'output');
+        assert.equal(record.source, 'script');
+        assert.equal(record.text.trimEnd(), `progress-${recordIndex}`);
+      }
+      assert.equal(page.records[20]!.kind, 'closed');
+      assert.ok(page.records[20]!.kind === 'closed');
+      assert.equal(page.records[20]!.status, 'succeeded');
+    }
+    return elapsed;
+  });
+  const streamedOutputOverhead = output.overheadPercent;
+  console.error(JSON.stringify({
+    profile: 'woml.combined-output-diagnostics/v1',
+    boundary: 'durable-execution-fresh-store',
+    warmups: output.warmups,
+    pairs: output.pairs,
+    quietSummary: output.quietSummary,
+    noisySummary: output.noisySummary,
+    verifiedRecordsPerNoisyRun: 20,
+    overheadPercent: streamedOutputOverhead,
+    maximumAllowedPercent: budgets.runtime.streamedOutputOverheadPercentMax,
+  }, null, 2));
   requireMaximum(
     'Streamed-output median overhead percent',
     streamedOutputOverhead,
