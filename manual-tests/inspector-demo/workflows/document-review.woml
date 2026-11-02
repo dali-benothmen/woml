@@ -1,0 +1,27 @@
+<woml>
+  <workflow
+    id="document-review"
+    name="Document review"
+    description="Wait durably for two minutes, then complete without holding a script worker."
+    version="1.0.0"
+  >
+    <triggers>
+      <webhook id="review" path="/demo/review" method="POST" auth="none">
+        <schema>{ "type": "object", "additionalProperties": false }</schema>
+      </webhook>
+    </triggers>
+    <steps>
+      <step id="prepareDocument" name="Prepare document">
+        <script>
+          return { ready: true };
+        </script>
+      </step>
+      <wait id="reviewWindow" name="Wait for review window" duration="2m" />
+      <step id="completeReview" name="Complete review">
+        <script>
+          return { status: "reviewed", realDocumentChanged: false };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

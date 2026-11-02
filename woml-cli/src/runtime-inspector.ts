@@ -12,9 +12,12 @@ import {
   type OperationsStreamEventV1,
 } from './operations-stream';
 import type { OpenTelemetryInspectorView } from './opentelemetry-runtime';
+import { decodeInspectorAnalytics, type InspectorAnalyticsV1 } from './runtime-inspector/analytics';
+import { analyticsContent, INSPECTOR_VIEWS, renderAnalyticsDashboard, renderRunsDashboard, visibleInspectorRuns } from './runtime-inspector/dashboard';
+import { elapsed as duration, safeText } from './runtime-inspector/terminal';
 
 export const inspectUsage =
-  'Usage: woml inspect [--state <path>] [--no-color]';
+  'Usage: woml inspect [workflow.woml] [--state <path>] [--no-color]';
 
 export type InspectorView =
   | 'overview'
@@ -107,6 +110,8 @@ export interface InspectorTerminal {
 export interface InspectorArguments {
   readonly statePath: string;
   readonly color: boolean;
+  readonly workflowFile?: string;
+  readonly workflowId?: string;
 }
 
 export interface InspectorRenderState {
@@ -120,17 +125,15 @@ export interface InspectorRenderState {
   readonly stale: boolean;
   readonly connectionMessage?: string;
   readonly recentEvents: readonly InspectorStreamEventV1[];
+  readonly workflowId?: string;
+  readonly viewMenu?: number;
+  readonly analyticsWorkflowId?: string;
+  readonly analytics?: InspectorAnalyticsV1;
+  readonly analyticsError?: string;
+  readonly analyticsScroll?: number;
 }
 
-const VIEWS: readonly InspectorView[] = [
-  'overview',
-  'runs',
-  'triggers',
-  'approvals',
-  'queues',
-  'failures',
-  'runtime',
-];
+const VIEWS: readonly InspectorView[] = INSPECTOR_VIEWS;
 const CSI = '\u001b[';
 const RESET = `${CSI}0m`;
 const COLORS = {
@@ -180,6 +183,7 @@ export function parseInspectArguments(args: readonly string[]): InspectorArgumen
   if (args[0] !== 'inspect') throw new Error(inspectUsage);
   let statePath = resolve('.woml/state.sqlite');
   let color = !('NO_COLOR' in process.env);
+  let workflowFile: string | undefined;
   const seen = new Set<string>();
   for (let index = 1; index < args.length; index += 1) {
     const option = args[index]!;
@@ -189,6 +193,10 @@ export function parseInspectArguments(args: readonly string[]): InspectorArgumen
       color = false;
       continue;
     }
+    if (!option.startsWith('-') && option.endsWith('.woml') && workflowFile === undefined) {
+      workflowFile = resolve(option);
+      continue;
+    }
     if (option !== '--state') throw new Error(inspectUsage);
     const value = args[++index];
     if (value === undefined || value.length === 0 || value.startsWith('--')) {
@@ -196,7 +204,7 @@ export function parseInspectArguments(args: readonly string[]): InspectorArgumen
     }
     statePath = resolve(value);
   }
-  return { statePath, color };
+  return { statePath, color, ...(workflowFile === undefined ? {} : { workflowFile }) };
 }
 
 function color(text: string, name: keyof typeof COLORS, enabled: boolean): string {
@@ -205,7 +213,7 @@ function color(text: string, name: keyof typeof COLORS, enabled: boolean): strin
 
 function truncate(value: string, width: number): string {
   if (width <= 0) return '';
-  const points = [...value.replace(/[\u0000-\u001f\u007f]/g, ' ')];
+  const points = [...safeText(value)];
   if (points.length <= width) return points.join('');
   if (width === 1) return '…';
   return `${points.slice(0, width - 1).join('')}…`;
@@ -214,14 +222,6 @@ function truncate(value: string, width: number): string {
 function pad(value: string, width: number): string {
   const safe = truncate(value, width);
   return safe + ' '.repeat(Math.max(0, width - [...safe].length));
-}
-
-function duration(milliseconds: number): string {
-  if (milliseconds < 1000) return `${Math.round(milliseconds)}ms`;
-  if (milliseconds < 60_000) return `${(milliseconds / 1000).toFixed(1)}s`;
-  if (milliseconds < 3_600_000) return `${Math.floor(milliseconds / 60_000)}m`;
-  if (milliseconds < 86_400_000) return `${Math.floor(milliseconds / 3_600_000)}h`;
-  return `${Math.floor(milliseconds / 86_400_000)}d`;
 }
 
 function statusColor(status: string): keyof typeof COLORS {
@@ -234,14 +234,7 @@ function statusColor(status: string): keyof typeof COLORS {
 }
 
 function selectedRuns(snapshot: InspectorSnapshotV1, state: InspectorRenderState): readonly InspectorRunV1[] {
-  let runs = snapshot.runs;
-  if (state.view === 'approvals') runs = runs.filter(run => run.status === 'waiting');
-  if (state.view === 'queues') runs = runs.filter(run => ['queued', 'retrying'].includes(run.status));
-  if (state.view === 'failures') runs = runs.filter(run => run.status === 'failed');
-  const query = state.filter.toLocaleLowerCase();
-  return query.length === 0
-    ? runs
-    : runs.filter(run => `${run.workflowId} ${run.runId} ${run.status}`.toLocaleLowerCase().includes(query));
+  return visibleInspectorRuns(snapshot, state);
 }
 
 function runLines(
@@ -397,6 +390,8 @@ function helpLines(): { lines: string[]; colors: (keyof typeof COLORS | undefine
       'Tab / Shift+Tab   change view',
       '1–7               open a view directly',
       '↑ / ↓             select a run',
+      '→ / ←             workflow analytics / back to list',
+      'v                 open view selector',
       'Enter             expand selected run',
       '/                 search workflows and runs',
       'l                 show recent live events',
@@ -430,6 +425,8 @@ export function renderInspectorFrame(
   rows: number,
   colorsEnabled: boolean
 ): string {
+  if (state.analyticsWorkflowId !== undefined && !state.showHelp) return renderAnalyticsDashboard(state, columns, rows, colorsEnabled);
+  if ((state.view === 'runs' || state.viewMenu !== undefined) && !state.showHelp) return renderRunsDashboard(snapshot, state, columns, rows, colorsEnabled);
   const width = Math.max(40, columns);
   const height = Math.max(12, rows);
   const active = snapshot.runs.filter(run => ['running', 'retrying'].includes(run.status)).length;
@@ -546,13 +543,17 @@ export async function runRuntimeInspector(options: {
   try {
     descriptor = await readDescriptor(descriptorFile);
     snapshot = await fetchSnapshot(descriptor, fetcher);
+    if (options.args.workflowId !== undefined && !snapshot.workflows.some(workflow => workflow.workflowId === options.args.workflowId)) {
+      throw new Error('The selected workflow is not loaded in this runtime.');
+    }
   } catch (error) {
     terminal.write(`WOML inspect could not connect to an active runtime. Start it with "woml run <workflow.woml>" or pass its state file with --state.\n${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
 
   let state: InspectorRenderState = {
-    view: 'overview', selected: 0, filter: '', expanded: false,
+    view: 'runs', selected: 0, filter: '', expanded: false,
+    workflowId: options.args.workflowId,
     showHelp: false, stale: false, recentEvents: [],
   };
   let closed = false;
@@ -564,6 +565,39 @@ export async function runRuntimeInspector(options: {
   let resolveDone!: () => void;
   const done = new Promise<void>(resolveDoneValue => { resolveDone = resolveDoneValue; });
   const streamAbort = new AbortController();
+  let analyticsAbort: AbortController | undefined;
+  let analyticsPending = false;
+  let analyticsSelection = 0;
+  let lastAnalyticsRead = 0;
+  const refreshAnalytics = async (force = false): Promise<void> => {
+    const workflowId = state.analyticsWorkflowId;
+    if (closed || workflowId === undefined || analyticsPending || (!force && Date.now() - lastAnalyticsRead < 15_000)) return;
+    analyticsPending = true;
+    const selection = analyticsSelection;
+    lastAnalyticsRead = Date.now();
+    const controller = new AbortController();
+    analyticsAbort = controller;
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const current = await readDescriptor(descriptorFile);
+      const response = await fetcher(`${current.adminUrl}/v1/inspector/analytics?workflow=${encodeURIComponent(workflowId)}`, {
+        headers: { authorization: `Bearer ${current.capability}` }, signal: controller.signal,
+      });
+      if (!response.ok) throw new Error('unavailable');
+      const body = await response.text();
+      if (body.length > 256 * 1024) throw new Error('oversized');
+      const analytics = decodeInspectorAnalytics(JSON.parse(body), workflowId);
+      if (!closed && !controller.signal.aborted && state.analyticsWorkflowId === workflowId) state = { ...state, analytics, analyticsError: undefined };
+    } catch {
+      if (!closed && state.analyticsWorkflowId === workflowId && analyticsAbort === controller) state = { ...state, analyticsError: 'Analytics unavailable. R retries; ← back. Restart older runtimes after upgrading.' };
+    } finally {
+      clearTimeout(timer);
+      if (analyticsAbort === controller) analyticsAbort = undefined;
+      analyticsPending = false;
+      if (!closed && selection !== analyticsSelection) void refreshAnalytics(true);
+      if (!closed) render();
+    }
+  };
   const renderNow = (): void => {
     try {
       terminal.write(renderInspectorFrame(snapshot, state, terminal.columns, terminal.rows, options.args.color));
@@ -608,6 +642,7 @@ export async function runRuntimeInspector(options: {
     if (closed) return;
     closed = true;
     streamAbort.abort();
+    analyticsAbort?.abort();
     resolveDone();
   };
   const moveSelection = (delta: number): void => {
@@ -615,6 +650,8 @@ export async function runRuntimeInspector(options: {
     state = { ...state, selected: Math.max(0, Math.min(Math.max(0, count - 1), state.selected + delta)) };
   };
   const input = async (text: string): Promise<void> => {
+    // Quit remains available while searching or confirming an operation.
+    if (text === '\u0003') { quit(); return; }
     if (state.searchInput !== undefined) {
       if (text === '\r' || text === '\n') state = { ...state, filter: state.searchInput, searchInput: undefined, selected: 0 };
       else if (text === '\u001b') state = { ...state, searchInput: undefined };
@@ -643,7 +680,37 @@ export async function runRuntimeInspector(options: {
       }
       return;
     }
-    if (text === 'q' || text === '\u0003') quit();
+    if (state.viewMenu !== undefined) {
+      if (text === 'q' || text === 'Q') quit();
+      else if (text === '\u001b' || text === 'v' || text === 'V') state = { ...state, viewMenu: undefined };
+      else if (text === '\u001b[A' || text === '\u001b[B') state = { ...state, viewMenu: (state.viewMenu + (text === '\u001b[A' ? VIEWS.length - 1 : 1)) % VIEWS.length };
+      else if (text === '\r' || text === '\n' || /^[1-7]$/.test(text)) state = { ...state, view: VIEWS[/^[1-7]$/.test(text) ? Number(text) - 1 : state.viewMenu]!, viewMenu: undefined, selected: 0, expanded: false };
+      render(); return;
+    }
+    if (state.analyticsWorkflowId !== undefined && !state.showHelp) {
+      if (text === 'q' || text === 'Q') quit();
+      else if (text === '\u001b[D' || text === '\u001b') {
+        analyticsSelection += 1;
+        analyticsAbort?.abort();
+        state = { ...state, analyticsWorkflowId: undefined, analytics: undefined, analyticsError: undefined, analyticsScroll: 0 };
+      } else if (text === '\u001b[A' || text === '\u001b[B' || text === '\u001b[5~' || text === '\u001b[6~') {
+        const maximum = Math.max(0, analyticsContent(state, Math.max(1, terminal.columns - 1), false).length - Math.max(1, terminal.rows - 3));
+        const delta = text === '\u001b[A' ? -1 : text === '\u001b[B' ? 1 : text === '\u001b[5~' ? -Math.max(1, terminal.rows - 4) : Math.max(1, terminal.rows - 4);
+        state = { ...state, analyticsScroll: Math.max(0, Math.min(maximum, (state.analyticsScroll ?? 0) + delta)) };
+      } else if (text === 'r' || text === 'R') void refreshAnalytics(true);
+      else if (text === '?') state = { ...state, showHelp: true };
+      render(); return;
+    }
+    if (text === 'q' || text === 'Q') quit();
+    else if (text === '\u001b[C' && !state.showHelp) {
+      const workflowId = selectedRuns(snapshot, state)[Math.min(state.selected, selectedRuns(snapshot, state).length - 1)]?.workflowId ?? options.args.workflowId ?? snapshot.workflows[0]?.workflowId;
+      if (workflowId !== undefined) {
+        analyticsSelection += 1;
+        state = { ...state, analyticsWorkflowId: workflowId, analytics: undefined, analyticsError: undefined, analyticsScroll: 0 };
+        void refreshAnalytics(true);
+      }
+    }
+    else if (text === 'v' || text === 'V') state = { ...state, viewMenu: VIEWS.indexOf(state.view), showHelp: false };
     else if (text === '\t') state = { ...state, view: VIEWS[(VIEWS.indexOf(state.view) + 1) % VIEWS.length]!, selected: 0, expanded: false };
     else if (text === '\u001b[Z') state = { ...state, view: VIEWS[(VIEWS.indexOf(state.view) + VIEWS.length - 1) % VIEWS.length]!, selected: 0, expanded: false };
     else if (text === '\u001b[A') moveSelection(-1);
@@ -653,7 +720,7 @@ export async function runRuntimeInspector(options: {
     else if (text === '/') state = { ...state, searchInput: state.filter };
     else if (text === 'l') state = { ...state, view: 'overview', expanded: true, showHelp: false };
     else if (text === '?') state = { ...state, showHelp: !state.showHelp };
-    else if (text === 'r') await refresh();
+    else if (text === 'r' || text === 'R') await refresh();
     else if (text === 'c') {
       const run = selectedRuns(snapshot, state)[state.selected];
       if (run !== undefined && ['queued', 'running', 'waiting', 'retrying'].includes(run.status)) state = { ...state, confirmationRunId: run.runId };
@@ -707,7 +774,7 @@ export async function runRuntimeInspector(options: {
       }
     }
   })();
-  const periodic = setInterval(() => { void refresh(); }, 5000);
+  const periodic = setInterval(() => { void refresh(); void refreshAnalytics(); }, 5000);
   try {
     await done;
   } finally {
@@ -716,6 +783,7 @@ export async function runRuntimeInspector(options: {
     if (eventRefreshTimer !== undefined) clearTimeout(eventRefreshTimer);
     if (renderTimer !== undefined) clearTimeout(renderTimer);
     streamAbort.abort();
+    analyticsAbort?.abort();
     await streamLoop.catch(() => {});
     removeInput();
     removeResize();

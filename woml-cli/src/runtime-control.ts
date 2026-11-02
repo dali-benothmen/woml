@@ -422,6 +422,7 @@ export function startRuntimeControl(options: {
   readonly maxOperationsPerMinute?: number;
   readonly operations?: RuntimeAdminOperations;
   readonly observability?: RuntimeObservabilitySurface;
+  readonly inspectorAnalytics?: { get(workflowId: string): Promise<unknown> };
   readonly presentations?: RuntimePresentationSurface;
   readonly output?: RuntimeOperationalOutputSurface;
   readonly healthEnabled?: boolean;
@@ -542,6 +543,22 @@ export function startRuntimeControl(options: {
     port: options.port ?? 0,
     async fetch(request) {
       const url = new URL(request.url);
+      if (request.method === 'GET' && url.pathname === '/v1/inspector/analytics') {
+        if (!authorized(request)) return Response.json({ error: { code: 'WOML_ADMIN_UNAUTHORIZED' } }, { status: 401 });
+        if (options.inspectorAnalytics === undefined) return Response.json({ error: { code: 'WOML_OBSERVABILITY_DISABLED' } }, { status: 404 });
+        const workflow = url.searchParams.get('workflow');
+        if (workflow === null || workflow.length < 1 || workflow.length > 256 ||
+            [...url.searchParams.keys()].some(key => key !== 'workflow') || url.searchParams.getAll('workflow').length !== 1) {
+          return Response.json({ error: { code: 'WOML_ADMIN_REQUEST_INVALID' } }, { status: 400 });
+        }
+        const limited = beginOperation();
+        if (limited !== undefined) return limited;
+        try {
+          return boundedJson(await options.inspectorAnalytics.get(workflow));
+        } catch {
+          return Response.json({ error: { code: 'WOML_OBSERVABILITY_UNAVAILABLE' } }, { status: 503, headers: { 'cache-control': 'no-store' } });
+        } finally { inFlight -= 1; }
+      }
       if (request.method === 'POST' && url.pathname.startsWith('/v1/signals/')) {
         if (!authorized(request)) {
           return Response.json(

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "deploymentName": "inspector-demo",
+  "statePath": "./.woml/state.sqlite",
+  "public": { "host": "127.0.0.1", "port": 4140 },
+  "admin": { "host": "127.0.0.1", "port": 4141 },
+  "workers": 2,
+  "shutdownTimeoutMs": 30000,
+  "logging": { "format": "text", "directory": "./.woml/logs" },
+  "observability": { "health": true, "metrics": true }
+}
