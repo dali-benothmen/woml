@@ -15,14 +15,26 @@ import { runtimeProfileFixtures, runtimeProfilePolicy } from './runtime-profile-
 export const sessionModes = ['fresh-store', 'reused-store', 'activated'] as const;
 export type SessionMode = typeof sessionModes[number];
 const supportedCases = new Set(['sequential-2', 'sequential-32', 'storage-4']);
-export function sessionFixture(id: string) {
+export function sessionFixture(id: string, concurrency = 1) {
+  assert.ok(concurrency === 1 || concurrency === 2, 'Concurrency must be one or two');
   assert.ok(supportedCases.has(id), 'Use repeat-safe sequential-2, sequential-32, or storage-4');
   const fixture = runtimeProfileFixtures().find(fixture => fixture.id === id)!;
   // Activated target IDs require each hyphen segment to begin with a letter.
   // Apply this naming-only adaptation to EVERY mode and both libraries. Keep
   // historical sources untouched and disclose the changed definition identity.
   return { ...fixture, source: fixture.source.replace(`id="runtime-profile-${id}"`,
-    `id="runtime-profile-${id.replace(/-(\d+)/gu, '-n$1')}"`) };
+    `id="runtime-profile-${id.replace(/-(\d+)/gu, '-n$1')}"`)
+    .replace('<config concurrency="1"', `<config concurrency="${concurrency}"`) };
+}
+
+export function sessionParameters(mode: SessionMode, retained = 0, concurrency = 1, idleMs = 0) {
+  assert.ok(sessionModes.includes(mode), 'Unknown session mode');
+  assert.ok(Number.isSafeInteger(retained) && retained >= 0 && retained <= 100, 'Retained runs must be 0–100');
+  assert.ok(concurrency === 1 || concurrency === 2, 'Concurrency must be one or two');
+  assert.ok(Number.isSafeInteger(idleMs) && idleMs >= 0 && idleMs <= 10_000, 'Idle window must be 0–10000 ms');
+  assert.ok(mode === 'activated' || (concurrency === 1 && idleMs === 0), 'Concurrent/idle probes require activated mode');
+  assert.ok(mode !== 'fresh-store' || retained === 0, 'Fresh-store probes cannot retain previous runs');
+  return { retained, concurrency, idleMs };
 }
 
 // A terminal callback can arrive before the admission Promise resolves. Retain
@@ -69,11 +81,14 @@ export function verifySessionHistory(events: readonly { type: string; sequence: 
 export interface SessionSample {
   index: number; runId: string; durationMs: number; admissionMs?: number;
   ownProcessCpuMs: number; statePath: string; eventCount?: number;
+  ownProcessRssBytes?: number;
 }
 export interface SessionResult {
   profile: 'woml.runtime-session-sample/v1'; case: string; mode: SessionMode;
   definitionHash: string; modelVersion: number; compileMs: number;
   prepareMs?: number; activateMs?: number; shutdownMs?: number;
+  parameters?: ReturnType<typeof sessionParameters>;
+  seedMs?: number; idleMs?: number;
   samples: SessionSample[];
 }
 
@@ -82,12 +97,13 @@ async function main() {
   const argv = process.argv.slice(2);
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index]!, value = argv[index + 1];
-    assert.ok(['--case', '--mode', '--directory', '--native-core', '--runs'].includes(key) && value && !args.has(key), 'Invalid child argument');
+    assert.ok(['--case', '--mode', '--directory', '--native-core', '--runs', '--retained', '--concurrency', '--idle-ms'].includes(key) && value && !args.has(key), 'Invalid child argument');
     args.set(key, value);
   }
-  const fixture = sessionFixture(args.get('--case')!);
   const mode = args.get('--mode') as SessionMode;
-  assert.ok(sessionModes.includes(mode), 'Unknown session mode');
+  const parameters = sessionParameters(mode, Number(args.get('--retained') ?? 0),
+    Number(args.get('--concurrency') ?? 1), Number(args.get('--idle-ms') ?? 0));
+  const fixture = sessionFixture(args.get('--case')!, parameters.concurrency);
   const runs = Number(args.get('--runs') ?? 5);
   assert.ok(Number.isSafeInteger(runs) && runs >= 2 && runs <= 5);
   assert.ok(args.get('--directory') && args.get('--native-core'));
@@ -105,8 +121,20 @@ async function main() {
   const observer = new TerminalObserver();
   let runtimeId: string | undefined;
   const result: SessionResult = { profile: 'woml.runtime-session-sample/v1', case: fixture.id, mode,
-    definitionHash: compiledDefinitionHash(workflow), modelVersion: workflow.schemaVersion, compileMs, samples: [] };
+    definitionHash: compiledDefinitionHash(workflow), modelVersion: workflow.schemaVersion, compileMs, parameters, samples: [] };
+  const seedIds: string[] = [];
   try {
+    if (parameters.retained > 0) {
+      const seed = compileWoml(parseWoml('<woml><workflow id="startup-seed"><config concurrency="1" timeout="3m" /><triggers><manual id="start" /></triggers><steps><step id="done"><script>return { value: 0 };</script></step></steps></workflow></woml>'));
+      const started = performance.now();
+      for (let index = 0; index < parameters.retained; index++) {
+        const execution = await executeWorkflowWithRustDurable(seed, statePath,
+          { ...options, runtimeCapabilities: undefined, trigger: {} });
+        assert.deepEqual(execution.result, { value: 0 });
+        seedIds.push(execution.runId);
+      }
+      result.seedMs = performance.now() - started;
+    }
     if (mode === 'activated') {
       const started = performance.now();
       const runtime = await startWebhookRuntimeWithRust([{ workflow, definitionHash: result.definitionHash, resolvedSecrets: {}, runtimeModules: [] }], statePath,
@@ -118,8 +146,13 @@ async function main() {
       const activationStarted = performance.now();
       await activateWebhookRuntimeWithRust(runtimeId, options);
       result.activateMs = performance.now() - activationStarted;
+      if (parameters.idleMs > 0) {
+        const idleStarted = performance.now();
+        await Bun.sleep(parameters.idleMs);
+        result.idleMs = performance.now() - idleStarted;
+      }
     }
-    for (let index = 0; index < runs; index++) {
+    const execute = async (index: number) => {
       const path = mode === 'fresh-store' ? join(root, `state-${index}.sqlite`) : statePath;
       const cpuBefore = process.cpuUsage();
       const started = performance.now();
@@ -144,8 +177,16 @@ async function main() {
       }
       const cpu = process.cpuUsage(cpuBefore);
       result.samples.push({ index, runId, statePath: path, durationMs, admissionMs,
-        ownProcessCpuMs: (cpu.user + cpu.system) / 1000 });
+        ownProcessCpuMs: (cpu.user + cpu.system) / 1000,
+        ownProcessRssBytes: process.memoryUsage().rss });
+    };
+    // Keep the first request isolated; only later admissions are grouped.
+    await execute(0);
+    for (let index = 1; index < runs; index += parameters.concurrency) {
+      await Promise.all(Array.from({ length: Math.min(parameters.concurrency, runs - index) },
+        (_, offset) => execute(index + offset)));
     }
+    result.samples.sort((left, right) => left.index - right.index);
   } finally {
     if (runtimeId) {
       const started = performance.now();
@@ -165,6 +206,15 @@ async function main() {
     } finally { database.close(); }
   }
   assert.equal(new Set(result.samples.map(sample => sample.runId)).size, runs);
+  if (seedIds.length) {
+    const database = new Database(statePath, { readonly: true });
+    try {
+      for (const id of seedIds) {
+        const rows = database.query('SELECT event_json FROM woml_run_events WHERE run_id = ?1 ORDER BY sequence').all(id) as { event_json: string }[];
+        verifySessionHistory(rows.map(row => JSON.parse(row.event_json)), { value: 0 });
+      }
+    } finally { database.close(); }
+  }
   await flushPerformanceProfile();
   console.log(JSON.stringify(result));
 }

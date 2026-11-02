@@ -13,6 +13,8 @@ mod indexes;
 mod inspection;
 mod migrations;
 mod opening;
+#[cfg(test)]
+mod prepared_contract;
 mod records;
 mod schema;
 mod validation;
