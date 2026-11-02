@@ -14,7 +14,6 @@ use crate::webhook::RunProgressIdentity;
 use crate::webhook::WebhookDefinitionRegistration;
 use crate::webhook::WebhookRuntimeError;
 use crate::webhook::WebhookRuntimeState;
-use crate::DurableEventStore;
 use crate::DurableStoreError;
 use crate::IntervalCursorRegistration;
 use crate::TriggerAdmissionRequest;
@@ -88,7 +87,7 @@ pub(in crate::webhook) fn initialize_intervals(
   let mut recovered_runs = Vec::new();
   let mut prepared = Vec::new();
   for registration in state.intervals.clone() {
-    let mut store = DurableEventStore::open_ready(&state.database_path)?;
+    let mut store = state.open_store()?;
     let registered = store.register_interval_cursor(
       &IntervalCursorRegistration {
         workflow_id: registration.workflow_id.clone(),
@@ -196,7 +195,8 @@ async fn run_interval_loop(
   registration: IntervalRuntimeRegistration,
 ) {
   loop {
-    let cursor = match DurableEventStore::open_ready(&state.database_path)
+    let cursor = match state
+      .open_store()
       .and_then(|store| store.interval_cursor(&registration.workflow_id, &registration.trigger_id))
     {
       Ok(cursor) => cursor,
@@ -237,7 +237,7 @@ async fn run_interval_loop(
       }
     };
     let multiple_elapsed = following_at <= now;
-    let mut store = match DurableEventStore::open_ready(&state.database_path) {
+    let mut store = match state.open_store() {
       Ok(store) => store,
       Err(error) => {
         report_interval_error(state.get_ref(), &registration, &error.to_string());

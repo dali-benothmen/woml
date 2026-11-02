@@ -28,6 +28,8 @@ use std::sync::RwLock;
 
 #[derive(Clone)]
 pub struct RuntimeExecutionOptions {
+  pub(crate) prepared_runtime: Option<crate::durable::PreparedRuntime>,
+  pub(crate) prepared_run: Option<String>,
   pub script_host: ScriptHostProcessOptions,
   pub notification_host: Option<NotificationHostProcessOptions>,
   pub custom_notification_host_path: Option<PathBuf>,
@@ -201,6 +203,8 @@ impl RuntimeExecutionOptions {
       &telemetry_sampling_ratio,
     );
     Self {
+      prepared_runtime: None,
+      prepared_run: None,
       script_host,
       notification_host,
       custom_notification_host_path,

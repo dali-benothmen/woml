@@ -11,7 +11,6 @@ use crate::webhook::RunProgressIdentity;
 use crate::webhook::WebhookRuntimeState;
 use crate::webhook::WebhookSchemaIssue;
 use crate::webhook::WEBHOOK_MAX_BODY_BYTES;
-use crate::DurableEventStore;
 use crate::DurableStoreError;
 use crate::TriggerAdmissionRequest;
 use actix_web::http::header;
@@ -221,8 +220,10 @@ pub(in crate::webhook) async fn handle_event_publication(
       received_at,
     };
     let database_path = state.database_path.clone();
+    let execution = state.execution.clone();
     let admitted = web::block(move || {
-      let mut store = DurableEventStore::open_ready(database_path)?;
+      let mut store = execution
+        .open_ingress_store(&database_path, crate::durable::PreparedScope::Continuation)?;
       store.admit_trigger_occurrence(admission)
     })
     .await;

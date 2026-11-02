@@ -263,6 +263,7 @@ impl DurableEventStore {
       .connection
       .transaction_with_behavior(TransactionBehavior::Immediate)?;
     let outcome = admit_trigger_occurrence_in_transaction(&transaction, &request)?;
+    transaction.admitted(&outcome.run_id, outcome.duplicate);
     update_schedule_cursor(
       &transaction,
       &request.workflow_id,

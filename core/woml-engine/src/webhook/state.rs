@@ -87,6 +87,14 @@ pub(in crate::webhook) struct StartupManualTrigger {
 }
 
 impl WebhookRuntimeState {
+  pub(in crate::webhook) fn open_store(
+    &self,
+  ) -> Result<DurableEventStore, crate::DurableStoreError> {
+    self.execution.open_ingress_store(
+      &self.database_path,
+      crate::durable::PreparedScope::Continuation,
+    )
+  }
   pub(in crate::webhook) fn report(&self, progress: TriggerProgress) {
     if let Some(reporter) = &self.progress_reporter {
       reporter(progress);
@@ -114,7 +122,8 @@ impl WebhookRuntimeState {
   pub(in crate::webhook) fn report_run_started(&self, identity: &RunProgressIdentity) {
     // Event v11 reports the real scheduler start through Runtime Policy
     // Progress. Do not claim that a newly admitted queued run has started.
-    if DurableEventStore::open_ready(&self.database_path)
+    if self
+      .open_store()
       .and_then(|store| store.projection(&identity.run_id))
       .is_ok_and(|projection| projection.status == crate::RunStatus::Queued)
     {

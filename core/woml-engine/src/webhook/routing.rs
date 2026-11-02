@@ -2,7 +2,6 @@
 
 use crate::dispatch_admitted_workflow_call;
 use crate::webhook::WebhookRuntimeState;
-use crate::DurableEventStore;
 use crate::WorkflowRoutingAcknowledgement;
 use crate::WorkflowRoutingWakeup;
 use crate::WORKFLOW_ROUTING_CONTRACT;
@@ -65,7 +64,8 @@ pub(in crate::webhook) async fn handle_workflow_call_wakeup(
       Some("WOML_WORKFLOW_TARGET_UNAVAILABLE"),
     );
   }
-  let admission = DurableEventStore::open_ready(&state.database_path)
+  let admission = state
+    .open_store()
     .and_then(|store| store.workflow_call_for_child(&wakeup.child_run_id));
   let Ok(Some(admission)) = admission else {
     return workflow_routing_acknowledgement(
@@ -130,7 +130,7 @@ pub(in crate::webhook) async fn run_workflow_routing_maintenance(
     let now = Utc::now();
     let targets = state.workflow_targets.targets();
     if tokio::time::Instant::now() >= next_renewal {
-      let renewed = DurableEventStore::open_ready(&state.database_path).and_then(|mut store| {
+      let renewed = state.open_store().and_then(|mut store| {
         store.renew_workflow_runtime_routes(
           state.workflow_targets.runtime_id(),
           now,
@@ -144,7 +144,8 @@ pub(in crate::webhook) async fn run_workflow_routing_maintenance(
         + std::time::Duration::from_secs(WORKFLOW_RUNTIME_RENEW_SECONDS);
     }
     for target in targets {
-      let pending = DurableEventStore::open_ready(&state.database_path)
+      let pending = state
+        .open_store()
         .and_then(|store| store.admitted_workflow_calls_for_target(&target));
       if let Ok(pending) = pending {
         for admission in pending {

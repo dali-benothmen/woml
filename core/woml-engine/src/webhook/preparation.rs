@@ -45,7 +45,8 @@ pub(in crate::webhook) struct WebhookRoute {
 pub(in crate::webhook) type EventSubscriber = EventServiceSubscriber;
 
 pub(in crate::webhook) fn prepare_state(
-  config: WomlWebhookServerConfig,
+  mut config: WomlWebhookServerConfig,
+  owner: Option<(crate::durable::PreparedOwner, &DurableEventStore)>,
 ) -> Result<
   (
     WebhookRuntimeState,
@@ -55,6 +56,11 @@ pub(in crate::webhook) fn prepare_state(
   ),
   WebhookRuntimeError,
 > {
+  if config.execution.prepared_runtime.is_some() {
+    return Err(WebhookRuntimeError::InvalidRegistration(
+      "An existing runtime preparation cannot be transplanted into a new activation.".into(),
+    ));
+  }
   if config.registrations.is_empty() {
     return Err(WebhookRuntimeError::InvalidRegistration(
       "at least one compiled workflow is required".to_string(),
@@ -259,6 +265,18 @@ pub(in crate::webhook) fn prepare_state(
     })
     .collect();
 
+  if let Some((owner, acquired_store)) = owner {
+    config
+      .execution
+      .prepare_owned_state_binding(&config.database_path)
+      .map_err(|error| WebhookRuntimeError::InvalidRegistration(error.to_string()))?;
+    config.execution.prepared_runtime = Some(crate::durable::PreparedRuntime::publish(
+      &config.database_path,
+      &store,
+      owner,
+      acquired_store,
+    )?);
+  }
   let (internal_event_sender, internal_event_receiver) = tokio_mpsc::unbounded_channel();
   let dispatcher = Arc::new(move |accepted: EventServiceAcceptedRun| {
     let _ = internal_event_sender.send(accepted);

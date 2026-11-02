@@ -13,6 +13,7 @@ import capabilityArtifactBaseline from '../../docs/refactoring/rcm10-baseline.js
 import featureBridgeBaseline from '../../docs/refactoring/rcm12-baseline.json';
 import fixtureBaseline from '../../docs/refactoring/rcm14-fixtures-baseline.json';
 import compatibilityRepairs from '../../docs/refactoring/post-refactor-compatibility-repairs.json';
+import startupRepairs from '../../docs/refactoring/runtime-startup-separation-repairs.json';
 
 const root = resolve(import.meta.dir, '../..');
 const hash = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex');
@@ -107,6 +108,25 @@ test('extracted engine and bridge declarations preserve baselines with explicit 
       expect(repair.reason).toContain('F02:');
       expect((await readFile(resolve(root, repair.regression), 'utf8')).length).toBeGreaterThan(0);
     }
+    // Separate, explicit behavioral manifest; historical refactor baselines and
+    // prior repairs remain immutable. Every changed declaration is still hashed.
+    const startup = (startupRepairs.declarationRepairs as Record<string, {
+      name: string; originalSha256: string | null; sha256: string; reason: string; regression: string;
+    }[]>)[module] ?? [];
+    expect(new Set(startup.map(repair => repair.name)).size).toBe(startup.length);
+    for (const repair of startup) {
+      const index = expected.findIndex(declaration => declaration.name === repair.name);
+      if (repair.originalSha256 === null) {
+        expect(index).toBe(-1);
+        expected.push({ name: repair.name, sha256: repair.sha256 });
+      } else {
+        expect(expected[index]?.sha256).toBe(repair.originalSha256);
+        expected[index] = { name: repair.name, sha256: repair.sha256 };
+      }
+      expect(repair.reason).toContain('Startup separation:');
+      expect(repair.regression).toBe('woml-cli/scripts/verify-startup-separation-native.ts');
+      expect((await readFile(resolve(root, repair.regression), 'utf8')).length).toBeGreaterThan(0);
+    }
     expect(sort(actual)).toEqual(sort(expected));
   }
   expect(Object.keys(compatibilityRepairs.declarationRepairs)).toEqual(['capability']);
@@ -114,6 +134,10 @@ test('extracted engine and bridge declarations preserve baselines with explicit 
     'fn corrective_attempt_key', 'fn operational_invocation_is_active',
     'impl DurableCapabilityAuthority::execute', 'impl DurableCapabilityAuthority::observe_native_fetch',
   ]);
+  expect(startupRepairs.profile).toBe('woml.startup-separation-compatibility-repairs/v1');
+  expect(Object.keys(startupRepairs.declarationRepairs)).toEqual(['webhook', 'bridge']);
+  expect(startupRepairs.declarationRepairs.webhook).toHaveLength(24);
+  expect(startupRepairs.declarationRepairs.bridge.map(repair => repair.name)).toEqual(['fn start_woml_webhook_runtime']);
 });
 
 test('the reviewed cohesive families retain their baselines with explicit behavioral repairs', async () => {
@@ -326,7 +350,10 @@ test('runtime extraction preserves intentional boxed invocation and continuation
   const callees = [...code.matchAll(/\bBox::pin\s*\(\s*([\w:.]+)/g)].map(match => match[1]!).sort();
   // Complements ordinary-stack runtime tests; counting call sites alone is
   // not proof of cancellation, ownership, stack safety, or equivalent futures.
-  expect(callees).toEqual(runtimeBaseline.boxedCallees);
+  expect(startupRepairs.boxingReason).toContain('Startup separation:');
+  expect(startupRepairs.boxingRegression).toBe('woml-cli/scripts/verify-startup-separation-native.ts');
+  expect(startupRepairs.boxedCalleeAdditions).toHaveLength(10);
+  expect(callees).toEqual([...runtimeBaseline.boxedCallees, ...startupRepairs.boxedCalleeAdditions].sort());
 });
 
 test('durable extraction preserves the exact frozen schema and migration DDL literals', async () => {

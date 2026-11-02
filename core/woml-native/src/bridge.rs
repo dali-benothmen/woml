@@ -937,7 +937,6 @@ pub fn start_woml_webhook_runtime(
   let execution = apply_runtime_capabilities(execution, runtime_capabilities_json)?
     .with_signal_ingress_token(signal_ingress_token)
     .with_shared_script_hosts();
-  let signal_execution = execution.clone();
   let config = WomlWebhookServerConfig {
     bind_address,
     database_path: PathBuf::from(event_store_path),
@@ -977,26 +976,38 @@ pub fn start_woml_webhook_runtime(
               &thread_runtime_id,
               now,
               now + chrono::Duration::seconds(10),
-            )
+            )?;
+            Ok::<_, woml_engine::DurableStoreError>(store)
           })();
-          if let Err(error) = ownership {
-            let _ = startup_sender.send(Err(native_trigger_runtime_error(
-              WebhookRuntimeError::DurableStore(error),
-            )));
-            return;
-          }
+          let mut ownership = match ownership {
+            Ok(store) => store,
+            Err(error) => {
+              let _ = startup_sender.send(Err(native_trigger_runtime_error(
+                WebhookRuntimeError::DurableStore(error),
+              )));
+              return;
+            }
+          };
           let runtime_database_path = config.database_path.clone();
-          match WomlWebhookServer::prepare_with_external_ingress(config, Some(ingress_receiver))
-            .await
+          match WomlWebhookServer::prepare_owned_with_external_ingress(
+            config,
+            Some(ingress_receiver),
+            deployment_id.clone(),
+            activation_id.clone(),
+            thread_runtime_id.clone(),
+            // Keep the acquisition connection alive through publication so a
+            // same-path replacement with copied owner rows is not a receipt.
+            &ownership,
+          )
+          .await
           {
             Ok(mut server) => {
+              drop(ownership);
+              let signal_execution = server.owned_execution_options();
               if !start_suspended {
                 if let Err(error) = server.activate().await {
                   let _ = startup_sender.send(Err(native_trigger_runtime_error(error)));
                   server.stop_with_deadline(shutdown_deadline).await;
-                  let _ = DurableEventStore::open(&runtime_database_path).and_then(|mut store| {
-                    store.release_runtime_owner(&thread_runtime_id).map(|_| ())
-                  });
                   return;
                 }
               }
@@ -1006,19 +1017,17 @@ pub fn start_woml_webhook_runtime(
                 return;
               }
               let heartbeat_path = runtime_database_path.clone();
-              let heartbeat_runtime_id = thread_runtime_id.clone();
+              let heartbeat_execution = signal_execution.clone();
               let heartbeat_control = ownership_control.clone();
               let heartbeat = actix_web::rt::spawn(async move {
                 loop {
                   tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                   let now = Utc::now();
-                  let renewed = DurableEventStore::open(&heartbeat_path).and_then(|mut store| {
-                    store.renew_runtime_owner(
-                      &heartbeat_runtime_id,
-                      now,
-                      now + chrono::Duration::seconds(10),
-                    )
-                  });
+                  let renewed = heartbeat_execution.renew_owned_runtime_lease(
+                    &heartbeat_path,
+                    now,
+                    now + chrono::Duration::seconds(10),
+                  );
                   if !renewed.is_ok_and(|renewed| renewed) {
                     let _ = heartbeat_control.send(NativeWebhookRuntimeCommand::OwnershipLost);
                     break;
@@ -1073,15 +1082,12 @@ pub fn start_woml_webhook_runtime(
                   Ok(NativeWebhookRuntimeCommand::Stop) | Err(_) => break,
                 }
               }
-              heartbeat.abort();
               server.stop_with_deadline(shutdown_deadline).await;
-              let _ = DurableEventStore::open(&runtime_database_path)
-                .and_then(|mut store| store.release_runtime_owner(&thread_runtime_id).map(|_| ()));
+              heartbeat.abort();
             }
             Err(error) => {
               let _ = startup_sender.send(Err(native_trigger_runtime_error(error)));
-              let _ = DurableEventStore::open(&runtime_database_path)
-                .and_then(|mut store| store.release_runtime_owner(&thread_runtime_id).map(|_| ()));
+              let _ = ownership.release_runtime_owner(&thread_runtime_id);
             }
           }
         });

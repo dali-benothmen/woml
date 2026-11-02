@@ -448,6 +448,7 @@ impl DurableEventStore {
       .connection
       .transaction_with_behavior(TransactionBehavior::Immediate)?;
     let outcome = admit_trigger_occurrence_in_transaction(&transaction, &request)?;
+    transaction.admitted(&outcome.run_id, outcome.duplicate);
     transaction.commit()?;
     span.run_id(outcome.run_id.clone());
     span.count("duplicate", usize::from(outcome.duplicate));
@@ -565,6 +566,7 @@ impl DurableEventStore {
     }
 
     let outcome = admit_trigger_occurrence_in_transaction(&transaction, &request.trigger)?;
+    transaction.admitted(&outcome.run_id, outcome.duplicate);
     let existing_delivery: Option<String> = transaction
       .query_row(
         "SELECT run_id FROM woml_internal_event_deliveries

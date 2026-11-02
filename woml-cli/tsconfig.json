@@ -32,6 +32,7 @@
     "scripts/runtime-profile-fixtures.ts",
     "scripts/profile-runtime-investigation.ts",
     "scripts/runtime-session-profile-child.ts",
+    "scripts/verify-startup-separation-native.ts",
     "scripts/profile-runtime-sessions.ts",
     "scripts/run-performance-regression.ts"
   ]

@@ -46,3 +46,19 @@ test('readiness prototype stays test-only and has serial cross-platform CI cover
   expect(combined).toContain('os: [ubuntu-24.04, macos-15, windows-2022]');
   expect(combined).toContain('bun run test:startup-request-separation');
 });
+
+test('production readiness remains private, non-creating, and transaction guarded', async () => {
+  const root = resolve(import.meta.dir, '../..');
+  const source = await Bun.file(resolve(root, 'core/woml-engine/src/durable/prepared.rs')).text();
+  const options = await Bun.file(resolve(root, 'core/woml-engine/src/runtime/options.rs')).text();
+  const composition = await Bun.file(resolve(root, 'core/woml-engine/src/runtime/composition.rs')).text();
+  const scripts = await Bun.file(resolve(root, 'woml-cli/package.json')).json();
+  expect(source).toContain('SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX');
+  expect(source).not.toContain('SQLITE_OPEN_CREATE');
+  expect(source).toContain('context.check_transaction(&self.tx');
+  expect(source).toContain('full startup receipt missing');
+  expect(options).toContain('pub(crate) prepared_runtime:');
+  expect(composition.match(/self\.prepared_runtime = None;/gu)).toHaveLength(2);
+  expect(scripts.scripts['test:startup-request-separation']).toContain('--lib durable::prepared ');
+  expect(scripts.scripts['test:startup-request-separation']).toContain('test:startup-request-separation-native');
+});

@@ -503,7 +503,7 @@ jobs:
           bun run test:combined-developer-experience-contracts &&
           bun scripts/benchmark-combined-developer-experience.ts &&
           bun scripts/verify-combined-developer-experience-release.ts
-      - name: Test startup separation measurement and readiness prototypes serially
+      - name: Test prepared startup, ownership, rollback, and actual native request separation serially
         working-directory: woml-cli
         run: bun run test:startup-request-separation
       - name: Test the clean installed project, artifacts, telemetry, coordinator, and worker serially

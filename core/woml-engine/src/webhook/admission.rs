@@ -21,7 +21,6 @@ use crate::webhook::TRIGGER_PROGRESS_CONTRACT;
 use crate::webhook::TRIGGER_PROGRESS_CONTRACT_VERSION;
 use crate::webhook::WEBHOOK_MAX_BODY_BYTES;
 use crate::webhook::WHATSAPP_CALLBACK_PATH;
-use crate::DurableEventStore;
 use crate::DurableStoreError;
 use crate::EventServiceAcceptedRun;
 use crate::TriggerAdmissionRequest;
@@ -226,8 +225,10 @@ pub(in crate::webhook) async fn handle_webhook(
     received_at: Utc::now(),
   };
   let database_path = state.database_path.clone();
+  let execution = state.execution.clone();
   let admitted = web::block(move || {
-    let mut store = DurableEventStore::open_ready(database_path)?;
+    let mut store =
+      execution.open_ingress_store(&database_path, crate::durable::PreparedScope::Continuation)?;
     store.admit_trigger_occurrence(admission)
   })
   .await;
@@ -314,7 +315,8 @@ pub(in crate::webhook) fn admit_startup_manual(
     payload: serde_json::Map::new(),
     received_at: Utc::now(),
   };
-  let admitted = DurableEventStore::open_ready(&state.database_path)
+  let admitted = state
+    .open_store()
     .and_then(|mut store| store.admit_trigger_occurrence(request));
   match admitted {
     Ok(outcome) => {
@@ -363,8 +365,10 @@ pub(in crate::webhook) async fn run_external_ingress(
     let trigger_id = request.trigger_id.clone();
     let trigger_handler = request.trigger_handler.clone();
     let database_path = state.database_path.clone();
+    let execution = state.execution.clone();
     let admitted = web::block(move || {
-      let mut store = DurableEventStore::open_ready(database_path)?;
+      let mut store = execution
+        .open_ingress_store(&database_path, crate::durable::PreparedScope::Continuation)?;
       store.admit_trigger_occurrence(request)
     })
     .await;

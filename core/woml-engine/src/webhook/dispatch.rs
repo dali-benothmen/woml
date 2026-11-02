@@ -6,7 +6,6 @@ use crate::webhook::TriggerProgress;
 use crate::webhook::WebhookRuntimeState;
 use crate::webhook::TRIGGER_PROGRESS_CONTRACT;
 use crate::webhook::TRIGGER_PROGRESS_CONTRACT_VERSION;
-use crate::DurableEventStore;
 use crate::RuntimeExecutionOptions;
 use chrono::Utc;
 use std::path::PathBuf;
@@ -15,7 +14,12 @@ use std::sync::Arc;
 
 pub(in crate::webhook) fn dispatch_run(state: &WebhookRuntimeState, identity: RunProgressIdentity) {
   let database_path = state.database_path.clone();
-  let execution = state.execution.clone();
+  // Bind the durable admitted identity before spawning. Draining may stop new
+  // dispatch but cannot turn this already-accounted run into an unbound request.
+  let execution = state
+    .execution
+    .clone()
+    .for_admitted_run(&database_path, &identity.run_id);
   let reporter = state.progress_reporter.clone();
   let active_runs = Arc::clone(&state.active_runs);
   let active_runs_changed = Arc::clone(&state.active_runs_changed);
@@ -23,9 +27,13 @@ pub(in crate::webhook) fn dispatch_run(state: &WebhookRuntimeState, identity: Ru
   actix_web::rt::spawn(async move {
     let mut span = crate::performance::PerformanceSpan::new("runtime", "runtime.dispatch_run");
     span.run_id(identity.run_id.clone());
-    let result =
-      execute_trigger_run_with_builtin_notifications(database_path, &identity.run_id, execution)
-        .await;
+    let result = match execution {
+      Ok(execution) => {
+        execute_trigger_run_with_builtin_notifications(database_path, &identity.run_id, execution)
+          .await
+      }
+      Err(error) => Err(error),
+    };
     if result.is_ok() {
       span.succeed();
     }
@@ -73,7 +81,8 @@ async fn execute_trigger_run_with_builtin_notifications(
       return Ok(outcome);
     };
 
-    let store = DurableEventStore::open(&database_path)?;
+    let store =
+      execution.open_runtime_store(&database_path, crate::durable::PreparedScope::Continuation)?;
     let binding = store.run_binding(run_id)?;
     let workflow = store.definition(&binding.definition_hash)?;
     let Some(definition) = workflow.approval(&approval.approval_id) else {
@@ -104,7 +113,8 @@ async fn execute_trigger_run_with_builtin_notifications(
     if let Err(error) =
       crate::run_notification_provider_journey(&database_path, run_id, host, wait).await
     {
-      let store = DurableEventStore::open(&database_path)?;
+      let store = execution
+        .open_runtime_store(&database_path, crate::durable::PreparedScope::Continuation)?;
       if store.projection(run_id)?.status == crate::RunStatus::Failed {
         return execute_admitted_trigger_run_durable(database_path, run_id, execution).await;
       }

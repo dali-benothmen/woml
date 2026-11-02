@@ -512,7 +512,9 @@ pub(in crate::runtime) async fn execute_for_each_iteration_script<E: RuntimeDagE
     host,
   )
   .await?;
-  match execute_for_each_script(
+  // Keep the invocation future boxed at the iteration boundary; nested debug
+  // polling plus event decoding must fit the native runtime's ordinary stack.
+  match Box::pin(execute_for_each_script(
     engine,
     run_id,
     descriptor,
@@ -524,7 +526,7 @@ pub(in crate::runtime) async fn execute_for_each_iteration_script<E: RuntimeDagE
     options,
     host,
     active_invocations,
-  )
+  ))
   .await
   {
     Ok(output) => {

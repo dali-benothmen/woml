@@ -135,6 +135,7 @@ async fn wait_for_policy_rate_eligibility(
 }
 
 pub(in crate::runtime) struct PolicyExecutionLease {
+  prepared_runtime: Option<crate::durable::PreparedRuntime>,
   pub(in crate::runtime) database_path: PathBuf,
   pub(in crate::runtime) claim: SchedulerClaimV1,
   pub(in crate::runtime) stop: Option<tokio::sync::oneshot::Sender<()>>,
@@ -168,18 +169,27 @@ impl PolicyExecutionCoordinator {
 }
 
 impl PolicyExecutionLease {
-  fn start(database_path: PathBuf, claim: SchedulerClaimV1) -> Self {
+  fn start(
+    database_path: PathBuf,
+    claim: SchedulerClaimV1,
+    prepared_runtime: Option<crate::durable::PreparedRuntime>,
+  ) -> Self {
     let (stop, mut stopped) = tokio::sync::oneshot::channel();
     let heartbeat_path = database_path.clone();
     let heartbeat_claim = claim.clone();
     let lost = Arc::new(AtomicBool::new(false));
     let heartbeat_lost = Arc::clone(&lost);
+    let heartbeat_preparation = prepared_runtime.clone();
     let heartbeat = tokio::spawn(async move {
       loop {
         tokio::select! {
           _ = &mut stopped => break,
           _ = tokio::time::sleep(POLICY_CLAIM_HEARTBEAT) => {
-            let renewed = DurableEventStore::open(heartbeat_path.clone()).and_then(|mut store| {
+            let opened = match &heartbeat_preparation {
+              Some(context) => context.open(&heartbeat_path, crate::durable::PreparedScope::Continuation, Some(&heartbeat_claim.run_id)),
+              None => DurableEventStore::open(&heartbeat_path),
+            };
+            let renewed = opened.and_then(|mut store| {
               store.renew_policy_claim(
                 &heartbeat_claim.run_id,
                 &heartbeat_claim.owner_id,
@@ -197,6 +207,7 @@ impl PolicyExecutionLease {
       }
     });
     Self {
+      prepared_runtime,
       database_path,
       claim,
       stop: Some(stop),
@@ -210,7 +221,7 @@ impl PolicyExecutionLease {
     if self.suspended {
       return Ok(());
     }
-    let mut store = DurableEventStore::open(self.database_path.clone())?;
+    let mut store = self.open_store()?;
     if !store.suspend_policy_claim(
       &self.claim.run_id,
       &self.claim.owner_id,
@@ -234,7 +245,7 @@ impl PolicyExecutionLease {
           self.claim.run_id
         )));
       }
-      let resumed = DurableEventStore::open(self.database_path.clone())?.resume_policy_claim(
+      let resumed = self.open_store()?.resume_policy_claim(
         &self.claim.run_id,
         &self.claim.owner_id,
         &self.claim.claim_id,
@@ -247,6 +258,17 @@ impl PolicyExecutionLease {
       wait_for_policy_wakeup(&self.database_path).await;
     }
     Ok(())
+  }
+
+  fn open_store(&self) -> Result<DurableEventStore, DurableStoreError> {
+    match &self.prepared_runtime {
+      Some(context) => context.open(
+        &self.database_path,
+        crate::durable::PreparedScope::Continuation,
+        Some(&self.claim.run_id),
+      ),
+      None => DurableEventStore::open(&self.database_path),
+    }
   }
 
   async fn release(mut self, store: &mut DurableEventStore) -> Result<(), RuntimeExecutionError> {
@@ -280,7 +302,8 @@ async fn acquire_policy_execution_lease(
   run_id: &str,
   options: &RuntimeExecutionOptions,
 ) -> Result<PolicyClaimAcquisition, RuntimeExecutionError> {
-  let mut store = DurableEventStore::open(database_path.to_path_buf())?;
+  let mut store =
+    options.open_runtime_store(database_path, crate::durable::PreparedScope::Continuation)?;
   acquire_policy_execution_lease_with_store(database_path, run_id, options, &mut store).await
 }
 
@@ -350,7 +373,11 @@ async fn acquire_policy_execution_lease_unprofiled(
           code: None,
         });
         return Ok(PolicyClaimAcquisition::Claimed(
-          PolicyExecutionLease::start(database_path.to_path_buf(), claim),
+          PolicyExecutionLease::start(
+            database_path.to_path_buf(),
+            claim,
+            options.prepared_runtime.clone(),
+          ),
         ));
       }
       Ok(PolicyExecutionClaimResult::Waiting {
@@ -401,7 +428,13 @@ pub(in crate::runtime) async fn execute_policy_run_durable(
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   let mut span = crate::performance::PerformanceSpan::new("runtime", "runtime.execute_policy_run");
   span.run_id(run_id.to_string());
-  let result = execute_policy_run_durable_unprofiled(database_path, run_id, options, store).await;
+  let result = Box::pin(execute_policy_run_durable_unprofiled(
+    database_path,
+    run_id,
+    options,
+    store,
+  ))
+  .await;
   if result.is_ok() {
     span.succeed();
   }
@@ -485,7 +518,7 @@ async fn execute_policy_run_durable_unprofiled(
         .write()
         .await
         .insert(run_id.to_string(), Arc::downgrade(&coordinator));
-      let outcome = resume_with_engine(&mut engine, run_id, options.clone()).await;
+      let outcome = Box::pin(resume_with_engine(&mut engine, run_id, options.clone())).await;
       let mut store = engine.into_store();
       let released = options.release_policy_execution_slot(&mut store).await;
       options
