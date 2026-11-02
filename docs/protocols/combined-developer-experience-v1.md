@@ -291,3 +291,31 @@ Started work recovered without a terminal fact is ambiguous and cannot enter
 ordinary retry. An offer lost before acceptance may safely return to the queue.
 The coordinator owns scheduling and settlement throughout; a worker never
 appends workflow events or schedules downstream nodes.
+
+## Local activation performance measurement
+
+The combined benchmark keeps the frozen 3,000 ms first-call limit and 1,000 ms
+warm p95 limit. Its cold timing is the first durable execution call in the
+benchmark process, not a separately launched CLI process.
+
+After that first call, the benchmark performs three fixed warm-up executions,
+then measures exactly 40 sequential executions against the same workflow and
+durable store. Timings include the execution API, script-host work, and durable
+settlement; the harness does not replace the runtime's host isolation or
+storage behavior. Warm-ups are reported separately, not selected by speed.
+
+Warm p95 uses nearest rank: `ceil(0.95 × 40) = 38`, the 38th smallest sample.
+The earlier five-sample cohort made p95 equal its single largest sample, which
+provided a coarse estimate of tail performance on shared runners. Every
+measured sample remains in the cohort; there is no outlier deletion, rounding
+before enforcement, threshold tolerance, or best-of rerun. A consistently slow
+cohort, or more than five percent of samples above the limit, still fails.
+
+Before enforcing activation limits, the benchmark writes the cold timing,
+warm-ups, all 40 measurements, sample count, median, p95, maximum, and median
+absolute deviation to stderr as `woml.combined-activation-diagnostics/v1`.
+This preserves the existing final benchmark JSON on stdout while keeping
+timings available in failing CI jobs. The method is identical on Linux,
+macOS, and Windows. More samples improve measurement resolution; they do not
+prove that an observed Windows overrun was noise or that runtime performance
+has improved. Native platform validation remains the responsibility of CI.

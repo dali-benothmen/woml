@@ -109,7 +109,7 @@
     "test:combined-developer-experience-project": "bun test tests/project-init.test.ts tests/project-cli.test.ts tests/project-preflight.test.ts --max-concurrency=1 && bun run typecheck",
     "test:combined-developer-experience-presentation": "bun test tests/infrastructure-agent-reference.test.ts tests/combined-run-presentation.test.ts tests/background-log-follow.test.ts --max-concurrency=1 && bun run typecheck",
     "test:combined-developer-experience-authoring": "bun test tests/project-editor-support.test.ts tests/project-init.test.ts tests/project-cli.test.ts --max-concurrency=1 && bun ../woml-vscode/scripts/check-extension.ts && bun run typecheck",
-    "test:combined-developer-experience-contracts": "bun test tests/combined-developer-experience.test.ts --max-concurrency=1",
+    "test:combined-developer-experience-contracts": "bun test tests/combined-developer-experience.test.ts tests/combined-activation-measurement.test.ts --max-concurrency=1",
     "benchmark:combined-developer-experience": "bun run build && bun scripts/benchmark-combined-developer-experience.ts",
     "test:combined-developer-experience-package": "bun test tests/combined-developer-experience-packaged-release.test.ts tests/durable-artifacts-packaged-release.test.ts tests/opentelemetry-packaged-release.test.ts tests/remote-execution-packaged.test.ts --max-concurrency=1",
     "test:combined-developer-experience": "bun run test:combined-developer-experience-foundation && bun run test:combined-developer-experience-project && bun run test:combined-developer-experience-presentation && bun run test:combined-developer-experience-authoring && bun run test:combined-developer-experience-contracts",

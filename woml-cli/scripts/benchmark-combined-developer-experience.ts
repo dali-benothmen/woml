@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path';
 import { compileWoml, parseWoml } from '@woml/compiler';
 
 import { publicJavaScriptFiles } from './release-contract';
+import { measureWarmActivation } from './combined-activation-measurement';
 import { runCli } from '../src/cli';
 import { localNativeBinaryName } from '../src/native-platform';
 import { resolveWomlProject } from '../src/project';
@@ -136,15 +137,25 @@ try {
     localState,
     { nativeCorePath, scriptHostPath }
   ));
-  const warmSamples: number[] = [];
-  for (let index = 0; index < 5; index += 1) {
-    warmSamples.push(await duration(() => executeWorkflowWithRustDurable(
+  const warm = await measureWarmActivation(() =>
+    duration(() => executeWorkflowWithRustDurable(
       quiet,
       localState,
       { nativeCorePath, scriptHostPath }
-    )));
-  }
-  const warmP95 = percentile(warmSamples, 0.95);
+    ))
+  );
+  const warmP95 = warm.summary.p95Ms;
+  // Keep stdout's final benchmark JSON intact. Emit raw diagnostics before
+  // enforcement so failed CI jobs retain the complete distribution too.
+  console.error(JSON.stringify({
+    profile: 'woml.combined-activation-diagnostics/v1',
+    quantile: 'nearest-rank',
+    coldMilliseconds: cold,
+    warmupMilliseconds: warm.warmups,
+    warmMilliseconds: warm.samples,
+    warmSummary: warm.summary,
+    warmMaximumAllowedMilliseconds: budgets.runtime.localWarmActivationP95MillisecondsMax,
+  }, null, 2));
   requireMaximum(
     'Local cold activation',
     cold,
@@ -224,7 +235,6 @@ try {
       {
         workerId: 'cdx-benchmark-worker',
         sessionId: `session_${randomUUID().replaceAll('-', '')}`,
-        capacity: 1,
         journalPath: join(temporary, `worker-${index}.sqlite`),
         authority: {
           policyDigest: digest('cdx-worker-policy'),
