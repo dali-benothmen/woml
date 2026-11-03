@@ -47,6 +47,15 @@ See the [reuse record](../incremental-scheduling-reuse.md) for the ownership aud
 resource tradeoffs and separate post-ISQ1 attribution protocol. The initial
 inventory above describes ISQ1; query questions and clocks remain unchanged.
 
+ISQ4 adds only a definition-bound **history cursor** frontier for ordinary
+always-edge script DAGs. Structural apply and latest-ordinal refresh precede
+each derived update. Source-ordered structural candidates retain current retry
+deadlines, not cached clock eligibility. A closed event allowlist invalidates
+on every scoped/control/authority/terminal/future event. Live adapters retain
+full readiness; the frontier is neither an accepted-state witness nor permission
+to dispatch. The [frontier safety record](../incremental-scheduling-frontier.md)
+defines the complete scope, event/time mapping and ISQ5 verification selections.
+
 Preserve latest **vector** occurrence, in-flight/succeeded blocking, due pending
 retry requirements, active-edge predecessors, recursive completion, settlement
 failure ownership, context scope and exact existing error precedence. Historical

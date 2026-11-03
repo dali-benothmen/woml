@@ -65,7 +65,7 @@ pub(super) fn check<'a>(
     definition,
     hash,
     events,
-    super::HistoryPrefix::new,
+    |events| super::HistoryPrefix::with_definition(events, definition, hash),
     super::ReadinessGraph::new,
   )?;
   Ok(ValidatedHistory {

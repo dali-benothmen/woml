@@ -1,6 +1,8 @@
 //! Readiness queries over immutable definition indexes and exact projection snapshots.
 
+mod frontier;
 mod index;
+pub(in crate::engine) use frontier::{changed_node, Frontier};
 use index::LatestAttempts;
 pub(crate) use index::ReadinessDefinition;
 pub(super) use index::ReadinessGraph;
@@ -26,6 +28,35 @@ use std::collections::{HashSet, VecDeque};
 #[cfg(test)]
 pub(super) fn record_prefix_attempt_visit() {
   incremental::note(|work| work.prefix_attempt_visits += 1);
+}
+
+#[cfg(test)]
+pub(super) fn record_frontier_invalidation() {
+  incremental::note(|work| work.frontier_invalidations += 1);
+}
+
+#[cfg(test)]
+pub(super) fn observe_frontier<T>(operation: impl FnOnce() -> T) -> (T, [usize; 7]) {
+  let (value, work) = incremental::counted(operation);
+  (
+    value,
+    [
+      work.frontier_builds,
+      work.frontier_initial_nodes,
+      work.frontier_affected_nodes,
+      work.frontier_affected_edges,
+      work.frontier_queries,
+      work.frontier_fallback_queries,
+      work.frontier_invalidations,
+    ],
+  )
+}
+
+#[cfg(test)]
+pub(super) fn chain_for_frontier_tests(
+  nodes: usize,
+) -> (CompiledWorkflowDefinition, String, Vec<crate::RunEvent>) {
+  investigation::chain(nodes)
 }
 
 #[cfg(test)]
@@ -76,7 +107,7 @@ pub(crate) fn ready_node_ids_for_projection_at(
   ReadinessGraph::new(workflow).ready_at(definition_hash, projection, now)
 }
 
-fn readiness_binding(
+pub(super) fn readiness_binding(
   workflow: &CompiledWorkflowDefinition,
   definition_hash: &str,
   projection: &RunProjection,
@@ -142,6 +173,13 @@ impl ReadinessGraph<'_> {
     let workflow = self.workflow;
     if !readiness_binding(workflow, definition_hash, projection)? {
       return Ok(Vec::new());
+    }
+    if let QueryProjection::Prefix(prefix) = view {
+      if let Some(frontier) = prefix.frontier_for(workflow) {
+        return Ok(frontier.ready_at(now));
+      }
+      #[cfg(test)]
+      incremental::note(|work| work.frontier_fallback_queries += 1);
     }
 
     // These are query-local views, not cached branch decisions or retry eligibility.
@@ -221,6 +259,13 @@ impl ReadinessGraph<'_> {
     }
     if !readiness_binding(self.workflow, definition_hash, projection)? {
       return Ok(false);
+    }
+    if let QueryProjection::Prefix(prefix) = view {
+      if let Some(frontier) = prefix.frontier_for(self.workflow) {
+        return Ok(frontier.contains(node_id, now));
+      }
+      #[cfg(test)]
+      incremental::note(|work| work.frontier_fallback_queries += 1);
     }
     let active = self.active_node_ids(projection);
     let latest = view.latest();

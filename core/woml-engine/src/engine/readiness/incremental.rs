@@ -9,6 +9,13 @@ use std::cell::Cell;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Work {
+  pub(super) frontier_builds: usize,
+  pub(super) frontier_initial_nodes: usize,
+  pub(super) frontier_affected_nodes: usize,
+  pub(super) frontier_affected_edges: usize,
+  pub(super) frontier_queries: usize,
+  pub(super) frontier_fallback_queries: usize,
+  pub(super) frontier_invalidations: usize,
   pub(super) prefix_attempt_visits: usize,
   pub(super) graph_preparations: usize,
   pub(super) active_node_visits: usize,
@@ -133,9 +140,15 @@ fn historical_step_membership_checks_one_candidate_per_start() {
     counted(|| crate::engine::validate_event_history_against_definition(&model, &hash, &events));
   assert_eq!(result, Ok(()));
   assert_eq!(work.graph_preparations, 1);
-  assert_eq!(work.candidate_checks, 16); // Former full-list path checked 16 * 16.
+  assert_eq!(work.candidate_checks, 0); // The supported cursor uses its frontier.
   assert_eq!(work.ready_vectors, 0);
-  assert_eq!(work.active_node_visits, 16 * 16); // Traversal is not incremental yet.
+  assert_eq!(work.active_node_visits, 0);
+  assert_eq!(work.frontier_initial_nodes, 16);
+  assert_eq!(work.frontier_builds, 1);
+  assert_eq!(work.frontier_affected_nodes, 16 + 15 * 2);
+  assert_eq!(work.frontier_affected_edges, 15);
+  assert_eq!(work.frontier_queries, 16);
+  assert_eq!(work.frontier_fallback_queries, 0);
   assert_eq!(work.attempt_visits, 0);
   assert_eq!(work.prefix_attempt_visits, 15);
 }

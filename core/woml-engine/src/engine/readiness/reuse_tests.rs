@@ -2,6 +2,24 @@
 mod allocations;
 
 #[test]
+fn repeated_history_validation_releases_all_cursor_derived_heap() {
+  let (model, hash, events) = super::investigation::chain(32);
+  // Exclude one-time profiler/TLS initialization, not cursor preparation: every
+  // measured validation still constructs and destroys its own fresh cursor.
+  crate::engine::validate_event_history_against_definition(&model, &hash, &events).unwrap();
+  for _ in 0..32 {
+    let (_, usage) = allocations::measure(|| {
+      crate::engine::validate_event_history_against_definition(&model, &hash, &events).unwrap();
+    });
+    assert!(usage.allocated > 0);
+    assert_eq!(
+      usage.live, 0,
+      "a completed validation retained cursor state"
+    );
+  }
+}
+
+#[test]
 fn observer_accounts_requested_bytes_and_resets_after_scope() {
   let (bytes, retained) = allocations::measure(|| vec![7u8; 1024]);
   assert_eq!(retained.live, 1024);

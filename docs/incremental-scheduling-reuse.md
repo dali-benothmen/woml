@@ -4,6 +4,9 @@ This records ISQ2 and ISQ3 on `perf/runtime-performance`, following the
 [ISQ0/ISQ1 checkpoint](incremental-scheduling-queries.md). These are private
 execution optimizations, not a new public model or persistence contract.
 
+This page preserves the ISQ2/ISQ3 checkpoint. Later cursor-only frontier work
+and its safety boundaries are documented [separately](incremental-scheduling-frontier.md).
+
 ## In plain language
 
 A workflow's roads do not change while its engine owns the compiled definition.

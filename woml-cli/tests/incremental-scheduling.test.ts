@@ -86,6 +86,14 @@ test('ISQ safety selection is explicit and timing capture is never an implicit C
   expect(packageJson.scripts['test:incremental-scheduling']).not.toContain('--release');
   const ci = await readFile(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
   expect(ci).toContain('bun run test:incremental-scheduling');
+  expect(ci).toContain('bun run test:incremental-scheduling-composition-safety');
+  const safety = packageJson.scripts['test:incremental-scheduling-safety'];
+  expect(safety).toContain('test:validated-state-reuse-safety');
+  expect(safety).toContain('test:rust-core-modularization-contracts');
+  const composition = packageJson.scripts['test:incremental-scheduling-composition-safety'];
+  for (const name of ['dag_engine', 'retry_composition', 'workflow_call_composition', 'for_each_runtime', 'fork_join_modes_runtime', 'capability_authority']) expect(composition).toContain(`--test ${name}`);
+  expect(composition).toContain('--test-threads=1');
+  expect(composition).not.toContain('--skip');
   expect(ci).not.toContain('capture:incremental-scheduling');
   expect(ci).not.toContain('investigate-incremental-scheduling-controls');
   const diagnosis = await readFile(new URL('../scripts/investigate-incremental-scheduling-controls.ts', import.meta.url), 'utf8');

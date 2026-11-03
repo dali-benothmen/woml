@@ -261,9 +261,10 @@ investigation. Further implementation must not treat those flags as resolved.
 
 ## Remaining work and release blockers
 
-ISQ2/ISQ3 now have a separate [reuse record](incremental-scheduling-reuse.md).
-The narrowly supported frontier, broader fault/scope proof and final release
-evidence remain later phases. No frontier or feature fallback has been enabled.
+ISQ2/ISQ3 have a separate [reuse record](incremental-scheduling-reuse.md).
+ISQ4/ISQ5 have a [cursor frontier and safety record](incremental-scheduling-frontier.md).
+Live frontier integration remains deferred; final broad release evidence remains
+ISQ6 work. Neither later record closes the ISQ1 control flags preserved here.
 
 The [previous verification record](validated-state-reuse-verification.md)
 still governs the existing prepared-runtime file-lock lifecycle blocker,

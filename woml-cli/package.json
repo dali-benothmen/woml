@@ -117,6 +117,8 @@
     "capture:readiness-indexes": "bun scripts/readiness-index-benchmark.ts",
     "test:incremental-scheduling-contracts": "bun test tests/incremental-scheduling.test.ts tests/incremental-scheduling-reuse.test.ts --max-concurrency=1 && bun run typecheck",
     "test:incremental-scheduling": "bun run test:incremental-scheduling-contracts && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --locked --manifest-path ../core/Cargo.toml -p woml-engine --lib engine:: -- --test-threads=1",
+    "test:incremental-scheduling-composition-safety": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --locked --manifest-path ../core/Cargo.toml -p woml-engine --test dag_engine --test retry_composition --test workflow_call_composition --test for_each_runtime --test fork_join_modes_runtime --test capability_authority -- --test-threads=1",
+    "test:incremental-scheduling-safety": "bun run test:incremental-scheduling && bun run test:validated-state-reuse-safety && bun run test:incremental-scheduling-composition-safety && bun run test:rust-core-modularization-contracts",
     "build:incremental-scheduling": "bun scripts/incremental-scheduling-measurement.ts build",
     "capture:incremental-scheduling-baseline": "bun scripts/incremental-scheduling-measurement.ts baseline",
     "compare:incremental-scheduling": "bun scripts/incremental-scheduling-measurement.ts compare",

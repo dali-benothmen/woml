@@ -2,6 +2,7 @@ use super::{validate_event_history_against_definition, HistoryPrefix};
 use crate::{fold_events, CompiledWorkflowDefinition, RunEvent, RunEventPayload};
 use serde::Deserialize;
 
+mod frontier;
 mod latest_attempts;
 mod validated_state;
 
