@@ -252,6 +252,10 @@ uses separate raw-worker and ready-gated diagnostic paths with explicit realm
 IDs and no production profiler. It improves attribution without changing this
 baseline, accepting an optimization or resolving the native/release blockers.
 
+The subsequent [ISR2 private function-boundary experiment](invocation-facade-prototype-investigation.md)
+tested a real isolated candidate against this independent archive. It missed
+the primary target and was rejected; ISR3 production integration stays deferred.
+
 Commands from `woml-cli`, run serially with at least 2 GiB available RAM/disk:
 
 ```bash

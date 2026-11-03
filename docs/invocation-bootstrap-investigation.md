@@ -8,6 +8,10 @@ production optimization is established. Keep fresh workers. The tested cache
 ideas remain unjustified; a lean worker-entry design is an investigation area,
 not an approved ISR2 prototype or proven ISR3 integration.
 
+Follow-up: the [private function-boundary prototype](invocation-facade-prototype-investigation.md)
+was built and tested against the independent reference. It failed the frozen
+primary target and was not integrated. This earlier diagnostic is unchanged.
+
 This follows the [original ISR0/ISR1 record](invocation-setup-investigation.md).
 The original baseline, profiler captures, acceptance contract and runner guards
 remain unchanged. The existing profiler duplication/realm-ID issues are not

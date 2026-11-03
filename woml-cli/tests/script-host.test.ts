@@ -1,12 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import {
   encodeFrame,
   FrameDecoder,
   FrameProtocolError,
 } from '../src/script-host/framing';
-import { ScriptHost } from '../src/script-host/host';
+import { ScriptHost as BaseScriptHost } from '../src/script-host/host';
 import { isScriptHostMessage } from '../src/script-host/protocol';
 import type {
   CapabilityCallMessage,
@@ -34,6 +35,16 @@ const hostEntry =
   process.env.WOML_SCRIPT_HOST_TEST_ENTRY ??
   resolve(packageRoot, 'src/script-host.ts');
 const bunExecutable = Bun.which('bun')!;
+// Test-only artifact selection for isolated ISR prototypes. Keep the deliberately
+// missing-worker fixture and all default production test paths unchanged.
+class ScriptHost extends BaseScriptHost {
+  constructor(options: ConstructorParameters<typeof BaseScriptHost>[0]) {
+    const candidate = process.env.WOML_SCRIPT_HOST_TEST_WORKER;
+    const ordinary = new URL('../src/script-host-worker.ts', import.meta.url);
+    super({ ...options, workerUrl: candidate !== undefined && options.workerUrl.href === ordinary.href
+      ? pathToFileURL(resolve(candidate)) : options.workerUrl });
+  }
+}
 const defaultEffectKey =
   'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 
