@@ -113,6 +113,8 @@
     "test:readiness-investigation-contracts": "bun test tests/readiness-investigation.test.ts --max-concurrency=1 && bun run typecheck",
     "test:readiness-investigation": "bun run test:readiness-investigation-contracts && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --locked --manifest-path ../core/Cargo.toml -p woml-engine --lib engine::readiness::investigation -- --test-threads=1",
     "capture:readiness-investigation": "bun scripts/readiness-investigation.ts",
+    "test:readiness-indexes": "bun test tests/readiness-index-benchmark.test.ts --max-concurrency=1 && bun run typecheck && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --locked --manifest-path ../core/Cargo.toml -p woml-engine --lib engine:: -- --test-threads=1",
+    "capture:readiness-indexes": "bun scripts/readiness-index-benchmark.ts",
     "test:validated-state-reuse-contracts": "bun test tests/validated-state-reuse.test.ts --max-concurrency=1 && bun run typecheck",
     "test:validated-state-reuse": "bun run test:validated-state-reuse-contracts && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --locked --manifest-path ../core/Cargo.toml -p woml-engine --lib engine::history -- --test-threads=1 && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --locked --manifest-path ../core/Cargo.toml -p woml-engine --lib durable::boundary_tests -- --test-threads=1",
     "build:validated-state-reuse-baseline": "bun scripts/validated-state-baseline.ts build",

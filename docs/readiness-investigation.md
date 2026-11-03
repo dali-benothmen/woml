@@ -11,6 +11,10 @@ the existing monotone prefix cursor is not repeatedly rebuilding all prefixes.
 Three isolated optimized Linux captures completed. This investigation changes
 only diagnostic tooling/tests, not production behavior or VSR0's acceptance gate.
 
+Subsequent implementation: [indexed readiness queries](readiness-indexes.md).
+The investigation and raw baseline below describe the pre-index checkpoint;
+they are retained rather than rewritten as candidate results.
+
 ## Question
 
 The [VSR baseline](validated-state-reuse-baseline.md) measured about 9.30 seconds

@@ -506,6 +506,9 @@ jobs:
       - name: Test prepared startup, ownership, rollback, and actual native request separation serially
         working-directory: woml-cli
         run: bun run test:startup-request-separation
+      - name: Test indexed readiness against historical scan semantics serially
+        working-directory: woml-cli
+        run: bun run test:readiness-indexes
       - name: Test installed prepared requests, hooks, managed state, restart, and restore
         working-directory: woml-cli
         run: bun run test:startup-request-separation-package

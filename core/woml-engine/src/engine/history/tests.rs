@@ -1,6 +1,4 @@
-use super::{
-  validate_event_history_against_definition, validate_history_with_prefixes, HistoryPrefix,
-};
+use super::{validate_event_history_against_definition, HistoryPrefix};
 use crate::{fold_events, CompiledWorkflowDefinition, RunEvent, RunEventPayload};
 use serde::Deserialize;
 
@@ -130,11 +128,12 @@ fn histories() -> Vec<History> {
 fn compare(history: &History, events: &[RunEvent]) -> Result<(), String> {
   let actual =
     validate_event_history_against_definition(&history.model, &history.definition_hash, events);
-  let original = validate_history_with_prefixes(
+  let original = super::validate_history_with_graph(
     &history.model,
     &history.definition_hash,
     events,
     HistoryPrefix::replay,
+    super::ReadinessGraph::reference,
   );
   assert_eq!(
     actual, original,
@@ -142,6 +141,69 @@ fn compare(history: &History, events: &[RunEvent]) -> Result<(), String> {
     history.label
   );
   actual
+}
+
+#[test]
+fn indexed_readiness_matches_scan_at_every_recorded_prefix_and_clock() {
+  for history in histories() {
+    let graph = super::ReadinessGraph::new(&history.model);
+    let reference = super::ReadinessGraph::reference(&history.model);
+    for end in 0..=history.events.len() {
+      let projection = fold_events(&history.events[..end]).unwrap();
+      let historical = history.events[end.saturating_sub(1)].occurred_at;
+      for now in [historical, historical + chrono::Duration::days(365)] {
+        for hash in [history.definition_hash.as_str(), "wrong-definition"] {
+          assert_eq!(
+            graph.ready_at(hash, &projection, now),
+            reference.ready_at(hash, &projection, now),
+            "{} prefix {end} at {now}",
+            history.label
+          );
+        }
+      }
+    }
+  }
+}
+
+#[test]
+fn definition_index_is_prepared_once_only_if_history_needs_readiness() {
+  let history = histories()
+    .into_iter()
+    .find(|history| history.label == "hello")
+    .unwrap();
+  for events in [&history.events[..0], &history.events[..1]] {
+    super::validate_history_with_graph(
+      &history.model,
+      &history.definition_hash,
+      events,
+      HistoryPrefix::new,
+      |_| panic!("No readiness query needs a graph"),
+    )
+    .unwrap();
+  }
+  let preparations = std::cell::Cell::new(0);
+  super::validate_history_with_graph(
+    &history.model,
+    &history.definition_hash,
+    &history.events,
+    HistoryPrefix::new,
+    |model| {
+      preparations.set(preparations.get() + 1);
+      super::ReadinessGraph::new(model)
+    },
+  )
+  .unwrap();
+  assert_eq!(preparations.get(), 1);
+  let mut corrupt = history.events.clone();
+  corrupt[0].sequence = 42;
+  assert!(super::validate_history_with_graph(
+    &history.model,
+    &history.definition_hash,
+    &corrupt,
+    HistoryPrefix::new,
+    |_| panic!("Structural rejection must precede preparation")
+  )
+  .is_err());
 }
 
 #[test]

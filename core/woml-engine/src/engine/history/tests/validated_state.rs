@@ -25,7 +25,13 @@ impl<'a> ReferenceCheckedHistory<'a> {
     let state = ProjectionFoldState::from_events(events).map_err(|error| error.to_string())?;
     // Preserve the existing definition checks and original per-prefix replay.
     // This executes another full gate and is intentionally NOT a performance path.
-    validate_history_with_prefixes(definition, definition_hash, events, HistoryPrefix::replay)?;
+    crate::engine::history::validate_history_with_graph(
+      definition,
+      definition_hash,
+      events,
+      HistoryPrefix::replay,
+      crate::engine::readiness::ReadinessGraph::reference,
+    )?;
     Ok(Self {
       events,
       definition,

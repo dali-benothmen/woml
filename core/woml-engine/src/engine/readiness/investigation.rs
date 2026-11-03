@@ -1,7 +1,7 @@
 //! Diagnostic copies/components only; never a production scheduler or fast path.
-use super::{
-  active_node_ids, edge_is_active, node_is_complete, ready_node_ids_for_projection_at,
-  workflow_settlement_can_decide,
+use super::ready_node_ids_for_projection_at;
+use super::reference::{
+  active_node_ids, edge_is_active, node_is_complete, workflow_settlement_can_decide,
 };
 use crate::engine::{
   validate_event_history_against_definition, validate_payload_against_definition,
@@ -31,7 +31,7 @@ fn cpu_ms() -> Option<f64> {
   None
 }
 
-fn timed<T>(operation: impl FnOnce() -> T) -> (T, Value) {
+pub(super) fn timed<T>(operation: impl FnOnce() -> T) -> (T, Value) {
   let before = cpu_ms();
   let started = Instant::now();
   let value = operation();
@@ -124,7 +124,7 @@ fn staged(
   ))
 }
 
-fn chain(nodes: usize) -> (CompiledWorkflowDefinition, String, Vec<RunEvent>) {
+pub(super) fn chain(nodes: usize) -> (CompiledWorkflowDefinition, String, Vec<RunEvent>) {
   let mut model: Value = serde_json::from_str(include_str!(
     "../../../../../woml/tests/fixtures/hello.compiled.v1.json"
   ))
