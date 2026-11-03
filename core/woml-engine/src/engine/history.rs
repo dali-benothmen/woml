@@ -3,9 +3,11 @@
 mod prefix;
 #[cfg(test)]
 mod tests;
+mod validated;
 
 use super::readiness::ReadinessGraph;
 use prefix::HistoryPrefix;
+use validated::ValidatedHistory;
 
 use super::{
   node_is_complete, step_effect_idempotency_key, validate_payload_against_definition,
@@ -36,7 +38,15 @@ pub(crate) fn validate_event_history_against_definition(
   definition_hash: &str,
   events: &[RunEvent],
 ) -> Result<(), String> {
-  validate_history_with_prefixes(workflow, definition_hash, events, HistoryPrefix::new)
+  check_event_history_against_definition(workflow, definition_hash, events).map(|_| ())
+}
+
+pub(crate) fn check_event_history_against_definition<'a>(
+  workflow: &'a CompiledWorkflowDefinition,
+  definition_hash: &'a str,
+  events: &'a [RunEvent],
+) -> Result<ValidatedHistory<'a>, String> {
+  validated::check(workflow, definition_hash, events)
 }
 
 #[cfg(test)]
@@ -56,6 +66,7 @@ pub(super) fn validate_history_scan_reference(
   )
 }
 
+#[cfg(test)]
 fn validate_history_with_prefixes<'a>(
   workflow: &CompiledWorkflowDefinition,
   definition_hash: &str,
@@ -71,6 +82,7 @@ fn validate_history_with_prefixes<'a>(
   )
 }
 
+#[cfg(test)]
 fn validate_history_with_graph<'a, 'w>(
   workflow: &'w CompiledWorkflowDefinition,
   definition_hash: &str,
@@ -81,6 +93,16 @@ fn validate_history_with_graph<'a, 'w>(
   // Preserve the full structural gate and its error precedence. Prefix state
   // belongs only to this immutable slice and never escapes to a store/cache.
   crate::fold_events(events).map_err(|error| error.to_string())?;
+  validate_history_definition_rules(workflow, definition_hash, events, make_prefixes, make_graph)
+}
+
+fn validate_history_definition_rules<'a, 'w>(
+  workflow: &'w CompiledWorkflowDefinition,
+  definition_hash: &str,
+  events: &'a [RunEvent],
+  make_prefixes: impl FnOnce(&'a [RunEvent]) -> HistoryPrefix<'a>,
+  make_graph: impl FnOnce(&'w CompiledWorkflowDefinition) -> ReadinessGraph<'w>,
+) -> Result<(), String> {
   // Borrow one immutable graph for this whole check. Projection lookup views
   // are still rebuilt per prefix and cannot survive cursor advancement.
   // Histories rejected before a readiness check (and empty histories) need no

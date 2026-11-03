@@ -1,8 +1,9 @@
 # Validated history: private execution-state contract
 
-Status: VSR1 executable specification; **not a public Rust, N-API or persisted
-contract**. Production reuse is deferred to VSR2. Contract revision 1 does not
-change any WOML schema/version.
+Status: VSR2/VSR3 production implementation with the independent VSR1 reference;
+**not a public Rust, N-API or persisted contract**. Contract revision 1 does not
+change any WOML schema/version. See the [implementation record](../validated-state-reuse-implementation.md)
+for converted callers and open release/resource gates.
 
 ## What the result means
 
@@ -22,7 +23,7 @@ caused the checker to examine the definition. It is not a started/admitted run.
 
 ## Construction and ownership
 
-The eventual production result has private fields and construction at the
+The production result has private fields and construction at the
 history-validation boundary. It owns the **complete** `ProjectionFoldState`
 while borrowing the exact immutable event slice, definition and definition-hash
 input for its usable lifetime.
@@ -89,13 +90,14 @@ events, repeated prefix requests, structural-versus-graph error priority,
 future versions, run/hash substitution, equal-content/different-input objects,
 changed earlier output with the same tail, empty histories and consuming state.
 
-This is not yet proof of a production optimized constructor, rollback behavior
-at a converted caller, rich-review hydration equivalence, or cross-platform
-execution. Those belong to later gates.
+Production/reference comparisons now cover the constructor and consumed fold
+bookkeeping. Separate durable boundary tests check replay counts, wait rollback
+and raw versus hydrated views. Native/package and cross-platform execution,
+broader composition and resource measurements remain later gates.
 
 ## Allocation and peak-live-state review
 
-The proposed production implementation retains one complete state while the
+The production implementation retains one complete state while the
 existing definition checker builds another prefix state. Both can be live
 simultaneously; peak memory can increase even if total allocations decrease.
 The result itself must not clone the event vector, definition, state, or public

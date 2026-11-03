@@ -1,8 +1,10 @@
-//! VSR1 executable specification. This entire module is test-only.
+//! Independent VSR1 reference versus the production VSR2 checked result.
 //! The reference deliberately repeats folding; it is NOT the VSR2 optimization.
 
 use super::{histories, History};
-use crate::engine::history::{validate_history_with_prefixes, HistoryPrefix};
+use crate::engine::history::{
+  check_event_history_against_definition, validate_history_with_prefixes, HistoryPrefix,
+};
 use crate::projection::ProjectionFoldState;
 use crate::{fold_events, CompiledWorkflowDefinition, RunEvent, RunEventPayload, RunProjection};
 
@@ -65,8 +67,8 @@ impl<'a> ReferenceCheckedHistory<'a> {
 }
 
 fn checked(history: &History, events: &[RunEvent]) -> Result<RunProjection, String> {
-  ReferenceCheckedHistory::check(&history.model, &history.definition_hash, events)
-    .map(|checked| checked.into_state().into_projection())
+  check_event_history_against_definition(&history.model, &history.definition_hash, events)
+    .map(|checked| checked.into_projection())
 }
 
 #[test]
@@ -74,8 +76,14 @@ fn reference_matches_all_recorded_and_historical_prefix_outcomes() {
   for history in histories() {
     for end in 0..=history.events.len() {
       let events = &history.events[..end];
-      let expected = super::compare(&history, events)
-        .and_then(|()| fold_events(events).map_err(|error| error.to_string()));
+      let expected =
+        ReferenceCheckedHistory::check(&history.model, &history.definition_hash, events).map(
+          |reference| {
+            assert!(reference.matches_inputs(&history.model, &history.definition_hash, events));
+            assert_eq!(reference.projection(), &fold_events(events).unwrap());
+            reference.into_state().into_projection()
+          },
+        );
       assert_eq!(
         checked(&history, events),
         expected,
@@ -94,9 +102,12 @@ fn complete_result_keeps_the_suffix_after_the_last_requested_prefix() {
     .unwrap();
   // The last readiness prefix stops at 66; outcome/finalization still belong to
   // the checked result. Never return the prefix cursor's last state instead.
-  let proof =
-    ReferenceCheckedHistory::check(&history.model, &history.definition_hash, &history.events)
-      .unwrap();
+  let proof = check_event_history_against_definition(
+    &history.model,
+    &history.definition_hash,
+    &history.events,
+  )
+  .unwrap();
   assert_eq!(history.events.len(), 68);
   assert_eq!(proof.projection().last_sequence, 68);
   assert_eq!(proof.projection(), &fold_events(&history.events).unwrap());
@@ -115,7 +126,7 @@ fn consumed_state_retains_append_bookkeeping_not_only_public_projection() {
     for end in 0..history.events.len() {
       let events = &history.events[..end];
       let Ok(proof) =
-        ReferenceCheckedHistory::check(&history.model, &history.definition_hash, events)
+        check_event_history_against_definition(&history.model, &history.definition_hash, events)
       else {
         continue;
       };
@@ -202,7 +213,7 @@ fn version_identity_and_definition_substitution_preserve_reference_errors() {
     HistoryPrefix::replay,
   );
   let actual =
-    ReferenceCheckedHistory::check(&history.model, wrong_hash, &history.events).map(|_| ());
+    check_event_history_against_definition(&history.model, wrong_hash, &history.events).map(|_| ());
   assert_eq!(actual, expected);
   assert!(actual.is_err());
 }
@@ -213,9 +224,12 @@ fn proof_is_bound_to_original_inputs_not_equal_count_tail_or_serialization() {
     .into_iter()
     .find(|item| item.label == "hello")
     .unwrap();
-  let proof =
-    ReferenceCheckedHistory::check(&history.model, &history.definition_hash, &history.events)
-      .unwrap();
+  let proof = check_event_history_against_definition(
+    &history.model,
+    &history.definition_hash,
+    &history.events,
+  )
+  .unwrap();
   assert!(proof.matches_inputs(&history.model, &history.definition_hash, &history.events));
   let other_definition = history.model.clone();
   let other_hash = history.definition_hash.clone();
@@ -244,12 +258,42 @@ fn proof_is_bound_to_original_inputs_not_equal_count_tail_or_serialization() {
 fn empty_history_is_structurally_empty_not_a_started_run_or_model_certificate() {
   let history = histories().remove(0);
   let proof =
-    ReferenceCheckedHistory::check(&history.model, &history.definition_hash, &[]).unwrap();
+    check_event_history_against_definition(&history.model, &history.definition_hash, &[]).unwrap();
   assert_eq!(proof.projection(), &RunProjection::default());
   assert_eq!(proof.into_state().last_event_id(), None);
   // Full model validation remains an existing caller precondition: this
   // history checker must not claim to validate a graph it never examines.
   let mut invalid_model = history.model.clone();
   invalid_model.schema_version = 999;
-  assert!(ReferenceCheckedHistory::check(&invalid_model, &history.definition_hash, &[]).is_ok());
+  assert!(
+    check_event_history_against_definition(&invalid_model, &history.definition_hash, &[]).is_ok()
+  );
+}
+
+#[test]
+fn complete_checked_result_folds_once_and_preserves_the_old_fold_error() {
+  use crate::projection::fold_counts::observe;
+  let history = histories()
+    .into_iter()
+    .find(|history| history.label == "hello")
+    .unwrap();
+  let (actual, passes) = observe(|| checked(&history, &history.events));
+  assert_eq!(passes, vec![history.events.len()]);
+  let (old_pair, old_passes) = observe(|| {
+    validate_history_with_prefixes(
+      &history.model,
+      &history.definition_hash,
+      &history.events,
+      HistoryPrefix::new,
+    )?;
+    fold_events(&history.events).map_err(|error| error.to_string())
+  });
+  assert_eq!(actual, old_pair);
+  assert_eq!(old_passes, vec![history.events.len(), history.events.len()]);
+  let mut corrupt = history.events.clone();
+  corrupt.last_mut().unwrap().sequence = 999;
+  assert_eq!(
+    checked(&history, &corrupt),
+    Err(fold_events(&corrupt).unwrap_err().to_string())
+  );
 }

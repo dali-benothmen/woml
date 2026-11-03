@@ -509,6 +509,9 @@ jobs:
       - name: Test indexed readiness against historical scan semantics serially
         working-directory: woml-cli
         run: bun run test:readiness-indexes
+      - name: Test exact-history state reuse, replay counts, hydration and rollback serially
+        working-directory: woml-cli
+        run: bun run test:validated-state-reuse
       - name: Test installed prepared requests, hooks, managed state, restart, and restore
         working-directory: woml-cli
         run: bun run test:startup-request-separation-package

@@ -2,7 +2,10 @@
 
 Reference source: `d9338480f1888808ddcc9d349d97ff0f29e77b40` on
 `perf/runtime-performance`, after startup separation. Local Linux checkpoint,
-2026-11-03. This proposal has **not changed production execution behavior**.
+2026-11-03. This historical baseline predates production state reuse; its raw
+samples and acceptance criteria remain unchanged. The later
+[VSR2/VSR3 implementation](validated-state-reuse-implementation.md) does not
+establish a pass of this record's outstanding acceptance gates.
 
 ## Phase status
 
@@ -12,14 +15,17 @@ Reference source: `d9338480f1888808ddcc9d349d97ff0f29e77b40` on
   and independent attribution trace captured. Full completion requires allocator/peak-live evidence and
   the post-startup native one-shot/activated controls. Do not mark those passed
   from the engine microbenchmark.
-- **VSR2–VSR5:** not implemented. No production fold has been removed.
+- **VSR2/VSR3:** later implementation removes the duplicate fold at three
+  reviewed boundaries; see its separate implementation record.
+- **VSR4/VSR5:** full safety/platform and performance/package acceptance remain
+  open. The VSR0 allocation/native prerequisites are not certified as passed.
 
 See the [inventory and capture protocol](validated-state-reuse.md) and
 [private result specification](protocols/validated-history-internal-v1.md).
 
 ## Structural baseline
 
-The current miss path discards a full validator fold, performs definition/
+At the baseline checkpoint the miss path discards a full validator fold, performs definition/
 prefix checks, then builds `ProjectionFoldState` again for the same events.
 
 | Synthetic active history | Full passes / visits | Monotone prefix visits | Requests | Public projection clones |
@@ -130,13 +136,14 @@ or script-host-tree peaks.
 Allocation totals and peak live bytes are explicitly **unmeasured (`null`)**.
 No allocation profiler is currently installed in this environment. Reviewing
 Rust ownership and counting explicit clones does not replace that evidence.
-The result may retain a complete state and a prefix state simultaneously; that
-peak must be measured for a later implementation.
+The later implementation retains a complete state and a prefix state
+simultaneously; that peak still needs measurement before release acceptance.
 
 The optimized unit-test binary does not certify a fresh N-API addon, installed
 CLI behavior, actual one-shot/activated feature controls or performance on
-other platforms. Those remain prerequisites for completing VSR0 and proceeding
-to production reuse. Startup separation's earlier open acceptance is unchanged.
+other platforms. Those remain open VSR0/release prerequisites; the renewed
+implementation request is recorded separately and does not certify them as met.
+Startup separation's earlier open acceptance is unchanged.
 
 ## Follow-up readiness investigation
 

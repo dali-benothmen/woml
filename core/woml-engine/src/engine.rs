@@ -12,7 +12,9 @@ mod routing;
 mod validation;
 
 pub(crate) use context::resolve_context_reference;
-pub(crate) use history::validate_event_history_against_definition;
+pub(crate) use history::{
+  check_event_history_against_definition, validate_event_history_against_definition,
+};
 use history::{validate_for_each_id, validate_operation_node, validate_reusable_lifecycle_binding};
 pub use identity::step_effect_idempotency_key;
 pub(crate) use readiness::{

@@ -4,7 +4,7 @@
 //! writes remove the old entry; rollback cannot leave speculative state published.
 
 use crate::durable::{load_events, DurableEventStore, DurableStoreError};
-use crate::engine::validate_event_history_against_definition;
+use crate::engine::check_event_history_against_definition;
 use crate::projection::ProjectionFoldState;
 use crate::ReviewPayloadV1;
 use crate::RunEvent;
@@ -142,10 +142,10 @@ impl DurableEventStore {
     span.count("projection_cache_misses", 1);
     let events = load_events(&self.connection, run_id)?;
     let workflow = self.definition(&binding.definition_hash)?;
-    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
-      .map_err(DurableStoreError::Contract)?;
-    let state = ProjectionFoldState::from_events(&events)?;
-    let mut projection = state.projection().clone();
+    let checked =
+      check_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+        .map_err(DurableStoreError::Contract)?;
+    let mut projection = checked.projection().clone();
     if projection
       .event_schema_version
       .is_some_and(|version| version >= RUN_EVENT_SCHEMA_VERSION_V11)
@@ -154,7 +154,7 @@ impl DurableEventStore {
       projection.workflow_id = Some(binding.workflow_id);
     }
     hydrate_rich_approval_public_outputs(&self.connection, run_id, &mut projection)?;
-    cache_projection_state(&self.projection_cache, run_id, state);
+    cache_projection_state(&self.projection_cache, run_id, checked.into_state());
     span.succeed();
     Ok(projection)
   }

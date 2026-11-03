@@ -1,7 +1,9 @@
 # Validated execution state reuse: inventory and baseline protocol
 
-Status: VSR0/VSR1 preparation. No production validation/fold/cache behavior is
-changed. Continue on `perf/runtime-performance`. The reference checkpoint is
+Status: the inventory and frozen baseline below precede production reuse.
+The [VSR2/VSR3 implementation record](validated-state-reuse-implementation.md)
+tracks the three selected conversions and outstanding acceptance gates.
+Continue on `perf/runtime-performance`. The original reference checkpoint is
 `d9338480f1888808ddcc9d349d97ff0f29e77b40`, **after** startup separation.
 Earlier startup-separation performance/platform acceptance remains separate.
 

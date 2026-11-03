@@ -14,6 +14,7 @@ import featureBridgeBaseline from '../../docs/refactoring/rcm12-baseline.json';
 import fixtureBaseline from '../../docs/refactoring/rcm14-fixtures-baseline.json';
 import compatibilityRepairs from '../../docs/refactoring/post-refactor-compatibility-repairs.json';
 import startupRepairs from '../../docs/refactoring/runtime-startup-separation-repairs.json';
+import validatedStateRepairs from '../../docs/refactoring/validated-state-reuse-repairs.json';
 
 const root = resolve(import.meta.dir, '../..');
 const hash = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex');
@@ -302,7 +303,9 @@ test('critical transaction declarations preserve ordered tokens with explicit po
   for (const declaration of transactionBaseline.criticalDeclarations) {
     const repair = (compatibilityRepairs.repairs as Record<string, { originalSha256: string; sha256: string }>)[declaration.name];
     if (repair !== undefined) expect(repair.originalSha256).toBe(declaration.sha256);
-    expect(orderedDeclarationHash(source, declaration.name)).toBe(repair?.sha256 ?? declaration.sha256);
+    const reuse = validatedStateRepairs.declarations.find(item => item.name === declaration.name);
+    if (reuse !== undefined) expect(reuse.originalSha256).toBe(repair?.sha256 ?? declaration.sha256);
+    expect(orderedDeclarationHash(source, declaration.name)).toBe(reuse?.sha256 ?? repair?.sha256 ?? declaration.sha256);
   }
   expect(Object.keys(compatibilityRepairs.repairs).sort()).toEqual([
     'recover_run', 'register_durable_wait_atomically', 'request_run_cancellation',
@@ -312,6 +315,31 @@ test('critical transaction declarations preserve ordered tokens with explicit po
   const name = 'recovered_state_mutation_settlement';
   const altered = source.replace('woml.state-result\\0v1\\0', 'woml.state-result\\0v2\\0');
   expect(orderedDeclarationHash(altered, name)).not.toBe(orderedDeclarationHash(source, name));
+});
+
+test('validated-state reuse pins only the three reviewed conversions without rewriting older repairs', async () => {
+  expect(validatedStateRepairs.profile).toBe('woml.validated-state-compatibility-repairs/v1');
+  expect(validatedStateRepairs.declarations.map(item => [item.name, item.path])).toEqual([
+    ['register_durable_wait_atomically', 'core/woml-engine/src/durable/transactions/waits.rs'],
+    ['try_claim_policy_run_at', 'core/woml-engine/src/durable/transactions/policy.rs'],
+    ['projection', 'core/woml-engine/src/durable/events/cache.rs'],
+  ]);
+  const original = [compatibilityRepairs.repairs.register_durable_wait_atomically.sha256,
+    'bdb791fcf3e870bde8ebf8ff7f6ee2d854e3887a5282c0011685dcc8ae3080a0',
+    '3beaf0848ca69fa46618e00e828581a11e0a3a3f4c04056a243b3062e412593d'];
+  for (const [index, repair] of validatedStateRepairs.declarations.entries()) {
+    expect(repair.originalSha256).toBe(original[index]);
+    expect(repair.reason).toStartWith('Validated state reuse:');
+    const source = await readFile(resolve(root, repair.path), 'utf8');
+    expect(orderedDeclarationHash(source, repair.name)).toBe(repair.sha256);
+    const changed = source.replaceAll('check_event_history_against_definition', 'unreviewed_history_checker');
+    expect(orderedDeclarationHash(changed, repair.name)).not.toBe(repair.sha256);
+    expect(repair.regression).toBe('core/woml-engine/src/durable/boundary_tests/validated_state_reuse.rs');
+    const regression = await readFile(resolve(root, repair.regression), 'utf8');
+    expect(regression).toContain('fn cache_miss_reuses_one_complete_fold_and_hits_do_not_fold');
+    expect(regression).toContain('fn policy_claim_reuses_only_the_initial_snapshot_and_rechecks_appended_start');
+    expect(regression).toContain('fn wait_registration_reuses_resulting_history_and_late_sql_failure_rolls_back');
+  }
 });
 
 test('contract facades preserve the frozen public type inventories', async () => {

@@ -65,6 +65,8 @@ pub(crate) struct ProjectionFoldState {
 
 impl ProjectionFoldState {
   pub(crate) fn from_events(events: &[RunEvent]) -> Result<Self, FoldError> {
+    #[cfg(test)]
+    super::fold_counts::record(events.len());
     let mut state = Self::default();
     for event in events {
       state.apply(event)?;
