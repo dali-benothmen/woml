@@ -5,6 +5,10 @@ The local `WOML Incremental Scheduling Queries Implementation Plan.md` and
 [private contract](protocols/incremental-scheduling-internal-v1.md) describe the
 staged scope. This record is not a release-acceptance certificate.
 
+This page preserves the ISQ0/ISQ1 checkpoint and its unresolved controls.
+The later [topology/prefix reuse record](incremental-scheduling-reuse.md)
+documents ISQ2/ISQ3 separately; statements below describe the earlier checkpoint.
+
 ## What changed
 
 Historical step-start validation asks whether **one particular node** could
@@ -257,9 +261,9 @@ investigation. Further implementation must not treat those flags as resolved.
 
 ## Remaining work and release blockers
 
-ISQ2–ISQ6 remain separate phases: owned topology reuse, prefix-local latest
-attempt maintenance, a narrowly supported frontier, broader fault/scope proof
-and final release evidence. No frontier or feature fallback has been enabled.
+ISQ2/ISQ3 now have a separate [reuse record](incremental-scheduling-reuse.md).
+The narrowly supported frontier, broader fault/scope proof and final release
+evidence remain later phases. No frontier or feature fallback has been enabled.
 
 The [previous verification record](validated-state-reuse-verification.md)
 still governs the existing prepared-runtime file-lock lifecycle blocker,

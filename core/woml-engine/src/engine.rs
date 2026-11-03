@@ -10,6 +10,7 @@ mod identity;
 mod readiness;
 mod routing;
 mod validation;
+pub(crate) use readiness::ReadinessDefinition;
 
 pub(crate) use context::resolve_context_reference;
 pub(crate) use history::{
@@ -17,9 +18,7 @@ pub(crate) use history::{
 };
 use history::{validate_for_each_id, validate_operation_node, validate_reusable_lifecycle_binding};
 pub use identity::step_effect_idempotency_key;
-pub(crate) use readiness::{
-  node_is_complete, ready_node_ids_for_projection, ready_node_ids_for_projection_at,
-};
+pub(crate) use readiness::{node_is_complete, ready_node_ids_for_projection};
 pub(crate) use routing::{
   selected_branch_arm, selected_choice_arm, selector_branch_id, BranchEvaluationError,
   BranchEvaluationErrorKind,
@@ -60,7 +59,7 @@ pub enum EngineError {
 
 #[derive(Debug)]
 pub struct InMemoryDagEngine {
-  workflow: CompiledWorkflowDefinition,
+  workflow: ReadinessDefinition,
   definition_hash: String,
   store: InMemoryEventStore,
 }
@@ -78,7 +77,7 @@ impl InMemoryDagEngine {
       ));
     }
     Ok(Self {
-      workflow,
+      workflow: ReadinessDefinition::new(workflow),
       definition_hash,
       store: InMemoryEventStore::default(),
     })
@@ -96,7 +95,7 @@ impl InMemoryDagEngine {
       ));
     }
     Ok(Self {
-      workflow,
+      workflow: ReadinessDefinition::new(workflow),
       definition_hash,
       store: InMemoryEventStore::default(),
     })
@@ -200,7 +199,9 @@ impl InMemoryDagEngine {
       ));
     }
 
-    ready_node_ids_for_projection(&self.workflow, &self.definition_hash, &projection)
+    self
+      .workflow
+      .ready_at(&self.definition_hash, &projection, Utc::now())
       .map_err(EngineError::Contract)
   }
 }

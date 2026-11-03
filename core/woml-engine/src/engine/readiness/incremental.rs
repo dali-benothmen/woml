@@ -9,6 +9,7 @@ use std::cell::Cell;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Work {
+  pub(super) prefix_attempt_visits: usize,
   pub(super) graph_preparations: usize,
   pub(super) active_node_visits: usize,
   pub(super) candidate_checks: usize,
@@ -135,7 +136,8 @@ fn historical_step_membership_checks_one_candidate_per_start() {
   assert_eq!(work.candidate_checks, 16); // Former full-list path checked 16 * 16.
   assert_eq!(work.ready_vectors, 0);
   assert_eq!(work.active_node_visits, 16 * 16); // Traversal is not incremental yet.
-  assert_eq!(work.attempt_visits, (0usize..16).sum::<usize>());
+  assert_eq!(work.attempt_visits, 0);
+  assert_eq!(work.prefix_attempt_visits, 15);
 }
 
 #[test]

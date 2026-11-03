@@ -38,6 +38,15 @@ candidates or construct a ready-result vector. Active reachability and latest
 attempt lookup still come from the exact projection on each query. They are
 not cached eligibility or proof of authority.
 
+ISQ2/ISQ3 extend preparation ownership, not eligibility: live engines own a lazy
+immutable ordinal topology, and monotone history cursors own latest-attempt
+ordinals. Each prefix view borrows the exact projection/map pair until the next
+advance. Status reads come from the current vector entry; failed applies discard
+the view/state. Standalone and scoped definitions retain borrowed topology.
+See the [reuse record](../incremental-scheduling-reuse.md) for the ownership audit,
+resource tradeoffs and separate post-ISQ1 attribution protocol. The initial
+inventory above describes ISQ1; query questions and clocks remain unchanged.
+
 Preserve latest **vector** occurrence, in-flight/succeeded blocking, due pending
 retry requirements, active-edge predecessors, recursive completion, settlement
 failure ownership, context scope and exact existing error precedence. Historical

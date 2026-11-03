@@ -11,11 +11,10 @@ use crate::durable::RunTimeoutSettlement;
 use crate::durable::TimerWaitSettlement;
 use crate::durable::RICH_APPROVAL_INSPECTION_DECISION_LIMIT;
 use crate::durable::{attempt_run_failed_data, DurableEventStore};
-use crate::engine::ready_node_ids_for_projection;
-use crate::engine::ready_node_ids_for_projection_at;
 use crate::engine::step_effect_idempotency_key;
 use crate::engine::validate_payload_against_definition;
 use crate::engine::validate_scoped_payload_against_definition;
+use crate::engine::ReadinessDefinition;
 use crate::event::ApprovalRequestedData;
 use crate::event::ForEachIterationScope;
 use crate::event::RichApprovalResolutionReason;
@@ -67,7 +66,7 @@ pub struct StepFailureCommit {
 
 #[derive(Debug)]
 pub struct DurableDagEngine {
-  workflow: CompiledWorkflowDefinition,
+  workflow: ReadinessDefinition,
   definition_hash: String,
   store: DurableEventStore,
 }
@@ -82,7 +81,7 @@ impl DurableDagEngine {
     let definition_hash = definition_hash.into();
     store.register_definition(&workflow, &definition_hash)?;
     Ok(Self {
-      workflow,
+      workflow: ReadinessDefinition::new(workflow),
       definition_hash,
       store,
     })
@@ -97,7 +96,7 @@ impl DurableDagEngine {
     let definition_hash = definition_hash.into();
     store.register_definition(&workflow, &definition_hash)?;
     Ok(Self {
-      workflow,
+      workflow: ReadinessDefinition::new(workflow),
       definition_hash,
       store,
     })
@@ -112,7 +111,7 @@ impl DurableDagEngine {
       ));
     }
     Ok(Self {
-      workflow,
+      workflow: ReadinessDefinition::new(workflow),
       definition_hash: binding.definition_hash,
       store,
     })
@@ -857,7 +856,9 @@ impl DurableDagEngine {
 
   pub fn ready_node_ids(&self, run_id: &str) -> Result<Vec<String>, DurableEngineError> {
     let projection = self.projection(run_id)?;
-    ready_node_ids_for_projection(&self.workflow, &self.definition_hash, &projection)
+    self
+      .workflow
+      .ready_at(&self.definition_hash, &projection, Utc::now())
       .map_err(DurableEngineError::Contract)
   }
 
@@ -867,7 +868,9 @@ impl DurableDagEngine {
     now: DateTime<Utc>,
   ) -> Result<Vec<String>, DurableEngineError> {
     let projection = self.projection(run_id)?;
-    ready_node_ids_for_projection_at(&self.workflow, &self.definition_hash, &projection, now)
+    self
+      .workflow
+      .ready_at(&self.definition_hash, &projection, now)
       .map_err(DurableEngineError::Contract)
   }
 

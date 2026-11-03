@@ -2,6 +2,7 @@
 
 mod index;
 use index::LatestAttempts;
+pub(crate) use index::ReadinessDefinition;
 pub(super) use index::ReadinessGraph;
 #[cfg(test)]
 mod incremental;
@@ -10,14 +11,49 @@ mod investigation;
 #[cfg(test)]
 mod reference;
 #[cfg(test)]
+mod reuse_tests;
+#[cfg(test)]
 mod tests;
 
+use super::history::ReadinessPrefix;
 use super::selector_branch_id;
 use crate::event::ParallelGroupOutcome;
 use crate::{CompiledWorkflowDefinition, ParallelGroupStatus, RunProjection, RunStatus};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::{HashSet, VecDeque};
+
+#[cfg(test)]
+pub(super) fn record_prefix_attempt_visit() {
+  incremental::note(|work| work.prefix_attempt_visits += 1);
+}
+
+#[cfg(test)]
+pub(super) fn observe_prefix_visits<T>(operation: impl FnOnce() -> T) -> (T, usize) {
+  let (value, work) = incremental::counted(operation);
+  (value, work.prefix_attempt_visits)
+}
+
+#[derive(Clone, Copy)]
+enum QueryProjection<'a> {
+  Current(&'a RunProjection),
+  Prefix(&'a ReadinessPrefix<'a>),
+}
+
+impl<'a> QueryProjection<'a> {
+  fn projection(self) -> &'a RunProjection {
+    match self {
+      Self::Current(projection) => projection,
+      Self::Prefix(prefix) => prefix.projection(),
+    }
+  }
+  fn latest(self) -> LatestAttempts<'a> {
+    match self {
+      Self::Current(projection) => LatestAttempts::new(projection),
+      Self::Prefix(prefix) => LatestAttempts::from_prefix(prefix),
+    }
+  }
+}
 
 pub(crate) fn ready_node_ids_for_projection(
   workflow: &CompiledWorkflowDefinition,
@@ -61,12 +97,21 @@ fn readiness_binding(
 }
 
 impl ReadinessGraph<'_> {
-  pub(super) fn ready(
+  pub(super) fn ready_from_prefix(
     &self,
     definition_hash: &str,
-    projection: &RunProjection,
+    prefix: &ReadinessPrefix<'_>,
   ) -> Result<Vec<String>, String> {
-    self.ready_at(definition_hash, projection, Utc::now())
+    self.ready_from_prefix_at(definition_hash, prefix, Utc::now())
+  }
+
+  pub(super) fn ready_from_prefix_at(
+    &self,
+    definition_hash: &str,
+    prefix: &ReadinessPrefix<'_>,
+    now: DateTime<Utc>,
+  ) -> Result<Vec<String>, String> {
+    self.ready_at_view(definition_hash, QueryProjection::Prefix(prefix), now)
   }
 
   pub(super) fn ready_at(
@@ -75,6 +120,16 @@ impl ReadinessGraph<'_> {
     projection: &RunProjection,
     now: DateTime<Utc>,
   ) -> Result<Vec<String>, String> {
+    self.ready_at_view(definition_hash, QueryProjection::Current(projection), now)
+  }
+
+  fn ready_at_view(
+    &self,
+    definition_hash: &str,
+    view: QueryProjection<'_>,
+    now: DateTime<Utc>,
+  ) -> Result<Vec<String>, String> {
+    let projection = view.projection();
     #[cfg(test)]
     if self.reference {
       return reference::ready_node_ids_for_projection_at(
@@ -91,7 +146,7 @@ impl ReadinessGraph<'_> {
 
     // These are query-local views, not cached branch decisions or retry eligibility.
     let active = self.active_node_ids(projection);
-    let latest = LatestAttempts::new(projection);
+    let latest = view.latest();
     #[cfg(test)]
     incremental::note(|work| work.ready_vectors += 1);
     Ok(
@@ -114,6 +169,40 @@ impl ReadinessGraph<'_> {
     now: DateTime<Utc>,
     node_id: &str,
   ) -> Result<bool, String> {
+    self.is_ready_at_view(
+      definition_hash,
+      QueryProjection::Current(projection),
+      now,
+      node_id,
+    )
+  }
+
+  pub(super) fn is_ready_from_prefix_at(
+    &self,
+    definition_hash: &str,
+    prefix: &ReadinessPrefix<'_>,
+    now: DateTime<Utc>,
+    node_id: &str,
+  ) -> Result<bool, String> {
+    if prefix.status != RunStatus::Running {
+      return self.is_ready_at(definition_hash, prefix.projection(), now, node_id);
+    }
+    self.is_ready_at_view(
+      definition_hash,
+      QueryProjection::Prefix(prefix),
+      now,
+      node_id,
+    )
+  }
+
+  fn is_ready_at_view(
+    &self,
+    definition_hash: &str,
+    view: QueryProjection<'_>,
+    now: DateTime<Utc>,
+    node_id: &str,
+  ) -> Result<bool, String> {
+    let projection = view.projection();
     #[cfg(test)]
     if self.reference {
       return reference::ready_node_ids_for_projection_at(
@@ -127,14 +216,14 @@ impl ReadinessGraph<'_> {
     #[cfg(test)]
     if incremental::full_membership_mode() {
       return self
-        .ready_at(definition_hash, projection, now)
+        .ready_at_view(definition_hash, view, now)
         .map(|ids| ids.iter().any(|id| id == node_id));
     }
     if !readiness_binding(self.workflow, definition_hash, projection)? {
       return Ok(false);
     }
     let active = self.active_node_ids(projection);
-    let latest = LatestAttempts::new(projection);
+    let latest = view.latest();
     // Deliberately scan IDs, not just `node(node_id)`: direct malformed inputs
     // can contain duplicates with different handlers. Full-list membership is
     // true if ANY matching source candidate is ready, not only the first one.
@@ -175,8 +264,6 @@ impl ReadinessGraph<'_> {
       }
       && self
         .incoming(&node.id)
-        .iter()
-        .copied()
         .filter(|edge| active.contains(edge.from.as_str()) && edge_is_active(edge, projection))
         .all(|edge| {
           self
@@ -234,7 +321,7 @@ impl ReadinessGraph<'_> {
           if node_id == branch.terminal_node_id {
             continue;
           }
-          pending.extend(self.outgoing(node_id).iter().map(|edge| edge.to.as_str()));
+          pending.extend(self.outgoing(node_id).map(|edge| edge.to.as_str()));
         }
       }
     }
@@ -258,7 +345,6 @@ impl ReadinessGraph<'_> {
       incremental::note(|work| work.active_node_visits += 1);
       for edge in self
         .outgoing(node_id)
-        .iter()
         .filter(|edge| edge_is_active(edge, projection))
       {
         queue.push_back(edge.to.as_str());
@@ -386,7 +472,7 @@ fn node_is_complete_with_graph(
           edge.to == node.id && (edge.id == format!("{selected}:join") || edge.id == *selected)
         };
         match graph {
-          Some(graph) => graph.incoming(&node.id).iter().copied().find(matches),
+          Some(graph) => graph.incoming(&node.id).find(matches),
           None => workflow.graph.edges.iter().find(matches),
         }
       })
@@ -481,7 +567,7 @@ fn node_is_complete_with_graph(
         })
     };
     return match graph {
-      Some(graph) => graph.incoming(&node.id).iter().copied().any(complete),
+      Some(graph) => graph.incoming(&node.id).any(complete),
       None => workflow
         .graph
         .edges

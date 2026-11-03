@@ -2,6 +2,7 @@ use super::{validate_event_history_against_definition, HistoryPrefix};
 use crate::{fold_events, CompiledWorkflowDefinition, RunEvent, RunEventPayload};
 use serde::Deserialize;
 
+mod latest_attempts;
 mod validated_state;
 
 #[derive(Deserialize)]
@@ -148,6 +149,7 @@ fn indexed_readiness_matches_scan_at_every_recorded_prefix_and_clock() {
   for history in histories() {
     let graph = super::ReadinessGraph::new(&history.model);
     let reference = super::ReadinessGraph::reference(&history.model);
+    let owner = crate::engine::ReadinessDefinition::new(history.model.clone());
     for end in 0..=history.events.len() {
       let projection = fold_events(&history.events[..end]).unwrap();
       let historical = history.events[end.saturating_sub(1)].occurred_at;
@@ -160,6 +162,7 @@ fn indexed_readiness_matches_scan_at_every_recorded_prefix_and_clock() {
             history.label
           );
           let expected = reference.ready_at(hash, &projection, now);
+          assert_eq!(owner.ready_at(hash, &projection, now), expected);
           for node in history
             .model
             .graph

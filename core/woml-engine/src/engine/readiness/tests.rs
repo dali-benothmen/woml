@@ -56,7 +56,7 @@ fn graph_indexes_preserve_source_order_duplicates_and_missing_endpoints() {
   for node in &model.graph.nodes {
     assert_eq!(graph.node(&node.id), model.node(&node.id));
     assert_eq!(
-      graph.incoming(&node.id),
+      graph.incoming(&node.id).collect::<Vec<_>>(),
       model
         .graph
         .edges
@@ -65,7 +65,7 @@ fn graph_indexes_preserve_source_order_duplicates_and_missing_endpoints() {
         .collect::<Vec<_>>()
     );
     assert_eq!(
-      graph.outgoing(&node.id),
+      graph.outgoing(&node.id).collect::<Vec<_>>(),
       model
         .graph
         .edges
@@ -162,6 +162,8 @@ fn compare_snapshot(model: &crate::CompiledWorkflowDefinition, projection: &RunP
     reference::ready_node_ids_for_projection_at(model, "hash", projection, now)
   );
   let expected = reference::ready_node_ids_for_projection_at(model, "hash", projection, now);
+  let owner = crate::engine::ReadinessDefinition::new(model.clone());
+  assert_eq!(owner.ready_at("hash", projection, now), expected);
   for node in &model.graph.nodes {
     assert_eq!(
       graph.is_ready_at("hash", projection, now, &node.id),
