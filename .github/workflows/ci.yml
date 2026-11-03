@@ -512,6 +512,9 @@ jobs:
       - name: Test cursor frontier, fallback, ordered readiness and history equivalence serially
         working-directory: woml-cli
         run: bun run test:incremental-scheduling
+      - name: Verify invocation setup measurement and isolation contracts
+        working-directory: woml-cli
+        run: bun run test:invocation-setup-contracts
       - name: Test exact-history reuse, corruption, commit faults, ownership and feature safety serially
         working-directory: woml-cli
         run: bun run test:validated-state-reuse-safety

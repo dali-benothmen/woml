@@ -1,0 +1,23 @@
+{
+  "profile": "woml.invocation-setup-acceptance/v1",
+  "baselineCommit": "3064a2b5092b1b24da328f9843965139d9079407",
+  "protocolVersion": 12,
+  "processesPerArtifact": 7,
+  "warmupBatches": 1,
+  "measuredBatches": 3,
+  "primary": { "cohort": "mixed", "invocationsPerBatch": 32, "metric": "wallMs", "minimumImprovementPercent": 10 },
+  "controls": ["inline", "module", "unique", "context", "large-module", "concurrency-2", "concurrency-4"],
+  "controlInvocationsPerBatch": 8,
+  "contextPaddingBytes": 262144,
+  "largeModulePaddingBytes": 262144,
+  "largeSourceMapPaddingBytes": 262144,
+  "invocationTimeoutMs": 10000,
+  "cohortWatchdogMs": 120000,
+  "statistic": "median-of-process-medians",
+  "comparisonOrder": "seven alternating adjacent baseline/candidate process pairs",
+  "investigation": { "controlMedianRegressionPercent": 5, "allocatedBytesIncreasePercent": 5, "rssOrScopedPeakLiveIncreaseBytes": 16777216 },
+  "minimumAvailableMemoryBytes": 2147483648,
+  "minimumAvailableDiskBytes": 2147483648,
+  "isolation": { "freshWorkerPerInvocation": true, "freshModuleInitialization": true, "reusedExecutedWorkers": false, "cachedAuthority": false, "publicProtocolChanges": false },
+  "releasePrerequisites": ["prepared-runtime-locking-correction", "prior-performance-controls", "adversarial-isolation-and-settlement", "scoped-resource-evidence", "fresh-native-and-installed-journeys", "actual-platform-validation", "unchanged-product-budgets"]
+}
