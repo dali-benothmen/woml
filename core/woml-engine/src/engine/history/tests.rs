@@ -4,6 +4,8 @@ use super::{
 use crate::{fold_events, CompiledWorkflowDefinition, RunEvent, RunEventPayload};
 use serde::Deserialize;
 
+mod validated_state;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct History {
