@@ -5,6 +5,9 @@ This records ISQ4/ISQ5 on `perf/runtime-performance`, after
 It is an internal optimization, not a new scheduler, public protocol or durable
 queue. Earlier control regressions and release prerequisites remain open.
 
+The later [ISQ6 final comparison and blocked release handoff](incremental-scheduling-release-evidence.md)
+records the original-baseline comparison, retained controls and unrun gates.
+
 ## Scope: history validation, not live dispatch
 
 The only production entrypoint enabling a frontier is the definition-bound

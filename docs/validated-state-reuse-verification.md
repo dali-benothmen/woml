@@ -265,8 +265,9 @@ excluded for the full transaction and rerun the failed installed journey.
 This requires a dedicated startup-locking correction. It is intentionally not
 hidden inside the history-reuse verification patch.
 
-A [draft PR description](../WOML%20Validated%20Execution%20State%20Reuse%20PR%20Description.md)
-keeps these blockers visible; it is not a release-ready handoff.
+The later [incremental scheduling release record](incremental-scheduling-release-evidence.md)
+keeps these blockers visible after the final history comparison. Neither
+checkpoint is a release-ready handoff.
 
 ## Compatibility and release gates
 

@@ -9,6 +9,10 @@ This page preserves the ISQ0/ISQ1 checkpoint and its unresolved controls.
 The later [topology/prefix reuse record](incremental-scheduling-reuse.md)
 documents ISQ2/ISQ3 separately; statements below describe the earlier checkpoint.
 
+The [ISQ6 release-evidence record](incremental-scheduling-release-evidence.md)
+adds a separately qualified historical-baseline continuation; the original
+runner and frozen acceptance contract below remain unchanged.
+
 ## What changed
 
 Historical step-start validation asks whether **one particular node** could
