@@ -215,6 +215,253 @@ fn wait_registration_reuses_resulting_history_and_late_sql_failure_rolls_back() 
   assert_eq!(store.projection(&run).unwrap().status, RunStatus::Waiting);
 }
 
+// Deferred constraints fail at COMMIT, not at the event or index statement.
+// TEMP objects isolate the fault from the production schema and other tests.
+fn fail_commit_after(store: &DurableEventStore, table: &str) {
+  assert!(matches!(
+    table,
+    "woml_scheduler_claims" | "woml_durable_waits"
+  ));
+  store
+    .connection
+    .execute_batch(&format!(
+      "CREATE TEMP TABLE vsr_commit_parent(id INTEGER PRIMARY KEY);
+     CREATE TEMP TABLE vsr_commit_child(id INTEGER REFERENCES vsr_commit_parent(id)
+       DEFERRABLE INITIALLY DEFERRED);
+     CREATE TEMP TRIGGER vsr_commit_fault AFTER INSERT ON {table}
+       BEGIN INSERT INTO vsr_commit_child VALUES(1); END;"
+    ))
+    .unwrap();
+}
+
+fn assert_failed_commit(error: DurableStoreError) {
+  assert!(
+    matches!(error, DurableStoreError::Sqlite(rusqlite::Error::SqliteFailure(ref code, _))
+    if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY),
+    "{error}"
+  );
+}
+
+fn durable_rows(store: &DurableEventStore) -> Vec<(String, Vec<String>)> {
+  let tables = store
+    .connection
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'woml_%' ORDER BY name",
+    )
+    .unwrap()
+    .query_map([], |row| row.get::<_, String>(0))
+    .unwrap()
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap();
+  tables
+    .into_iter()
+    .map(|table| {
+      assert!(table
+        .chars()
+        .all(|value| value.is_ascii_alphanumeric() || value == '_'));
+      let mut statement = store
+        .connection
+        .prepare(&format!("SELECT * FROM {table}"))
+        .unwrap();
+      let width = statement.column_count();
+      let mut rows = statement
+        .query_map([], |row| {
+          (0..width)
+            .map(|index| row.get::<_, rusqlite::types::Value>(index))
+            .collect::<Result<Vec<_>, _>>()
+        })
+        .unwrap()
+        .map(|row| format!("{:?}", row.unwrap()))
+        .collect::<Vec<_>>();
+      rows.sort();
+      (table, rows)
+    })
+    .collect()
+}
+
+#[test]
+fn policy_commit_failure_rolls_back_claim_start_indexes_and_cached_state() {
+  let model = serde_json::from_str(include_str!(
+    "../../../../../woml/tests/fixtures/runtime-policies/runtime-policy.compiled.v12.json"
+  ))
+  .unwrap();
+  let (mut store, run, now) = policy_store(model);
+  let before = store.events(&run).unwrap();
+  let previous = store.projection(&run).unwrap();
+  fail_commit_after(&store, "woml_scheduler_claims");
+  let rows = durable_rows(&store);
+  assert_failed_commit(
+    store
+      .try_claim_policy_run(&run, "owner", now, Duration::from_secs(30))
+      .unwrap_err(),
+  );
+  assert!(store.connection.is_autocommit());
+  assert_eq!(
+    durable_rows(&store),
+    rows,
+    "Every durable table must roll back, including summary/queue indexes"
+  );
+  assert_eq!(store.events(&run).unwrap(), before);
+  assert_eq!(store.projection(&run).unwrap(), previous);
+  for table in [
+    "woml_scheduler_claims",
+    "woml_runtime_policy_starts",
+    "vsr_commit_child",
+  ] {
+    let count: i64 = store
+      .connection
+      .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+        row.get(0)
+      })
+      .unwrap();
+    assert_eq!(count, 0, "{table} must roll back");
+  }
+  assert_eq!(
+    store.projection_cache.borrow()[&run]
+      .projection()
+      .last_sequence,
+    1
+  );
+  store
+    .connection
+    .execute_batch("DROP TRIGGER vsr_commit_fault;")
+    .unwrap();
+  assert!(matches!(
+    store
+      .try_claim_policy_run(&run, "owner", now, Duration::from_secs(30))
+      .unwrap(),
+    crate::PolicyExecutionClaimResult::Claimed {
+      first_start: true,
+      ..
+    }
+  ));
+  assert_eq!(store.events(&run).unwrap().len(), 2);
+}
+
+#[test]
+fn wait_commit_failure_publishes_neither_wait_nor_projection_and_can_retry() {
+  let model = serde_json::from_str(include_str!(
+    "../../../../../woml/tests/fixtures/durable-waits/model.v17.reviewed.json"
+  ))
+  .unwrap();
+  let (mut store, run, now) = policy_store(model);
+  store
+    .try_claim_policy_run(&run, "owner", now, Duration::from_secs(30))
+    .unwrap();
+  let before = store.events(&run).unwrap();
+  let previous = store.projection(&run).unwrap();
+  let registration = crate::WaitRegisteredData {
+    wait_id: "pause".into(),
+    node_id: "pause".into(),
+    kind: crate::DurableWaitKind::Duration,
+    registered_at: now,
+    deadline: Some(now + chrono::Duration::seconds(1)),
+    signals: None,
+    correlation_digest: None,
+  };
+  fail_commit_after(&store, "woml_durable_waits");
+  let rows = durable_rows(&store);
+  assert_failed_commit(
+    store
+      .register_durable_wait_atomically(&run, "evt_vsr_commit_wait", now, registration.clone())
+      .unwrap_err(),
+  );
+  assert!(store.connection.is_autocommit());
+  assert_eq!(durable_rows(&store), rows);
+  assert_eq!(store.events(&run).unwrap(), before);
+  assert_eq!(store.projection(&run).unwrap(), previous);
+  let count: i64 = store
+    .connection
+    .query_row("SELECT COUNT(*) FROM woml_durable_waits", [], |row| {
+      row.get(0)
+    })
+    .unwrap();
+  assert_eq!(count, 0);
+  assert_eq!(
+    store.projection_cache.borrow()[&run]
+      .projection()
+      .last_sequence,
+    2
+  );
+  store
+    .connection
+    .execute_batch("DROP TRIGGER vsr_commit_fault;")
+    .unwrap();
+  assert_eq!(
+    store
+      .register_durable_wait_atomically(&run, "evt_vsr_commit_wait", now, registration)
+      .unwrap()
+      .status,
+    RunStatus::Waiting
+  );
+}
+
+#[test]
+fn committed_cross_connection_tail_is_reloaded_and_reopen_has_no_shared_cache() {
+  let database = super::TemporaryDatabase::new();
+  let mut writer = DurableEventStore::open(&database.0).unwrap();
+  let model = serde_json::from_str(MODEL).unwrap();
+  writer.register_definition(&model, HASH).unwrap();
+  writer
+    .start_run(
+      "evt_store_boundary_start",
+      RUN,
+      Utc::now(),
+      "hello",
+      HASH,
+      Map::new(),
+    )
+    .unwrap();
+  let reader = DurableEventStore::open_ready(&database.0).unwrap();
+  assert_eq!(observe(|| reader.projection(RUN)).1, vec![1]);
+  writer
+    .append_payload(RUN, "evt_vsr_writer", Utc::now(), super::attempt_started())
+    .unwrap();
+  let (actual, counts) = observe(|| reader.projection(RUN));
+  assert_eq!(counts, vec![2]);
+  assert_eq!(actual.unwrap(), writer.projection(RUN).unwrap());
+  assert!(observe(|| reader.projection(RUN)).1.is_empty());
+  drop(reader);
+  drop(writer);
+  let reopened = DurableEventStore::open_ready(&database.0).unwrap();
+  assert!(reopened.projection_cache.borrow().is_empty());
+  assert_eq!(observe(|| reopened.projection(RUN)).1, vec![2]);
+  // An entirely different store may use the SAME run/hash/tail strings. It
+  // still loads its own events; the borrowed witness is not a global cache key.
+  let independent = running_store();
+  independent.projection_cache.borrow_mut().clear();
+  assert_eq!(observe(|| independent.projection(RUN)).1, vec![1]);
+}
+
+#[test]
+fn retained_active_states_remain_bounded_and_evicted_runs_reload() {
+  let mut store = DurableEventStore::open_in_memory().unwrap();
+  let model = serde_json::from_str(MODEL).unwrap();
+  store.register_definition(&model, HASH).unwrap();
+  for index in 0..258 {
+    let run = format!("run_vsr_bound_{index}");
+    store
+      .start_run(
+        format!("evt_vsr_bound_{index}"),
+        &run,
+        Utc::now(),
+        "hello",
+        HASH,
+        Map::new(),
+      )
+      .unwrap();
+    store.projection(&run).unwrap();
+    assert!(store.projection_cache.borrow().len() <= 256);
+  }
+  assert_eq!(store.projection_cache.borrow().len(), 256);
+  let absent = (0..258)
+    .map(|index| format!("run_vsr_bound_{index}"))
+    .find(|run| !store.projection_cache.borrow().contains_key(run))
+    .unwrap();
+  assert_eq!(observe(|| store.projection(&absent)).1, vec![1]);
+  assert_eq!(store.projection_cache.borrow().len(), 256);
+}
+
 #[test]
 fn hydrated_review_is_public_only_and_missing_review_blocks_cache_miss_publication() {
   struct NoArtifacts;

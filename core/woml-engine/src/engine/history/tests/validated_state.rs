@@ -118,6 +118,40 @@ fn complete_result_keeps_the_suffix_after_the_last_requested_prefix() {
 }
 
 #[test]
+fn deterministic_corruptions_at_every_recorded_prefix_keep_exact_reference_outcomes() {
+  for history in histories() {
+    for end in 1..=history.events.len() {
+      for mutation in 0..5 {
+        let mut events = history.events[..end].to_vec();
+        // Alternate earlier and last records, so a correct tail cannot confer
+        // proof on edited earlier data. No random seed or golden regeneration.
+        let index = if end % 2 == 0 { 0 } else { end - 1 };
+        match mutation {
+          0 => events[index].sequence += 10,
+          1 => events[index].event_schema_version = 999,
+          2 => events[index].run_id = "run_vsr_wrong_identity".into(),
+          3 if end > 1 => events[index].event_id = events[1 - index.min(1)].event_id.clone(),
+          3 => events[index].event_id.clear(),
+          4 => {
+            events.remove(index);
+          }
+          _ => unreachable!(),
+        };
+        let reference =
+          ReferenceCheckedHistory::check(&history.model, &history.definition_hash, &events)
+            .map(|checked| checked.into_state().into_projection());
+        assert_eq!(
+          checked(&history, &events),
+          reference,
+          "{} prefix {end} mutation {mutation}",
+          history.label
+        );
+      }
+    }
+  }
+}
+
+#[test]
 fn consumed_state_retains_append_bookkeeping_not_only_public_projection() {
   for history in histories()
     .into_iter()

@@ -6,12 +6,12 @@ boundaries; it does not skip graph checks, extend cache freshness or certify
 later writes. Work continues on `perf/runtime-performance` after the
 [readiness indexes](readiness-indexes.md).
 
-The renewed implementation request advances these narrow code checkpoints.
-The [original acceptance contract](validated-state-reuse-acceptance.v1.json),
-missing allocation/peak-live measurements, native controls and release gates
-remain open. No CPU or workflow-latency improvement is claimed for this change
-without a matched candidate capture. The earlier readiness-index speedup must
-not be attributed to removing this fold.
+The [verification record](validated-state-reuse-verification.md) covers the
+subsequent safety and performance work. The
+[original acceptance contract](validated-state-reuse-acceptance.v1.json) remains
+unchanged. Allocation/peak-live and platform evidence are separate shipping
+gates. The earlier readiness-index speedup must not be attributed to removing
+this fold.
 
 ## Checked result and error order
 

@@ -216,6 +216,93 @@ fn autocommit_writes_also_recheck_current_ownership() {
 }
 
 #[test]
+fn validated_policy_and_wait_results_cannot_bypass_precommit_revocation() {
+  for wait in [false, true] {
+    let mut f = Fixture::new();
+    let workflow: CompiledWorkflowDefinition = serde_json::from_str(if wait {
+      include_str!("../../../../../woml/tests/fixtures/durable-waits/model.v17.reviewed.json")
+    } else {
+      include_str!(
+        "../../../../../woml/tests/fixtures/runtime-policies/runtime-policy.compiled.v12.json"
+      )
+    })
+    .unwrap();
+    let policy_hash = HASH.replace('9', "8");
+    f.store
+      .register_definition(&workflow, &policy_hash)
+      .unwrap();
+    let now = Utc::now();
+    let admission = f
+      .store
+      .admit_trigger_occurrence(crate::TriggerAdmissionRequest {
+        workflow_id: workflow.workflow_id,
+        definition_hash: policy_hash,
+        trigger_id: "start".into(),
+        trigger_handler: "trigger.manual".into(),
+        source_identity: "vsr-precommit".into(),
+        payload: Map::from_iter([("orderId".into(), serde_json::json!("order-1"))]),
+        received_at: now,
+      })
+      .unwrap();
+    let run = admission.run_id;
+    if wait {
+      f.store
+        .try_claim_policy_run(&run, "scheduler", now, std::time::Duration::from_secs(30))
+        .unwrap();
+    }
+    let context = f.prepare();
+    let mut store = context
+      .open(&f.path, PreparedScope::Dispatch, Some(&run))
+      .unwrap();
+    let before_events = store.events(&run).unwrap();
+    let before_projection = store.projection(&run).unwrap();
+    let revoke = context.clone();
+    *context.0.before_commit.lock().unwrap() = Some(Box::new(move || revoke.revoke()));
+    let result = if wait {
+      store
+        .register_durable_wait_atomically(
+          &run,
+          "evt_vsr_precommit",
+          now,
+          crate::WaitRegisteredData {
+            wait_id: "pause".into(),
+            node_id: "pause".into(),
+            kind: crate::DurableWaitKind::Duration,
+            registered_at: now,
+            deadline: Some(now + Duration::seconds(1)),
+            signals: None,
+            correlation_digest: None,
+          },
+        )
+        .map(|_| ())
+    } else {
+      store
+        .try_claim_policy_run(&run, "scheduler", now, std::time::Duration::from_secs(30))
+        .map(|_| ())
+    };
+    assert!(result.is_err());
+    assert!(context.is_revoked());
+    assert_eq!(store.events(&run).unwrap(), before_events);
+    assert_eq!(store.projection(&run).unwrap(), before_projection);
+    assert_eq!(f.store.projection(&run).unwrap(), before_projection);
+    let count: i64 = f
+      .store
+      .connection
+      .query_row(
+        if wait {
+          "SELECT COUNT(*) FROM woml_durable_waits"
+        } else {
+          "SELECT COUNT(*) FROM woml_scheduler_claims"
+        },
+        [],
+        |row| row.get(0),
+      )
+      .unwrap();
+    assert_eq!(count, 0);
+  }
+}
+
+#[test]
 fn expired_owner_refuses_requests_but_exact_renewal_can_restore_eligibility() {
   let f = Fixture::new();
   let context = f.prepare();

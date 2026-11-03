@@ -19,13 +19,13 @@ function command(argv: string[]) {
   return result.stdout.toString();
 }
 
-async function snapshot() {
+export async function snapshot() {
   const paths = [...new Set([...command(['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', ...sourceRoots]).split('\0').filter(Boolean), ...harnessFiles])].sort();
   const files = await Promise.all(paths.map(async path => ({ path, sha256: sha256(await readFile(join(root, path))) })));
   return { commit: command(['git', 'rev-parse', 'HEAD']).trim(), files, sha256: sha256(JSON.stringify(files)) };
 }
 
-async function headroom() {
+export async function headroom() {
   let memory = freemem();
   if (process.platform === 'linux') {
     const info = await readFile('/proc/meminfo', 'utf8');
