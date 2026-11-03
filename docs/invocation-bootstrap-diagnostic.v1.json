@@ -1,0 +1,16 @@
+{
+  "profile": "woml.invocation-bootstrap-diagnostic/v1",
+  "sourceCheckpoint": "c1a4440ac5bafec5db9f4f647a27daa3f6e7b3b7",
+  "originalWorkerSha256": "af632902e850fdba61b7e40dd3c66e3cb21f32d797698e9abd788e83f6e83f08",
+  "originalSourceSha256": "8dab1f490b1adca2c8e4d7c3c3ff9da8ec8afc840b608bd4f9e032201347ce94",
+  "processes": 7,
+  "warmupSamples": 3,
+  "measuredSamples": 12,
+  "cases": ["raw-inline", "raw-module", "wrapped-empty", "wrapped-inline", "wrapped-module", "wrapped-context", "wrapped-large", "wrapped-concurrent"],
+  "concurrentWorkers": 4,
+  "order": "Rotate cases by sample and process index; reverse on odd process indexes",
+  "watchdogMs": 30000,
+  "statistic": "median-of-process-medians",
+  "purpose": "Separate parent-observed arrival/readiness/request intervals and worker-local import/execution intervals. Wrapper and empty-control paths perturb startup; no release acceptance or speedup inference.",
+  "releaseAccepted": false
+}

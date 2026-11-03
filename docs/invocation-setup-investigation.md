@@ -247,6 +247,11 @@ service waits, Rust dispatch, durable settlement and installed workflows are
 not measured by this no-effect direct-host baseline. Do not mark ISR4–ISR6 or
 the whole performance branch accepted from these results.
 
+The later [reopened bootstrap investigation](invocation-bootstrap-investigation.md)
+uses separate raw-worker and ready-gated diagnostic paths with explicit realm
+IDs and no production profiler. It improves attribution without changing this
+baseline, accepting an optimization or resolving the native/release blockers.
+
 Commands from `woml-cli`, run serially with at least 2 GiB available RAM/disk:
 
 ```bash
