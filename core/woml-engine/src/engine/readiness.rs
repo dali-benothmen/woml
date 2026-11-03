@@ -1,5 +1,8 @@
 //! engine readiness.
 
+#[cfg(test)]
+mod investigation;
+
 use super::selector_branch_id;
 use crate::event::ParallelGroupOutcome;
 use crate::CompiledWorkflowDefinition;

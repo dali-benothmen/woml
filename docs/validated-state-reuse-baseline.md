@@ -137,3 +137,11 @@ The optimized unit-test binary does not certify a fresh N-API addon, installed
 CLI behavior, actual one-shot/activated feature controls or performance on
 other platforms. Those remain prerequisites for completing VSR0 and proceeding
 to production reuse. Startup separation's earlier open acceptance is unchanged.
+
+## Follow-up readiness investigation
+
+The separate [readiness investigation](readiness-investigation.md) attributes the
+large-chain validation cost to repeated graph-wide reachability and linear
+attempt/predecessor searches. It varies graph size independently of event count
+and measures the current implementation without adding a production fast path.
+Its exploratory cohort does not replace this frozen baseline or close its gates.
