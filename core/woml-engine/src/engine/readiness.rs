@@ -4,6 +4,8 @@ mod index;
 use index::LatestAttempts;
 pub(super) use index::ReadinessGraph;
 #[cfg(test)]
+mod incremental;
+#[cfg(test)]
 mod investigation;
 #[cfg(test)]
 mod reference;
@@ -90,48 +92,97 @@ impl ReadinessGraph<'_> {
     // These are query-local views, not cached branch decisions or retry eligibility.
     let active = self.active_node_ids(projection);
     let latest = LatestAttempts::new(projection);
+    #[cfg(test)]
+    incremental::note(|work| work.ready_vectors += 1);
     Ok(
       workflow
         .graph
         .nodes
         .iter()
-        .filter(|node| {
-          active.contains(node.id.as_str())
-            && !self.complete(node, projection)
-            && (node.handler != "engine.workflow-settlement"
-              || self.settlement_can_decide(projection, &latest))
-            && match latest.get(&node.id) {
-              None => true,
-              Some(attempt)
-                if matches!(
-                  attempt.status,
-                  crate::projection::AttemptStatus::Started
-                    | crate::projection::AttemptStatus::Succeeded { .. }
-                ) =>
-              {
-                false
-              }
-              Some(_) => projection
-                .pending_retries
-                .get(&node.id)
-                .is_some_and(|schedule| schedule.scheduled_at <= now),
-            }
-            && self
-              .incoming(&node.id)
-              .iter()
-              .copied()
-              .filter(|edge| {
-                active.contains(edge.from.as_str()) && edge_is_active(edge, projection)
-              })
-              .all(|edge| {
-                self
-                  .node(&edge.from)
-                  .is_some_and(|predecessor| self.complete(predecessor, projection))
-              })
-        })
+        .filter(|node| self.candidate_is_ready(node, projection, now, &active, &latest))
         .map(|node| node.id.clone())
         .collect(),
     )
+  }
+
+  /// Exact full-list membership without evaluating unrelated candidates or
+  /// allocating a ready-result vector. Dynamic query views remain call-local.
+  pub(super) fn is_ready_at(
+    &self,
+    definition_hash: &str,
+    projection: &RunProjection,
+    now: DateTime<Utc>,
+    node_id: &str,
+  ) -> Result<bool, String> {
+    #[cfg(test)]
+    if self.reference {
+      return reference::ready_node_ids_for_projection_at(
+        self.workflow,
+        definition_hash,
+        projection,
+        now,
+      )
+      .map(|ids| ids.iter().any(|id| id == node_id));
+    }
+    #[cfg(test)]
+    if incremental::full_membership_mode() {
+      return self
+        .ready_at(definition_hash, projection, now)
+        .map(|ids| ids.iter().any(|id| id == node_id));
+    }
+    if !readiness_binding(self.workflow, definition_hash, projection)? {
+      return Ok(false);
+    }
+    let active = self.active_node_ids(projection);
+    let latest = LatestAttempts::new(projection);
+    // Deliberately scan IDs, not just `node(node_id)`: direct malformed inputs
+    // can contain duplicates with different handlers. Full-list membership is
+    // true if ANY matching source candidate is ready, not only the first one.
+    Ok(self.workflow.graph.nodes.iter().any(|node| {
+      node.id == node_id && self.candidate_is_ready(node, projection, now, &active, &latest)
+    }))
+  }
+
+  fn candidate_is_ready(
+    &self,
+    node: &crate::model::CompiledWorkflowNode,
+    projection: &RunProjection,
+    now: DateTime<Utc>,
+    active: &HashSet<&str>,
+    latest: &LatestAttempts<'_>,
+  ) -> bool {
+    #[cfg(test)]
+    incremental::note(|work| work.candidate_checks += 1);
+    active.contains(node.id.as_str())
+      && !self.complete(node, projection)
+      && (node.handler != "engine.workflow-settlement"
+        || self.settlement_can_decide(projection, latest))
+      && match latest.get(&node.id) {
+        None => true,
+        Some(attempt)
+          if matches!(
+            attempt.status,
+            crate::projection::AttemptStatus::Started
+              | crate::projection::AttemptStatus::Succeeded { .. }
+          ) =>
+        {
+          false
+        }
+        Some(_) => projection
+          .pending_retries
+          .get(&node.id)
+          .is_some_and(|schedule| schedule.scheduled_at <= now),
+      }
+      && self
+        .incoming(&node.id)
+        .iter()
+        .copied()
+        .filter(|edge| active.contains(edge.from.as_str()) && edge_is_active(edge, projection))
+        .all(|edge| {
+          self
+            .node(&edge.from)
+            .is_some_and(|predecessor| self.complete(predecessor, projection))
+        })
   }
 
   fn complete(
@@ -203,6 +254,8 @@ impl ReadinessGraph<'_> {
       if !active.insert(node_id) {
         continue;
       }
+      #[cfg(test)]
+      incremental::note(|work| work.active_node_visits += 1);
       for edge in self
         .outgoing(node_id)
         .iter()

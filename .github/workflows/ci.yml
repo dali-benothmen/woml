@@ -509,6 +509,9 @@ jobs:
       - name: Test indexed readiness against historical scan semantics serially
         working-directory: woml-cli
         run: bun run test:readiness-indexes
+      - name: Test historical single-node readiness and incremental scheduling contracts serially
+        working-directory: woml-cli
+        run: bun run test:incremental-scheduling
       - name: Test exact-history reuse, corruption, commit faults, ownership and feature safety serially
         working-directory: woml-cli
         run: bun run test:validated-state-reuse-safety

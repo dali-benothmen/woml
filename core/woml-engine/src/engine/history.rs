@@ -379,8 +379,7 @@ fn validate_history_definition_rules<'a, 'w>(
       }
       RunEventPayload::StepAttemptStarted(data) => {
         let prefix = prefixes.at(index)?;
-        let ready = graph.ready_at(definition_hash, prefix, event.occurred_at)?;
-        if !ready.iter().any(|node_id| node_id == &data.node_id) {
+        if !graph.is_ready_at(definition_hash, prefix, event.occurred_at, &data.node_id)? {
           return Err(format!(
             "Node {:?} started before it was ready.",
             data.node_id

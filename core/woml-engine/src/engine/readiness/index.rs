@@ -18,6 +18,8 @@ pub(in crate::engine) struct ReadinessGraph<'a> {
 
 impl<'a> ReadinessGraph<'a> {
   pub(in crate::engine) fn new(workflow: &'a CompiledWorkflowDefinition) -> Self {
+    #[cfg(test)]
+    super::incremental::note(|work| work.graph_preparations += 1);
     let mut nodes = HashMap::with_capacity(workflow.graph.nodes.len());
     for node in &workflow.graph.nodes {
       // Match `node()`'s first occurrence even for a caller's invalid graph.
@@ -70,6 +72,8 @@ pub(super) struct LatestAttempts<'a>(HashMap<&'a str, &'a AttemptProjection>);
 
 impl<'a> LatestAttempts<'a> {
   pub(super) fn new(projection: &'a RunProjection) -> Self {
+    #[cfg(test)]
+    super::incremental::note(|work| work.attempt_visits += projection.attempts.len());
     let mut latest = HashMap::new();
     for attempt in &projection.attempts {
       latest.insert(attempt.identity.node_id.as_str(), attempt);

@@ -161,6 +161,13 @@ fn compare_snapshot(model: &crate::CompiledWorkflowDefinition, projection: &RunP
     graph.ready_at("hash", projection, now),
     reference::ready_node_ids_for_projection_at(model, "hash", projection, now)
   );
+  let expected = reference::ready_node_ids_for_projection_at(model, "hash", projection, now);
+  for node in &model.graph.nodes {
+    assert_eq!(
+      graph.is_ready_at("hash", projection, now, &node.id),
+      expected.clone().map(|ids| ids.contains(&node.id))
+    );
+  }
 }
 
 #[test]

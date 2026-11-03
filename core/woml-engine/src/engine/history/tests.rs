@@ -159,10 +159,70 @@ fn indexed_readiness_matches_scan_at_every_recorded_prefix_and_clock() {
             "{} prefix {end} at {now}",
             history.label
           );
+          let expected = reference.ready_at(hash, &projection, now);
+          for node in history
+            .model
+            .graph
+            .nodes
+            .iter()
+            .map(|node| node.id.as_str())
+            .chain(["missing-node"])
+          {
+            assert_eq!(
+              graph.is_ready_at(hash, &projection, now, node),
+              expected.clone().map(|ids| ids.iter().any(|id| id == node)),
+              "{} membership {node} prefix {end} at {now}",
+              history.label
+            );
+          }
         }
       }
     }
   }
+}
+
+#[test]
+fn historical_membership_observes_retry_deadline_and_clock_reversal_without_events() {
+  let history = histories()
+    .into_iter()
+    .find(|history| history.label == "retry-complete")
+    .unwrap();
+  let graph = super::ReadinessGraph::new(&history.model);
+  let reference = super::ReadinessGraph::reference(&history.model);
+  let mut boundaries = 0;
+  for end in 1..=history.events.len() {
+    let projection = fold_events(&history.events[..end]).unwrap();
+    for (node, retry) in &projection.pending_retries {
+      let before = retry.scheduled_at - chrono::Duration::nanoseconds(1);
+      for now in [
+        before,
+        retry.scheduled_at,
+        retry.scheduled_at + chrono::Duration::days(1),
+        before,
+      ] {
+        let expected = reference
+          .ready_at(&history.definition_hash, &projection, now)
+          .unwrap();
+        assert_eq!(
+          graph.is_ready_at(&history.definition_hash, &projection, now, node),
+          Ok(expected.contains(node))
+        );
+      }
+      assert!(!graph
+        .is_ready_at(&history.definition_hash, &projection, before, node)
+        .unwrap());
+      assert!(graph
+        .is_ready_at(
+          &history.definition_hash,
+          &projection,
+          retry.scheduled_at,
+          node
+        )
+        .unwrap());
+      boundaries += 1;
+    }
+  }
+  assert!(boundaries > 0);
 }
 
 #[test]
