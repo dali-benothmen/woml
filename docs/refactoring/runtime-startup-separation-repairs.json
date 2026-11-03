@@ -185,6 +185,15 @@
         "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
       }
     ],
+    "artifacts": [
+      {
+        "name": "fn prepare_inspection_schema",
+        "originalSha256": null,
+        "sha256": "5a6634c85ce65dcff03fd49fba2a2dafbb4e8b44bd9984c81e2680fe2554b882",
+        "reason": "Startup separation: atomically prepare existing operator metadata before publishing the owned schema cookie, without activating artifact backends or weakening invalidation.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      }
+    ],
     "bridge": [
       {
         "name": "fn start_woml_webhook_runtime",

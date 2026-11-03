@@ -135,8 +135,9 @@ test('extracted engine and bridge declarations preserve baselines with explicit 
     'impl DurableCapabilityAuthority::execute', 'impl DurableCapabilityAuthority::observe_native_fetch',
   ]);
   expect(startupRepairs.profile).toBe('woml.startup-separation-compatibility-repairs/v1');
-  expect(Object.keys(startupRepairs.declarationRepairs)).toEqual(['webhook', 'bridge']);
+  expect(Object.keys(startupRepairs.declarationRepairs)).toEqual(['webhook', 'artifacts', 'bridge']);
   expect(startupRepairs.declarationRepairs.webhook).toHaveLength(24);
+  expect(startupRepairs.declarationRepairs.artifacts.map(repair => repair.name)).toEqual(['fn prepare_inspection_schema']);
   expect(startupRepairs.declarationRepairs.bridge.map(repair => repair.name)).toEqual(['fn start_woml_webhook_runtime']);
 });
 

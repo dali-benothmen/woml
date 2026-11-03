@@ -10,6 +10,7 @@ import {
   activateWebhookRuntimeWithRust, compiledDefinitionHash, executeWorkflowWithRustDurable,
   executeApprovalWorkflowWithRust, resumeApprovalWorkflowWithRust, settleTimerWaitWithRust,
   startWebhookRuntimeWithRust, stopWebhookRuntimeWithRust, submitManualTriggerWithRust,
+  inspectRunArtifactsWithRust,
   type RuntimeCapabilitiesV1,
 } from '../src/rust-executor';
 import { TerminalObserver } from './runtime-session-profile-child';
@@ -113,7 +114,7 @@ async function main() {
       const beforeActivation = new Database(path, { readonly: true });
       try { assert.deepEqual(beforeActivation.query('SELECT COUNT(*) FROM woml_runs').values(), [[0]]); } finally { beforeActivation.close(); }
       await activateWebhookRuntimeWithRust(active, common);
-      const opens = await fullOpens();
+      let opens = await fullOpens();
       assert.ok(opens >= 2, 'full initialization must still occur at startup');
       if (id === 'sequential-2') {
         // Observe two real owner heartbeats, without polling native inspection
@@ -133,6 +134,16 @@ async function main() {
       assert.deepEqual(facts(events), facts(history(referencePath, reference.runId)));
       assert.equal(await fullOpens(), opens, `${id}: admitted execution must not initialize`);
       if (id === 'sequential-2') {
+        const schema = () => {
+          const db = new Database(path, { readonly: true });
+          try { return db.query('PRAGMA schema_version').values(); } finally { db.close(); }
+        };
+        const cookie = schema();
+        assert.deepEqual(inspectRunArtifactsWithRust(path, accepted.runId, common).artifacts, []);
+        assert.deepEqual(schema(), cookie, 'standalone inspection must not add schema after publication');
+        // Standalone operator inspection deliberately keeps its full opening
+        // contract. Exclude that explicit call, not any owned request work.
+        opens = await fullOpens();
         const later = await submitManualTriggerWithRust(active, { ...request, requestId: 'later-independent-request' }, common);
         assert.ok(later.type === 'accepted');
         assert.notEqual(later.runId, accepted.runId);
@@ -157,8 +168,24 @@ async function main() {
       startSuspended: true, deploymentId: 'prepared-runtime-safety', shutdownTimeoutMs: 5_000 });
     active = started.runtimeId;
     await activateWebhookRuntimeWithRust(active, common);
-    const db = new Database(state);
-    try { db.run("UPDATE woml_runtime_owner SET runtime_instance_id='successor-runtime'"); } finally { db.close(); }
+    // Bun and the addon embed independent SQLite implementations. Inject from
+    // another process so closing a Bun descriptor cannot release this process's
+    // native POSIX SQLite locks and race its rollback-journal cleanup.
+    const injected = Bun.spawn([process.execPath, '-e', `
+      import { Database } from 'bun:sqlite';
+      const db = new Database(${JSON.stringify(state)});
+      db.exec('PRAGMA busy_timeout=5000; BEGIN IMMEDIATE');
+      db.run("UPDATE woml_runtime_owner SET runtime_instance_id='successor-runtime'");
+      db.exec('COMMIT'); db.close();
+    `], { stdout: 'pipe', stderr: 'pipe' });
+    const injectionDeadline = setTimeout(() => injected.kill(), 10_000);
+    try {
+      const [stdout, stderr] = await Promise.all([new Response(injected.stdout).text(), new Response(injected.stderr).text()]);
+      assert.equal(await injected.exited, 0, `${stderr}\n${stdout}`);
+    } finally {
+      clearTimeout(injectionDeadline);
+      if (injected.exitCode === null) { injected.kill(); await injected.exited; }
+    }
     let rejected = false;
     try {
       const result = await submitManualTriggerWithRust(active, { profile: 'woml.manual-trigger-admission/v1', type: 'request', requestId: 'after-transfer',

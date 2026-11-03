@@ -19,6 +19,23 @@ impl RuntimeExecutionOptions {
         .configure_for_state(path)
         .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
     }
+    // `woml get` always inspects artifact metadata, even without an enabled
+    // artifact backend. Its existing lazy DDL must precede schema-cookie
+    // publication, or a legitimate first inspection revokes a live owner.
+    // Prepare metadata only: no artifact policy/backend/network activation.
+    let mut connection = rusqlite::Connection::open_with_flags(
+      path,
+      rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(crate::DurableStoreError::from)?;
+    connection
+      .busy_timeout(std::time::Duration::from_secs(5))
+      .map_err(crate::DurableStoreError::from)?;
+    connection
+      .execute_batch("PRAGMA foreign_keys = ON;")
+      .map_err(crate::DurableStoreError::from)?;
+    crate::artifacts::prepare_inspection_schema(&mut connection)
+      .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
     Ok(())
   }
   pub(super) fn require_unprepared_entrypoint(&self) -> Result<(), RuntimeExecutionError> {

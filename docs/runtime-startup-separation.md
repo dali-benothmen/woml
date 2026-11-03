@@ -2,8 +2,9 @@
 
 Status: bounded SRS2 production integration with SRS3 safety tests. Owned native
 requests use guarded prepared opening; unowned/one-shot behavior remains.
-SRS4 matched optimized performance, installed packages and platform acceptance
-are not certified by this checkpoint.
+The installed repeated-request/restart/restore regression passes locally after
+the startup metadata repair. Matched performance acceptance and platform CI
+remain pending; see [the release evidence](runtime-startup-separation-release.md).
 
 ## Current opener inventory
 
@@ -23,6 +24,8 @@ schema marker. Converted callers still perform durable authorization and claims.
 | [Notification wrapper](../core/woml-engine/src/webhook/dispatch.rs) | Its store reads are prepared | Notification transport/journey internals and reusable-provider lifecycle remain deliberately unconverted. |
 | [Workflow calls](../core/woml-engine/src/workflow_calls.rs) | Separate child-routing configuration/openers remain unconverted | Parent readiness is not destination authority. Complete child configuration inheritance is not certified. |
 | [Programmatic lock service](../core/woml-engine/src/locks.rs) | Separate service opener remains unconverted | Distinct from markup locks using the prepared engine store. |
+| Operator artifact metadata | Existing metadata DDL/validation prepared atomically before owned cookie publication | Prevents a first live `woml get` from changing the published schema. No backend, backend identity, network activity or capability grant. |
+| Artifact backend binding | Separate managed backend opening remains unconverted | Metadata preparation is not backend activation or a zero-init claim for artifact-enabled attempt attachment. |
 | Native activation, drain and stop | Guarded routing cleanup and exact owner release; no create/repair fallback | Failed preparation releases via original acquisition connection. Heartbeat remains alive during drain. |
 | Standalone execution/inspection, backup/restore, independent Rust embedding | Original opening contracts | Never infer coordinator readiness from path or Arc reuse. |
 | Worker journal/capability preparation | Separate worker ownership domain | Coordinator preparation cleared. |
@@ -30,7 +33,10 @@ schema marker. Converted callers still perform durable authorization and claims.
 The first StateService binding already validated/opened engine state on the
 first request. It now runs once behind owned startup before publication; this
 moves cost and preserves validation. Other resource attachment stays as before.
-Output, providers, worker/listener startup and telemetry are not eagerly enabled.
+Existing operator artifact metadata is also prepared before publication because
+standalone run inspection can otherwise lazily change the schema of a live
+runtime. This does not enable an artifact backend. Output, providers,
+worker/listener startup and telemetry are not eagerly enabled.
 
 Lower-level `WomlWebhookServer` embedding stays unprepared unless its explicit
 owned constructor receives the verified acquisition connection. Transplanting
@@ -139,6 +145,78 @@ stop, without native inspection polling. Excluded APIs are not assigned zero
 counts by assumption; no new telemetry labels are introduced.
 
 ## Reproduction
+
+### Matched optimized comparison (release evidence)
+
+The baseline command below captures a baseline; it does **not** compare two
+libraries. For a matched comparison, retain that entire baseline directory and
+use the separate explicit build and comparison commands from `woml-cli`:
+
+```bash
+bun run build:startup-request-separation-candidate
+bun run compare:startup-request-separation --baseline .woml/performance/startup-baseline-EXAMPLE --candidate-receipt .woml/performance/startup-build-EXAMPLE/receipt.json
+```
+
+Replace both example paths with the actual printed paths. The build step normally
+needs committed, clean production source and cached Cargo dependencies. For an
+uncommitted implementation, explicitly add `--worktree`: the receipt retains
+the production patch and its digest alongside pinned HEAD and the copied addon.
+Untracked production files still reject. The patch must remain identical through
+build and measurement. The helper serially builds release mode and records
+source/artifact identity.
+The timing command never builds or installs anything. Finish **all** builds and
+test suites before running it. It checks available memory/disk and rejects
+concurrent Cargo/rustc work on Unix; on Windows, ensuring no other build/test
+workloads run is an explicit operator prerequisite. Resource snapshots are
+retained between child processes, not inside timed requests.
+
+The comparison reruns **both** immutable libraries: 13 scenarios × 3 matched
+process pairs, 78 processes, 234 measured requests and 720 untimed seed runs.
+Each adjacent pair reverses library order according to a fixed schedule; scenario
+order also reverses in alternate batches. Each scenario has a 2:1 order split
+because there are three pairs; across all scenarios the split is 20:19. This is
+not two giant sequential captures compared after the fact. Compilation, seeding,
+callback completion boundaries and sampled CPU/RSS match the original child.
+
+Compiler, script-host and measurement-helper fingerprints must match the frozen
+baseline. A fixture/host/compiler change fails comparison rather than silently
+starting a new experiment. The capture orchestrator itself is allowed to differ:
+it does not change the child execution boundary. Artifact hashes and production
+source are checked before and after capture. Local receipts document the explicit
+build; they are not independently signed provenance.
+
+The output retains the complete schedule, manifests, per-process resource
+snapshots, copied binaries, databases, raw stdout/stderr, samples and summary.
+An interrupted or failed cohort retains `failure.json` and cannot pass as a
+complete comparison. No sample is retried, trimmed or replaced. An exit code of
+**2** means measurement completed but performance acceptance needs review
+(overlap, missed target or control/memory investigation); it is not a passing
+release gate. Correctness/structural and installed-package checks remain separate.
+
+Comparison summaries expose units explicitly. The reused `medianMs` summary
+field for the `rssBytes` metric contains **bytes**, not milliseconds. That metric
+uses the largest post-request RSS sample in each process; it still does not
+measure process-tree peaks or long-lived leaks. Paired CPU differences cannot be
+added across simultaneous admissions.
+
+### Operator lifetime
+
+Use `woml run` to keep the coordinator active for incoming work. Preparation
+belongs to that one owned lifetime; it is not persisted permission to skip future
+startup. After shutdown/redeployment/restore, the next owner prepares again.
+One-shot `woml test`, standalone inspection and backup/restore intentionally keep
+their existing opening costs. Do not expect these commands to acquire the same
+steady-state speedup.
+
+There is no public "trust this prepared database" flag. Every selected request
+still checks the real store, live owner, run identity, policy and transactional
+authority. Replacement, incompatible schema or ownership loss rejects the old
+context instead of falling back to repair. Stop the owner before restoring or
+replacing state; follow the existing restore and recovery procedures. See
+[the internal contract](protocols/prepared-runtime-internal-v1.md) for drain and
+invalidation rules.
+
+### Baseline and separate trace capture
 
 From the repository root, on a clean production tree with cached dependencies:
 

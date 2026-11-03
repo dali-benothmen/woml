@@ -99,6 +99,60 @@ fn publication_requires_full_startup_and_the_actual_acquisition_connection() {
 }
 
 #[test]
+fn operator_metadata_is_prepared_before_cookie_publication_without_a_backend() {
+  let mut f = Fixture::new();
+  crate::artifacts::prepare_inspection_schema(&mut f.store.connection).unwrap();
+  let context = f.prepare();
+  let cookie = context.0.schema_cookie;
+  assert!(crate::inspect_run_artifacts(&f.path, RUN)
+    .unwrap()
+    .artifacts
+    .is_empty());
+  let store = open(&context, &f);
+  assert_eq!(
+    store
+      .connection
+      .query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+      .unwrap(),
+    cookie
+  );
+  assert_eq!(
+    store
+      .connection
+      .query_row(
+        "SELECT COUNT(*) FROM woml_artifact_operator_audit",
+        [],
+        |r| r.get::<_, u64>(0)
+      )
+      .unwrap(),
+    1
+  );
+  assert_eq!(
+    store
+      .connection
+      .query_row(
+        "SELECT COUNT(*) FROM woml_artifact_store_metadata WHERE key='store_id'",
+        [],
+        |r| r.get::<_, u64>(0)
+      )
+      .unwrap(),
+    0
+  );
+  assert!(!f.directory.0.join("objects-v1").exists());
+  context
+    .renew(&f.path, Utc::now(), Utc::now() + Duration::minutes(1))
+    .unwrap();
+  store
+    .connection
+    .execute(
+      "UPDATE woml_artifact_store_metadata SET value='999' WHERE key='schema_version'",
+      [],
+    )
+    .unwrap();
+  assert!(crate::artifacts::prepare_inspection_schema(&mut f.store.connection).is_err());
+}
+
+#[test]
 fn transaction_checks_reject_owner_transfer_on_an_already_open_connection() {
   let f = Fixture::new();
   let context = f.prepare();

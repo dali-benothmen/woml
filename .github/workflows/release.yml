@@ -74,6 +74,7 @@ jobs:
           bun run test:release-automation
           bun run test:rust-core-modularization-contracts
           bun run test:rust-core-native
+          bun run test:startup-request-separation
           bun run test:for-each-contracts
           bun run test:process-contracts
           bun scripts/verify-process-release.ts
@@ -92,6 +93,7 @@ jobs:
           bun run test:opentelemetry
           bun scripts/verify-opentelemetry-release.ts
           bun run test:combined-developer-experience
+          bun run test:startup-request-separation-package
           bun scripts/verify-combined-developer-experience-release.ts
       - name: Run the final source and dependency security review
         run: |

@@ -4,6 +4,10 @@ This records the bounded SRS2/SRS3 implementation, not release-performance
 acceptance. The implementation branch is `perf/runtime-performance`. The frozen
 [SRS0 baseline](runtime-startup-separation-baseline.md) remains unchanged.
 
+This is the historical implementation/safety checkpoint. Subsequent optimized
+measurements, the installed-inspection startup repair and remaining acceptance
+work are recorded in [the release evidence](runtime-startup-separation-release.md).
+
 ## What changed
 
 The owned native coordinator retains its acquisition connection through startup,
@@ -133,10 +137,11 @@ remain outside the zero-initialization claim. Child policy/configuration
 inheritance is not certified by this work.
 
 Windows/macOS behavior is wired into the existing combined-experience CI matrix;
-local Linux success is not a platform pass. SRS4 still requires a fresh optimized
-candidate, matched baseline/candidate cohorts (including startup cost), all
-failures/outliers and memory/CPU evidence, installed-package journeys and final
-cross-platform acceptance. No percentage speedup is claimed here.
+local Linux success is not a platform pass. The later release checkpoint records
+fresh optimized candidates, a complete initial matched cohort and installed
+journeys. Its initial timing result is inconclusive and the final repaired
+candidate still needs new matched evidence and platform acceptance. This earlier
+debug safety record makes no percentage speedup claim.
 
 ## Reproduce
 

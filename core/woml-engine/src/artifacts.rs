@@ -81,6 +81,7 @@ pub use policy::{
 pub(in crate::artifacts) use policy::{
   PreparedArtifactBackend, PreparedS3Backend, S3ServerSideEncryption, MAX_ARTIFACT_BYTES,
 };
+pub(crate) use schema::prepare_inspection_schema;
 pub(in crate::artifacts) use schema::{ensure_store_identity, initialize_schema, validate_schema};
 pub(in crate::artifacts) use store::ArtifactStore;
 pub use store::ManagedArtifactStore;
