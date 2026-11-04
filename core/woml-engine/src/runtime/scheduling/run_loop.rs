@@ -637,13 +637,15 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         if host.is_none() {
           *host = Some(options.acquire_script_host().await?);
         }
-        execute_bounded_for_each(
+        // Keep this large coordinator future off ordinary native stacks as
+        // owned connection metadata is carried across awaits.
+        Box::pin(execute_bounded_for_each(
           engine,
           run_id,
           &descriptor,
           options,
           host.as_ref().expect("for-each script host was initialized"),
-        )
+        ))
         .await?;
         execution_order.push(descriptor.for_each_id);
       }

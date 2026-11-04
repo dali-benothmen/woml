@@ -9,6 +9,20 @@ use rusqlite::OptionalExtension;
 
 const ARTIFACT_STORE_SCHEMA_VERSION: u32 = 1;
 
+/// Prepare the existing operator metadata before an owned schema cookie is
+/// published. This does not select/open a backend, create a store identity,
+/// clean materializations, or grant artifact capability authority.
+pub(crate) fn prepare_inspection_schema(
+  connection: &mut Connection,
+) -> Result<(), CapabilityFailure> {
+  let transaction = connection
+    .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+    .map_err(|_| backend_unavailable())?;
+  initialize_schema(&transaction)?;
+  validate_schema(&transaction)?;
+  transaction.commit().map_err(|_| backend_unavailable())
+}
+
 pub(in crate::artifacts) fn initialize_schema(
   connection: &Connection,
 ) -> Result<(), CapabilityFailure> {

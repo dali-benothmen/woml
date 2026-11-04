@@ -15,7 +15,6 @@ use crate::runtime::{
   corrective_action_matches_runtime, execute_admitted_trigger_run_durable,
   execute_corrective_action, CorrectiveActionOutcome, RuntimeDagEngine,
 };
-use crate::DurableEventStore;
 use crate::RunEventPayload;
 use crate::ScriptHostClient;
 use std::collections::HashSet;
@@ -32,7 +31,8 @@ pub(crate) async fn resume_corrections_for_workflows_durable(
   limit: usize,
   workflow_ids: &HashSet<String>,
 ) -> Result<Vec<CorrectionRecoveryResume>, RuntimeExecutionError> {
-  let candidates = DurableEventStore::open(database_path.clone())?
+  let candidates = options
+    .open_runtime_store(&database_path, crate::durable::PreparedScope::Continuation)?
     .correction_recovery_batch_for_workflows_v1(limit, workflow_ids)?;
   let mut run_ids = candidates
     .into_iter()
@@ -43,7 +43,8 @@ pub(crate) async fn resume_corrections_for_workflows_durable(
 
   let mut resumed = Vec::with_capacity(run_ids.len());
   for run_id in run_ids {
-    let mut store = DurableEventStore::open(database_path.clone())?;
+    let mut store =
+      options.open_runtime_store(&database_path, crate::durable::PreparedScope::Continuation)?;
     if store.policy_run_has_live_claim(&run_id, chrono::Utc::now())? {
       continue;
     }

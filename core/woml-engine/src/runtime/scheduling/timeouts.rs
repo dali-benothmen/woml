@@ -15,7 +15,6 @@ use crate::runtime::{
   PolicyClaimAcquisition, PolicyExecutionCoordinator, RuntimeDagEngine,
 };
 use crate::DurableDagEngine;
-use crate::DurableEventStore;
 use crate::RunTimeoutSettlement;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -36,23 +35,25 @@ pub(in crate::runtime) fn schedule_workflow_timeout(
         .to_std()
         .unwrap_or(Duration::ZERO);
       tokio::time::sleep(wait).await;
-      let settlement = DurableEventStore::open(database_path.clone()).and_then(|mut store| {
-        let settlement = store.settle_run_timeout(&run_id, options.clock.now())?;
-        let needs_lifecycle = matches!(
-          &settlement,
-          RunTimeoutSettlement::TimedOut { projection }
-            if !projection.lifecycle_hooks.is_empty()
-              && !store.policy_run_has_live_claim(&run_id, chrono::Utc::now())?
-        );
-        if matches!(
-          &settlement,
-          RunTimeoutSettlement::TimedOut { projection }
-            if projection.lifecycle_hooks.is_empty()
-        ) {
-          let _ = store.finalize_run_v11(&run_id, options.clock.now());
-        }
-        Ok((settlement, needs_lifecycle))
-      });
+      let settlement = options
+        .open_runtime_store(&database_path, crate::durable::PreparedScope::Continuation)
+        .and_then(|mut store| {
+          let settlement = store.settle_run_timeout(&run_id, options.clock.now())?;
+          let needs_lifecycle = matches!(
+            &settlement,
+            RunTimeoutSettlement::TimedOut { projection }
+              if !projection.lifecycle_hooks.is_empty()
+                && !store.policy_run_has_live_claim(&run_id, chrono::Utc::now())?
+          );
+          if matches!(
+            &settlement,
+            RunTimeoutSettlement::TimedOut { projection }
+              if projection.lifecycle_hooks.is_empty()
+          ) {
+            let _ = store.finalize_run_v11(&run_id, options.clock.now());
+          }
+          Ok((settlement, needs_lifecycle))
+        });
       match settlement {
         Ok((RunTimeoutSettlement::NotDue { deadline_at }, _)) => deadline = deadline_at,
         Ok((RunTimeoutSettlement::TimedOut { .. }, needs_lifecycle)) => {
@@ -80,6 +81,14 @@ pub(in crate::runtime) fn schedule_workflow_timeout(
           policy_wakeup(&database_path).notify_waiters();
           break;
         }
+        Err(_)
+          if options
+            .prepared_runtime
+            .as_ref()
+            .is_some_and(|context| context.is_revoked()) =>
+        {
+          break
+        }
         Err(_) => tokio::time::sleep(CANCELLATION_POLL_INTERVAL).await,
       }
     }
@@ -91,7 +100,8 @@ async fn finish_timed_out_policy_lifecycle(
   run_id: &str,
   options: RuntimeExecutionOptions,
 ) -> Result<(), RuntimeExecutionError> {
-  let mut store = DurableEventStore::open(database_path.clone())?;
+  let mut store =
+    options.open_runtime_store(&database_path, crate::durable::PreparedScope::Continuation)?;
   let acquisition =
     acquire_policy_execution_lease_with_store(&database_path, run_id, &options, &mut store).await?;
   let binding = store.run_binding(run_id)?;

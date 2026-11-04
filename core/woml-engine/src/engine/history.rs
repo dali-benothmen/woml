@@ -3,12 +3,15 @@
 mod prefix;
 #[cfg(test)]
 mod tests;
+mod validated;
 
+use super::readiness::ReadinessGraph;
 use prefix::HistoryPrefix;
+pub(super) use prefix::ReadinessPrefix;
+use validated::ValidatedHistory;
 
 use super::{
-  node_is_complete, ready_node_ids_for_projection, ready_node_ids_for_projection_at,
-  step_effect_idempotency_key, validate_payload_against_definition,
+  node_is_complete, step_effect_idempotency_key, validate_payload_against_definition,
   validate_scoped_payload_against_definition,
 };
 use crate::event::AttemptFailureKind;
@@ -36,18 +39,76 @@ pub(crate) fn validate_event_history_against_definition(
   definition_hash: &str,
   events: &[RunEvent],
 ) -> Result<(), String> {
-  validate_history_with_prefixes(workflow, definition_hash, events, HistoryPrefix::new)
+  check_event_history_against_definition(workflow, definition_hash, events).map(|_| ())
 }
 
+pub(crate) fn check_event_history_against_definition<'a>(
+  workflow: &'a CompiledWorkflowDefinition,
+  definition_hash: &'a str,
+  events: &'a [RunEvent],
+) -> Result<ValidatedHistory<'a>, String> {
+  validated::check(workflow, definition_hash, events)
+}
+
+#[cfg(test)]
+pub(super) fn validate_history_scan_reference(
+  workflow: &CompiledWorkflowDefinition,
+  definition_hash: &str,
+  events: &[RunEvent],
+) -> Result<(), String> {
+  // Same monotone prefix cursor and all definition checks, but original scans.
+  // This isolates query indexing, not a change to history replay semantics.
+  validate_history_with_graph(
+    workflow,
+    definition_hash,
+    events,
+    HistoryPrefix::new,
+    ReadinessGraph::reference,
+  )
+}
+
+#[cfg(test)]
 fn validate_history_with_prefixes<'a>(
   workflow: &CompiledWorkflowDefinition,
   definition_hash: &str,
   events: &'a [RunEvent],
   make_prefixes: impl FnOnce(&'a [RunEvent]) -> HistoryPrefix<'a>,
 ) -> Result<(), String> {
+  validate_history_with_graph(
+    workflow,
+    definition_hash,
+    events,
+    make_prefixes,
+    ReadinessGraph::new,
+  )
+}
+
+#[cfg(test)]
+fn validate_history_with_graph<'a, 'w>(
+  workflow: &'w CompiledWorkflowDefinition,
+  definition_hash: &str,
+  events: &'a [RunEvent],
+  make_prefixes: impl FnOnce(&'a [RunEvent]) -> HistoryPrefix<'a>,
+  make_graph: impl FnOnce(&'w CompiledWorkflowDefinition) -> ReadinessGraph<'w>,
+) -> Result<(), String> {
   // Preserve the full structural gate and its error precedence. Prefix state
   // belongs only to this immutable slice and never escapes to a store/cache.
   crate::fold_events(events).map_err(|error| error.to_string())?;
+  validate_history_definition_rules(workflow, definition_hash, events, make_prefixes, make_graph)
+}
+
+fn validate_history_definition_rules<'a, 'w>(
+  workflow: &'w CompiledWorkflowDefinition,
+  definition_hash: &str,
+  events: &'a [RunEvent],
+  make_prefixes: impl FnOnce(&'a [RunEvent]) -> HistoryPrefix<'a>,
+  make_graph: impl FnOnce(&'w CompiledWorkflowDefinition) -> ReadinessGraph<'w>,
+) -> Result<(), String> {
+  // Borrow one immutable graph for this whole check. The cursor owns latest
+  // attempt ordinals; its borrowed query view cannot survive advancement.
+  // Histories rejected before a readiness check (and empty histories) need no
+  // graph preparation. LazyCell is call-local and still constructs at most once.
+  let graph = std::cell::LazyCell::new(|| make_graph(workflow));
   let mut prefixes = make_prefixes(events);
   let mut child_states: HashMap<String, ParallelChildState> = HashMap::new();
 
@@ -82,8 +143,8 @@ fn validate_history_with_prefixes<'a>(
           .iter()
           .find(|choice| choice.choice_id == data.choice_id)
           .ok_or_else(|| format!("Unknown control choice {:?}.", data.choice_id))?;
-        let prefix = prefixes.at(index)?;
-        let ready = ready_node_ids_for_projection(workflow, definition_hash, prefix)?;
+        let prefix = prefixes.query_at(index)?;
+        let ready = graph.ready_from_prefix(definition_hash, &prefix)?;
         if !ready.contains(&choice.selector_node_id) {
           return Err(format!(
             "Control choice {:?} was selected before its selector was ready.",
@@ -100,8 +161,8 @@ fn validate_history_with_prefixes<'a>(
           .iter()
           .find(|fork| fork.fork_id == data.fork_id)
           .ok_or_else(|| format!("Unknown fork {:?}.", data.fork_id))?;
-        let prefix = prefixes.at(index)?;
-        let ready = ready_node_ids_for_projection(workflow, definition_hash, prefix)?;
+        let prefix = prefixes.query_at(index)?;
+        let ready = graph.ready_from_prefix(definition_hash, &prefix)?;
         if !ready.contains(&fork.open_node_id) {
           return Err(format!(
             "Fork {:?} opened before it was ready.",
@@ -176,8 +237,8 @@ fn validate_history_with_prefixes<'a>(
         let saga = workflow
           .saga(&data.saga_id)
           .ok_or_else(|| format!("Unknown saga {:?}.", data.saga_id))?;
-        let prefix = prefixes.at(index)?;
-        let ready = ready_node_ids_for_projection(workflow, definition_hash, prefix)?;
+        let prefix = prefixes.query_at(index)?;
+        let ready = graph.ready_from_prefix(definition_hash, &prefix)?;
         if !ready.contains(&saga.open_node_id) {
           return Err(format!(
             "Saga {:?} started before its open node was ready.",
@@ -308,8 +369,8 @@ fn validate_history_with_prefixes<'a>(
         let group = workflow
           .parallel_group(&data.parallel_id)
           .ok_or_else(|| format!("Unknown parallel group {:?}.", data.parallel_id))?;
-        let prefix = prefixes.at(index)?;
-        let ready = ready_node_ids_for_projection(workflow, definition_hash, prefix)?;
+        let prefix = prefixes.query_at(index)?;
+        let ready = graph.ready_from_prefix(definition_hash, &prefix)?;
         if !ready.iter().any(|node_id| node_id == &group.start_node_id) {
           return Err(format!(
             "Parallel group {:?} was started before its fork was ready.",
@@ -318,10 +379,13 @@ fn validate_history_with_prefixes<'a>(
         }
       }
       RunEventPayload::StepAttemptStarted(data) => {
-        let prefix = prefixes.at(index)?;
-        let ready =
-          ready_node_ids_for_projection_at(workflow, definition_hash, prefix, event.occurred_at)?;
-        if !ready.iter().any(|node_id| node_id == &data.node_id) {
+        let prefix = prefixes.query_at(index)?;
+        if !graph.is_ready_from_prefix_at(
+          definition_hash,
+          &prefix,
+          event.occurred_at,
+          &data.node_id,
+        )? {
           return Err(format!(
             "Node {:?} started before it was ready.",
             data.node_id
@@ -493,8 +557,8 @@ fn validate_history_with_prefixes<'a>(
         let approval = workflow
           .approval(&data.approval_id)
           .ok_or_else(|| format!("Unknown approval {:?}.", data.approval_id))?;
-        let prefix = prefixes.at(index)?;
-        let ready = ready_node_ids_for_projection(workflow, definition_hash, prefix)?;
+        let prefix = prefixes.query_at(index)?;
+        let ready = graph.ready_from_prefix(definition_hash, &prefix)?;
         if !ready.iter().any(|node_id| node_id == &data.approval_id) {
           return Err(format!(
             "Approval {:?} was requested before its wait node was ready.",
@@ -523,8 +587,8 @@ fn validate_history_with_prefixes<'a>(
         }
       }
       RunEventPayload::ApprovalReviewRequested(data) => {
-        let prefix = prefixes.at(index)?;
-        let ready = ready_node_ids_for_projection(workflow, definition_hash, prefix)?;
+        let prefix = prefixes.query_at(index)?;
+        let ready = graph.ready_from_prefix(definition_hash, &prefix)?;
         if !ready.iter().any(|node_id| node_id == &data.approval_id) {
           return Err(format!(
             "Rich approval {:?} was requested before its wait node was ready.",
@@ -534,9 +598,8 @@ fn validate_history_with_prefixes<'a>(
       }
       RunEventPayload::ApprovalResolved(_) => {}
       RunEventPayload::WaitRegistered(data) => {
-        let prefix = prefixes.at(index)?;
-        let ready =
-          ready_node_ids_for_projection_at(workflow, definition_hash, prefix, event.occurred_at)?;
+        let prefix = prefixes.query_at(index)?;
+        let ready = graph.ready_from_prefix_at(definition_hash, &prefix, event.occurred_at)?;
         if !ready.iter().any(|node_id| node_id == &data.node_id) {
           return Err(format!(
             "Durable wait {:?} was registered before its node was ready.",

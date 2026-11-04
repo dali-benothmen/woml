@@ -117,7 +117,8 @@ impl WomlWebhookServer {
     let mut span =
       crate::performance::PerformanceSpan::new("runtime", "runtime.prepare_trigger_host");
     span.count("workflows", config.registrations.len());
-    let result = Self::prepare_with_external_ingress_unprofiled(config, external_ingress).await;
+    let result =
+      Self::prepare_with_external_ingress_unprofiled(config, external_ingress, None).await;
     if result.is_ok() {
       span.succeed();
     }
@@ -127,9 +128,10 @@ impl WomlWebhookServer {
   async fn prepare_with_external_ingress_unprofiled(
     config: WomlWebhookServerConfig,
     external_ingress: Option<ExternalTriggerAdmissionReceiver>,
+    owner: Option<(crate::durable::PreparedOwner, &DurableEventStore)>,
   ) -> Result<Self, WebhookRuntimeError> {
     let (state, recovery_runs, startup_manual_runs, internal_event_dispatch) =
-      prepare_state(config)?;
+      prepare_state(config, owner)?;
     let listener = if state.routes.is_empty()
       && state.event_token_digests.is_empty()
       && state.whatsapp_subscribers.is_empty()
@@ -198,6 +200,46 @@ impl WomlWebhookServer {
     })
   }
 
+  /// Prepares an already-acquired native owner. The engine publishes readiness
+  /// only after its startup recovery and definition registration have finished.
+  pub async fn prepare_owned_with_external_ingress(
+    config: WomlWebhookServerConfig,
+    external_ingress: Option<ExternalTriggerAdmissionReceiver>,
+    deployment_id: String,
+    activation_id: String,
+    runtime_instance_id: String,
+    acquired_store: &DurableEventStore,
+  ) -> Result<Self, WebhookRuntimeError> {
+    // Owned startup bypasses the unowned public wrapper, but must expose the
+    // same preparation boundary to the opt-in profiler.
+    let mut span =
+      crate::performance::PerformanceSpan::new("runtime", "runtime.prepare_trigger_host");
+    span.count("workflows", config.registrations.len());
+    let result = Self::prepare_with_external_ingress_unprofiled(
+      config,
+      external_ingress,
+      Some((
+        crate::durable::PreparedOwner {
+          deployment: deployment_id,
+          activation: activation_id,
+          runtime: runtime_instance_id,
+        },
+        acquired_store,
+      )),
+    )
+    .await;
+    if result.is_ok() {
+      span.succeed();
+    }
+    result
+  }
+
+  /// Not an authorization token: the private context is checked on each owned
+  /// connection and write transaction and is shared only within this lifetime.
+  pub fn owned_execution_options(&self) -> crate::RuntimeExecutionOptions {
+    self.runtime_state.execution.clone()
+  }
+
   pub async fn activate(&mut self) -> Result<(), WebhookRuntimeError> {
     let mut span =
       crate::performance::PerformanceSpan::new("runtime", "runtime.activate_trigger_host");
@@ -214,7 +256,12 @@ impl WomlWebhookServer {
     };
     let state = pending.state;
     let now = Utc::now();
-    if let Err(error) = DurableEventStore::open_ready(&self.database_path)?
+    if let Err(error) = state
+      .execution
+      .open_ingress_store(
+        &self.database_path,
+        crate::durable::PreparedScope::Continuation,
+      )?
       .register_workflow_runtime_routes(
         &self.workflow_runtime_id,
         &state.workflow_targets.targets(),
@@ -236,11 +283,17 @@ impl WomlWebhookServer {
     let (mut tasks, recovered_schedule_runs, recovered_interval_runs) = match activation {
       Ok(value) => value,
       Err(error) => {
-        let _ = DurableEventStore::open_ready(&self.database_path).and_then(|mut store| {
-          store
-            .unregister_workflow_runtime_routes(&self.workflow_runtime_id)
-            .map(|_| ())
-        });
+        let _ = state
+          .execution
+          .open_ingress_store(
+            &self.database_path,
+            crate::durable::PreparedScope::Continuation,
+          )
+          .and_then(|mut store| {
+            store
+              .unregister_workflow_runtime_routes(&self.workflow_runtime_id)
+              .map(|_| ())
+          });
         return Err(error);
       }
     };
@@ -313,6 +366,9 @@ impl WomlWebhookServer {
       .runtime_state
       .admission_open
       .store(false, Ordering::Release);
+    if let Some(context) = &self.runtime_state.execution.prepared_runtime {
+      context.drain();
+    }
     for task in self.timed_trigger_tasks {
       task.abort();
     }
@@ -326,10 +382,20 @@ impl WomlWebhookServer {
       .execution
       .shutdown_shared_script_hosts()
       .await;
-    let _ = DurableEventStore::open_ready(&self.database_path).and_then(|mut store| {
-      store
-        .unregister_workflow_runtime_routes(&self.workflow_runtime_id)
-        .map(|_| ())
-    });
+    let _ = self
+      .runtime_state
+      .execution
+      .open_ingress_store(
+        &self.database_path,
+        crate::durable::PreparedScope::Maintenance,
+      )
+      .and_then(|mut store| {
+        store
+          .unregister_workflow_runtime_routes(&self.workflow_runtime_id)
+          .map(|_| ())
+      });
+    if let Some(context) = &self.runtime_state.execution.prepared_runtime {
+      let _ = context.release(&self.database_path);
+    }
   }
 }

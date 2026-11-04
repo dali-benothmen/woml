@@ -1,0 +1,20 @@
+{
+  "profile": "woml.incremental-scheduling-acceptance/v1",
+  "baselineCommit": "70a5d4cc484b6dca4e03aaf3f8aea1bd7127784b",
+  "baselineQualification": "Resolve the full commit and retain an explicit optimized receipt before production edits; only test capture and disabled test counters may differ from that commit.",
+  "sizes": [1, 4, 16, 64, 256, 1024],
+  "processesPerArtifact": 7,
+  "warmupSamples": 1,
+  "measuredSamples": 3,
+  "queriesPerSample": 20,
+  "comparisonOrder": "alternating-baseline-candidate-pairs",
+  "statistic": "median-of-process-medians",
+  "primary": {"operation": "historyValidation", "nodes": 1024, "metric": "threadCpuMs", "minimumImprovementPercent": 10},
+  "investigation": {"controlMedianRegressionPercent": 5, "allocatedBytesIncreasePercent": 5, "rssOrScopedPeakLiveIncreaseBytes": 16777216},
+  "isq1Acceptance": {"membershipEqualsIndependentScan": true, "unrelatedCandidatePredicateChecks": 0, "fullReadyResultVectorAllocations": 0, "retainedDynamicStateBytes": 0},
+  "initialFrontierScope": "Future ISQ4 only: validated unscoped acyclic ordinary runtime.script graphs with always edges and explicit source order; every other handler/control/scoped event falls back. Retry support requires an explicit clock/event mapping before enabling.",
+  "minimumAvailableMemoryBytes": 2147483648,
+  "minimumAvailableDiskBytes": 2147483648,
+  "unavailableMeasurements": "null-not-zero",
+  "releasePrerequisites": ["prepared-runtime-locking-correction", "resolve-prior-control-regressions", "scoped-allocation-and-peak-live-evidence", "actual-native-and-installed-journeys", "actual-platform-validation", "unchanged-product-budgets"]
+}

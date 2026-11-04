@@ -259,6 +259,7 @@ describe('performance measurement contract v1', () => {
           layer: string;
           startOffsetMs: number;
           durationMs: number;
+          status: string;
           runId?: string;
           invocationId?: string;
           counts?: Readonly<Record<string, number>>;
@@ -300,6 +301,10 @@ describe('performance measurement contract v1', () => {
         expect(names).toContain('napi.decode_runtime_registration');
         expect(names).toContain('napi.start_trigger_runtime');
         expect(names).toContain('runtime.prepare_trigger_host');
+        const preparation = spans.filter((span: { name: string }) => span.name === 'runtime.prepare_trigger_host');
+        expect(preparation).toHaveLength(1);
+        expect(preparation[0]!.status).toBe('succeeded');
+        expect(preparation[0]!.counts?.workflows).toBe(1);
         expect(names).toContain('sqlite.open_initialize');
         expect(names).toContain('sqlite.register_definition');
         expect(names).toContain('napi.activate_trigger_runtime');

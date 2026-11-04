@@ -1,0 +1,13 @@
+{
+  "profile": "woml.invocation-facade-prototype/v1",
+  "sourceCheckpoint": "0c683fd13c1ba82a3241122cf1e7969127dfb459",
+  "originalWorkerSourceSha256": "df474924429e8bbdf034062c6c71c79a744f21db376868eb4dfe72c36b560369",
+  "candidate": "Private capability-dispatch function boundary; unchanged closure preparation, no cache or executed-worker reuse",
+  "originalWorkerSha256": "af632902e850fdba61b7e40dd3c66e3cb21f32d797698e9abd788e83f6e83f08",
+  "originalHostSha256": "d81ca54095ff5d040c6ff2dd96ba0f18b43f45b56f57934d1271efac13e15cbf",
+  "captures": ["request", "attempt", "resolvedSecretValues", "executionDeadline"],
+  "privateParameters": ["capability", "operation", "input", "callOptions", "identityOverride"],
+  "sampling": "Unchanged ISR0 invocation-setup-acceptance.v1.json; seven alternating process pairs and all original cohorts",
+  "integration": "Conditional on numerical primary/control results, semantic equivalence and isolation evidence; never automatic from a component timing",
+  "releaseAccepted": false
+}

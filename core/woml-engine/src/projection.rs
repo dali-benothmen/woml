@@ -11,6 +11,8 @@ mod fold_approvals;
 mod fold_attempts;
 mod fold_control_flow;
 mod fold_correction;
+#[cfg(test)]
+pub(crate) mod fold_counts;
 mod fold_lifecycle;
 mod fold_locks;
 mod fold_notifications;

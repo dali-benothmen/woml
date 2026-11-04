@@ -462,7 +462,7 @@ pub(in crate::runtime) async fn execute_bounded_for_each<E: RuntimeDagEngine>(
       let iteration_options = options.clone();
       let iteration_invocations = Arc::clone(&active_invocations);
       active.push(async move {
-        let result = execute_for_each_iteration(
+        let result = Box::pin(execute_for_each_iteration(
           &mut iteration_engine,
           run_id,
           &iteration_descriptor,
@@ -473,7 +473,7 @@ pub(in crate::runtime) async fn execute_bounded_for_each<E: RuntimeDagEngine>(
           &iteration_options,
           host,
           &iteration_invocations,
-        )
+        ))
         .await;
         (index, result)
       });
@@ -786,7 +786,7 @@ async fn execute_for_each_iteration<E: RuntimeDagEngine + Clone>(
           let script_options = script_options.clone();
           let script_invocations = Arc::clone(&script_invocations);
           async move {
-            let result = execute_for_each_iteration_script(
+            let result = Box::pin(execute_for_each_iteration_script(
               &mut script_engine,
               run_id,
               &script_descriptor,
@@ -798,7 +798,7 @@ async fn execute_for_each_iteration<E: RuntimeDagEngine + Clone>(
               &script_options,
               host,
               &script_invocations,
-            )
+            ))
             .await;
             (node_id, result)
           }
@@ -990,7 +990,7 @@ async fn execute_for_each_iteration<E: RuntimeDagEngine + Clone>(
         }
         "engine.lock-result" => {}
         "runtime.script" => {
-          let output = execute_for_each_iteration_script(
+          let output = Box::pin(execute_for_each_iteration_script(
             engine,
             run_id,
             descriptor,
@@ -1002,7 +1002,7 @@ async fn execute_for_each_iteration<E: RuntimeDagEngine + Clone>(
             options,
             host,
             active_invocations,
-          )
+          ))
           .await?;
           context.steps.insert(node_id.clone(), output);
         }

@@ -11,8 +11,9 @@ use crate::durable::PolicyClaimWaitReason;
 use crate::durable::PolicyExecutionClaimResult;
 use crate::durable::SchedulerClaimV1;
 use crate::durable::{parse_durable_timestamp, DurableEventStore, RunRecovery};
-use crate::engine::validate_event_history_against_definition;
-use crate::fold_events;
+use crate::engine::{
+  check_event_history_against_definition, validate_event_history_against_definition,
+};
 use crate::projection::AttemptStatus;
 use crate::projection::ForEachStatus;
 use crate::CompiledWorkflowDefinition;
@@ -247,9 +248,12 @@ impl DurableEventStore {
       DurableStoreError::Contract("Model v12 has no runtime policy queue.".to_string())
     })?;
     let events = load_events(&transaction, run_id)?;
-    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
-      .map_err(DurableStoreError::Contract)?;
-    let projection = fold_events(&events)?;
+    // Consume only this initial transaction-local snapshot. First-start/lifecycle
+    // appends below still undergo their own complete final validation.
+    let projection =
+      check_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+        .map_err(DurableStoreError::Contract)?
+        .into_projection();
     if matches!(
       projection.status,
       RunStatus::NotStarted

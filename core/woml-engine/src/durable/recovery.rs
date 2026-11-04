@@ -67,6 +67,7 @@ pub(in crate::durable) enum RunRecovery {
 
 impl DurableEventStore {
   pub fn recover_interrupted_runs(&mut self) -> Result<RecoveryReport, DurableStoreError> {
+    self.connection.general_recovery()?;
     let run_ids = self.run_ids()?;
     let mut report = RecoveryReport {
       inspected_runs: run_ids.len(),

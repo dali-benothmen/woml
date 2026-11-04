@@ -14,8 +14,10 @@ use crate::durable::{
   append_signal_resolution, derive_lifecycle_hook_invocation_id, parse_stored_timestamp,
   resolve_signal_correlation, DurableEventStore,
 };
-use crate::engine::validate_event_history_against_definition;
 use crate::engine::validate_payload_against_definition;
+use crate::engine::{
+  check_event_history_against_definition, validate_event_history_against_definition,
+};
 use crate::event::LifecycleHookRequestedData;
 use crate::event::LifecycleSubject;
 use crate::event::LifecycleSubjectKind;
@@ -79,9 +81,12 @@ impl DurableEventStore {
       event_schema_version,
       payload,
     )?;
-    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
-      .map_err(DurableStoreError::Contract)?;
-    let projection = fold_events(&events)?;
+    // Check the resulting slice AFTER compatibility-aware append. Consuming it
+    // does not certify the later early-signal append or a reloaded history.
+    let projection =
+      check_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+        .map_err(DurableStoreError::Contract)?
+        .into_projection();
     if projection.status != RunStatus::Waiting
       || !matches!(
         projection.durable_waits.get(&registration.wait_id),

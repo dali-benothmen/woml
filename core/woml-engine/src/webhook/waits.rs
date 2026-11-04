@@ -6,7 +6,6 @@ use crate::webhook::TriggerProgress;
 use crate::webhook::WebhookRuntimeState;
 use crate::webhook::TRIGGER_PROGRESS_CONTRACT;
 use crate::webhook::TRIGGER_PROGRESS_CONTRACT_VERSION;
-use crate::DurableEventStore;
 use actix_web::web;
 use chrono::Utc;
 use std::collections::HashSet;
@@ -23,7 +22,7 @@ pub(in crate::webhook) async fn run_durable_wait_scheduler(state: web::Data<Webh
     .map(|target| target.workflow_id)
     .collect::<HashSet<_>>();
   loop {
-    let due = DurableEventStore::open_ready(&state.database_path).is_ok_and(|mut store| {
+    let due = state.open_store().is_ok_and(|mut store| {
       let timer_due = store
         .due_timer_waits_for_workflows(
           state.execution.clock.now(),
@@ -66,7 +65,8 @@ pub(in crate::webhook) async fn run_durable_wait_scheduler(state: web::Data<Webh
           let crate::WorkflowRuntimeOutcome::Succeeded { execution, .. } = outcome else {
             continue;
           };
-          let workflow_id = DurableEventStore::open_ready(&state.database_path)
+          let workflow_id = state
+            .open_store()
             .and_then(|store| store.run_binding(&execution.run_id))
             .map(|binding| binding.workflow_id);
           if let (Some(reporter), Ok(workflow_id)) = (&state.progress_reporter, workflow_id) {
@@ -91,7 +91,8 @@ pub(in crate::webhook) async fn run_durable_wait_scheduler(state: web::Data<Webh
       .await
       {
         for resumed in resumed {
-          let workflow_id = DurableEventStore::open_ready(&state.database_path)
+          let workflow_id = state
+            .open_store()
             .and_then(|store| store.run_binding(&resumed.run_id))
             .map(|binding| binding.workflow_id);
           let Ok(workflow_id) = workflow_id else {
@@ -124,7 +125,8 @@ pub(in crate::webhook) async fn run_durable_wait_scheduler(state: web::Data<Webh
       .await
       {
         for resumed in resumed {
-          let workflow_id = DurableEventStore::open_ready(&state.database_path)
+          let workflow_id = state
+            .open_store()
             .and_then(|store| store.run_binding(&resumed.run_id))
             .map(|binding| binding.workflow_id);
           let Ok(workflow_id) = workflow_id else {

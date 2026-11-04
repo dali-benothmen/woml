@@ -503,6 +503,27 @@ jobs:
           bun run test:combined-developer-experience-contracts &&
           bun scripts/benchmark-combined-developer-experience.ts &&
           bun scripts/verify-combined-developer-experience-release.ts
+      - name: Test prepared startup, ownership, rollback, and actual native request separation serially
+        working-directory: woml-cli
+        run: bun run test:startup-request-separation
+      - name: Test indexed readiness against historical scan semantics serially
+        working-directory: woml-cli
+        run: bun run test:readiness-indexes
+      - name: Test cursor frontier, fallback, ordered readiness and history equivalence serially
+        working-directory: woml-cli
+        run: bun run test:incremental-scheduling
+      - name: Verify invocation setup measurement and isolation contracts
+        working-directory: woml-cli
+        run: bun run test:invocation-setup-contracts && bun run test:invocation-setup-isolation
+      - name: Test exact-history reuse, corruption, commit faults, ownership and feature safety serially
+        working-directory: woml-cli
+        run: bun run test:validated-state-reuse-safety
+      - name: Test scheduling composition, scoped context and ordinary-stack behavior serially
+        working-directory: woml-cli
+        run: bun run test:incremental-scheduling-composition-safety
+      - name: Test installed prepared requests, hooks, managed state, restart, and restore
+        working-directory: woml-cli
+        run: bun run test:startup-request-separation-package
       - name: Test the clean installed project, artifacts, telemetry, coordinator, and worker serially
         working-directory: woml-cli
         run: bun run test:combined-developer-experience-package

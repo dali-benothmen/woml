@@ -1,0 +1,29 @@
+{
+  "profile": "woml.validated-state-compatibility-repairs/v1",
+  "declarations": [
+    {
+      "name": "register_durable_wait_atomically",
+      "path": "core/woml-engine/src/durable/transactions/waits.rs",
+      "originalSha256": "5ad8a8808f6ee9200691bb8ac6c17250e82592e8878c1ba99ee4c3e66f359feb",
+      "sha256": "e3ecfb37bb950ae5cbe0687da36b3867d1d7ae76df5629087a8886a799db0272",
+      "reason": "Validated state reuse: consume the checked resulting slice after compatibility-aware append; retain later early-signal validation and atomic event/index/commit ordering.",
+      "regression": "core/woml-engine/src/durable/boundary_tests/validated_state_reuse.rs"
+    },
+    {
+      "name": "try_claim_policy_run_at",
+      "path": "core/woml-engine/src/durable/transactions/policy.rs",
+      "originalSha256": "bdb791fcf3e870bde8ebf8ff7f6ee2d854e3887a5282c0011685dcc8ae3080a0",
+      "sha256": "718330882413420a985d9c723db653a34746436ed49d52f006f5a86bf447f05d",
+      "reason": "Validated state reuse: consume only the initial transaction-local snapshot; first-start/lifecycle appends still receive complete final validation before commit.",
+      "regression": "core/woml-engine/src/durable/boundary_tests/validated_state_reuse.rs"
+    },
+    {
+      "name": "projection",
+      "path": "core/woml-engine/src/durable/events/cache.rs",
+      "originalSha256": "3beaf0848ca69fa46618e00e828581a11e0a3a3f4c04056a243b3062e412593d",
+      "sha256": "28562e2b180a1e012f2b002cd2515d49967bfbfdddf4a6da1b462396234e4315",
+      "reason": "Validated state reuse: consume the complete checked cache-miss state; enrich/hydrate only its public clone before existing bounded-cache publication, with cache hits and freshness rules unchanged.",
+      "regression": "core/woml-engine/src/durable/boundary_tests/validated_state_reuse.rs"
+    }
+  ]
+}

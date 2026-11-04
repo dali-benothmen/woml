@@ -8,7 +8,6 @@ use crate::webhook::TriggerProgress;
 use crate::webhook::WebhookRuntimeState;
 use crate::webhook::TRIGGER_PROGRESS_CONTRACT;
 use crate::webhook::TRIGGER_PROGRESS_CONTRACT_VERSION;
-use crate::DurableEventStore;
 use actix_web::http::header;
 use actix_web::http::Method;
 use actix_web::http::StatusCode;
@@ -204,7 +203,8 @@ pub(in crate::webhook) async fn handle_external_signal(
     );
   };
   if let Some(continuation) = admitted.continuation {
-    let workflow_id = DurableEventStore::open_ready(&state.database_path)
+    let workflow_id = state
+      .open_store()
       .and_then(|store| store.run_binding(&admitted.admission.run_id))
       .map(|binding| binding.workflow_id);
     if let Ok(workflow_id) = workflow_id {

@@ -9,7 +9,6 @@ use crate::webhook::WebhookRuntimeState;
 use crate::webhook::COMMUNICATION_PROVIDER_MAX_BATCH_ITEMS;
 use crate::webhook::COMMUNICATION_PROVIDER_MAX_MESSAGE_BYTES;
 use crate::webhook::WEBHOOK_MAX_BODY_BYTES;
-use crate::DurableEventStore;
 use crate::TriggerAdmissionRequest;
 use actix_web::http::header;
 use actix_web::http::Method;
@@ -325,10 +324,12 @@ pub(in crate::webhook) async fn handle_whatsapp_callback(
         {
           if let Some((decision, capability)) = whatsapp_decision_payload(button_payload) {
             let database_path = state.database_path.clone();
+            let execution = state.execution.clone();
             let capability = capability.to_string();
             let actor = format!("whatsapp:{sender}");
             let resolved = web::block(move || {
-              let mut store = DurableEventStore::open_ready(database_path)?;
+              let mut store = execution
+                .open_ingress_store(&database_path, crate::durable::PreparedScope::Continuation)?;
               store.resolve_notification_approval(&capability, &actor, decision, Utc::now())
             })
             .await;
@@ -437,8 +438,10 @@ pub(in crate::webhook) async fn handle_whatsapp_callback(
             received_at: Utc::now(),
           };
           let database_path = state.database_path.clone();
+          let execution = state.execution.clone();
           let admitted = web::block(move || {
-            let mut store = DurableEventStore::open_ready(database_path)?;
+            let mut store = execution
+              .open_ingress_store(&database_path, crate::durable::PreparedScope::Continuation)?;
             store.admit_trigger_occurrence(admission)
           })
           .await;

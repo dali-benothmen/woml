@@ -17,6 +17,7 @@ mod lifecycle;
 mod modules;
 mod options;
 mod outcomes;
+mod preparation;
 mod progress;
 mod scheduling;
 mod script_execution;
@@ -272,6 +273,7 @@ async fn execute_workflow_durable_internal_unprofiled(
   options: RuntimeExecutionOptions,
   database_path: PathBuf,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  options.require_unprepared_entrypoint()?;
   validate_rich_approval_authority(&workflow, &options)?;
   let options = attach_durable_capability_authority(options, &database_path)?;
   let mut store = DurableEventStore::open(database_path.clone())?;
@@ -352,8 +354,12 @@ pub async fn execute_admitted_trigger_run_durable(
   let mut span =
     crate::performance::PerformanceSpan::new("runtime", "runtime.execute_admitted_run");
   span.run_id(run_id.to_string());
-  let result =
-    execute_admitted_trigger_run_durable_unprofiled(database_path, run_id, options).await;
+  let result = Box::pin(execute_admitted_trigger_run_durable_unprofiled(
+    database_path,
+    run_id,
+    options,
+  ))
+  .await;
   if result.is_ok() {
     span.succeed();
   }
@@ -365,14 +371,22 @@ async fn execute_admitted_trigger_run_durable_unprofiled(
   run_id: &str,
   options: RuntimeExecutionOptions,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  let options = options.for_admitted_run(&database_path, run_id)?;
   let options = attach_durable_capability_authority(options, &database_path)?;
-  let mut store = DurableEventStore::open(database_path.clone())?;
+  let mut store =
+    options.open_runtime_store(&database_path, crate::durable::PreparedScope::Dispatch)?;
   bind_run_infrastructure_policy(&mut store, run_id, &options)?;
   let binding = store.run_binding(run_id)?;
   let workflow = store.definition(&binding.definition_hash)?;
   validate_rich_approval_authority(&workflow, &options)?;
   if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
-    return execute_policy_run_durable(database_path, run_id, options, store).await;
+    return Box::pin(execute_policy_run_durable(
+      database_path,
+      run_id,
+      options,
+      store,
+    ))
+    .await;
   }
   let options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
   let mut engine = DurableDagEngine::resume(store, run_id)?;
@@ -385,6 +399,7 @@ async fn resume_workflow_durable_internal(
   options: RuntimeExecutionOptions,
   approval_outcome_api: Option<bool>,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  options.require_unprepared_entrypoint()?;
   let options = attach_durable_capability_authority(options, &database_path)?;
   let mut store = DurableEventStore::open(database_path.clone())?;
   bind_run_infrastructure_policy(&mut store, run_id, &options)?;
@@ -566,20 +581,26 @@ pub(crate) async fn resume_due_timer_waits_for_workflows_durable(
 ) -> Result<Vec<WorkflowRuntimeOutcome>, RuntimeExecutionError> {
   let now = options.clock.now();
   let due = match workflow_ids {
-    Some(workflow_ids) => DurableEventStore::open(database_path.clone())?
+    Some(workflow_ids) => options
+      .open_runtime_store(&database_path, crate::durable::PreparedScope::Continuation)?
       .due_timer_waits_for_workflows(now, limit, workflow_ids)?,
-    None => DurableEventStore::open(database_path.clone())?.due_timer_waits(now, limit)?,
+    None => options
+      .open_runtime_store(&database_path, crate::durable::PreparedScope::Continuation)?
+      .due_timer_waits(now, limit)?,
   };
   let mut outcomes = Vec::with_capacity(due.len());
   for wait in due {
-    let mut store = DurableEventStore::open(database_path.clone())?;
+    let run_options = options
+      .clone()
+      .for_admitted_run(&database_path, &wait.run_id)?;
+    let mut store = run_options
+      .open_runtime_store(&database_path, crate::durable::PreparedScope::Continuation)?;
     let settlement = store.settle_timer_wait(&wait.run_id, &wait.wait_id, now)?;
     if !matches!(settlement, crate::TimerWaitSettlement::Resolved { .. }) {
       continue;
     }
     outcomes.push(
-      execute_policy_run_durable(database_path.clone(), &wait.run_id, options.clone(), store)
-        .await?,
+      execute_policy_run_durable(database_path.clone(), &wait.run_id, run_options, store).await?,
     );
   }
   Ok(outcomes)
@@ -603,7 +624,8 @@ pub async fn admit_external_signal_durable(
   if let Some(token) = options.signal_ingress_token.as_ref() {
     known_secrets.push(token.clone());
   }
-  let mut store = DurableEventStore::open(database_path.clone())?;
+  let mut store =
+    options.open_runtime_store(&database_path, crate::durable::PreparedScope::Continuation)?;
   let admission = store.admit_external_signal_atomically(request, &known_secrets)?;
   let continuation = if admission.resumes_run() {
     Some(execute_admitted_trigger_run_durable(database_path, &admission.run_id, options).await)
@@ -628,14 +650,16 @@ pub(crate) async fn resume_due_signal_waits_for_workflows_durable(
   workflow_ids: &HashSet<String>,
 ) -> Result<Vec<DueSignalWaitResume>, RuntimeExecutionError> {
   let now = options.clock.now();
-  let due = DurableEventStore::open(database_path.clone())?.due_signal_waits_for_workflows(
-    now,
-    limit,
-    workflow_ids,
-  )?;
+  let due = options
+    .open_runtime_store(&database_path, crate::durable::PreparedScope::Continuation)?
+    .due_signal_waits_for_workflows(now, limit, workflow_ids)?;
   let mut resumed = Vec::with_capacity(due.len());
   for wait in due {
-    let mut store = DurableEventStore::open(database_path.clone())?;
+    let run_options = options
+      .clone()
+      .for_admitted_run(&database_path, &wait.run_id)?;
+    let mut store = run_options
+      .open_runtime_store(&database_path, crate::durable::PreparedScope::Continuation)?;
     let settlement = store.settle_signal_wait_timeout(&wait.run_id, &wait.wait_id, now)?;
     if !matches!(
       settlement,
@@ -646,13 +670,8 @@ pub(crate) async fn resume_due_signal_waits_for_workflows_durable(
     }
     resumed.push(DueSignalWaitResume {
       run_id: wait.run_id.clone(),
-      outcome: execute_policy_run_durable(
-        database_path.clone(),
-        &wait.run_id,
-        options.clone(),
-        store,
-      )
-      .await,
+      outcome: execute_policy_run_durable(database_path.clone(), &wait.run_id, run_options, store)
+        .await,
     });
   }
   Ok(resumed)
@@ -867,7 +886,12 @@ async fn resume_with_engine<E: RuntimeDagEngine>(
   let mut span = crate::performance::PerformanceSpan::new("runtime", "runtime.resume_engine");
   span.run_id(run_id.to_string());
   span.count("nodes", engine.workflow().graph.nodes.len());
-  let result = resume_with_engine_unprofiled(engine, run_id, options.clone()).await;
+  let result = Box::pin(resume_with_engine_unprofiled(
+    engine,
+    run_id,
+    options.clone(),
+  ))
+  .await;
   report_telemetry_history(engine, run_id, &options);
   settle_operational_run(engine, run_id, &options);
   if result.is_ok() {

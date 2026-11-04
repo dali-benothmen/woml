@@ -1,0 +1,207 @@
+{
+  "profile": "woml.startup-separation-compatibility-repairs/v1",
+  "boxingReason": "Startup separation: keep owned admitted/policy and nested iteration futures bounded on ordinary native stacks; preserve all original boxing, await order, cancellation and durable authority.",
+  "boxingRegression": "woml-cli/scripts/verify-startup-separation-native.ts",
+  "boxedCalleeAdditions": [
+    "execute_admitted_trigger_run_durable_unprofiled",
+    "execute_bounded_for_each",
+    "execute_for_each_iteration",
+    "execute_for_each_iteration_script",
+    "execute_for_each_iteration_script",
+    "execute_for_each_script",
+    "execute_policy_run_durable",
+    "execute_policy_run_durable_unprofiled",
+    "resume_with_engine",
+    "resume_with_engine_unprofiled"
+  ],
+  "declarationRepairs": {
+    "webhook": [
+      {
+        "name": "impl WomlWebhookServer::prepare_with_external_ingress",
+        "originalSha256": "d2dff184b2f76bdd5bd88fc3943e98e99fc58c9396b4fc88d6e1fe1be7a5cda5",
+        "sha256": "c8ea6bc43abbe6ff05aa7a1e1a2e4ac74425219284adc9890a017ac53c37e230",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "impl WomlWebhookServer::prepare_with_external_ingress_unprofiled",
+        "originalSha256": "afc4a6e03a23b6324796fd7f4a0ab86a9bacef4d79bc3c7c1d80a5d6611637bc",
+        "sha256": "9c258d7570d4d2bc09f211da3bd0bcfcd3a2bd02abf16644c7249839d6738f36",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "impl WomlWebhookServer::prepare_owned_with_external_ingress",
+        "originalSha256": null,
+        "sha256": "8ff0e5f80f3caa7c91f7d55de9713f174428bd0e9c1c92574d8eb771b2fd8f5c",
+        "reason": "Startup separation: bind native-owned activation to the exact prepared lifetime and retain the preparation profiling span on the owned entrypoint; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "impl WomlWebhookServer::owned_execution_options",
+        "originalSha256": null,
+        "sha256": "6c32c99797ed5a180116850fbbf0d200842affdb39192a311954327c740f1069",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "impl WomlWebhookServer::activate_unprofiled",
+        "originalSha256": "a15f897108fd643a6fb3934a1ce2e4181a1ee1d542fe1035ec5626b849c79059",
+        "sha256": "8fab3d4f340526870ed006a6de03bfbf009de917da34493667f5e93e1b11a23f",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "impl WomlWebhookServer::stop_with_deadline",
+        "originalSha256": "1f3950b9ddfdce54a1e9903106200a144e967580b96bce2e76835e2f0ccfe4ab",
+        "sha256": "e1c111b74a180398e0200102384b3c07924c9a444f4e28aaef0409797a499e0e",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn handle_webhook",
+        "originalSha256": "4608382711bc6812b1984e271a4f78605b26886e1f5c96666f3f7e2cca6f96ac",
+        "sha256": "08c16690e3675b903dd7695a254e24a52bb6069279aad00a514f6df0a6fa2a44",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn admit_startup_manual",
+        "originalSha256": "07d223a60271cf9d614b87471f7489a5aa8c96609067b87be6761e348f3fb99e",
+        "sha256": "4df6b2aaf32bba37be75dc2504ee3ab034a5e421d7876a534d5fba826c8256cd",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn run_external_ingress",
+        "originalSha256": "dbd8985f752fdf062a6106efd31244881a17239f9dc0b5edeab7c2eedccf8e86",
+        "sha256": "09701f16dfe93ba59cae5ede98f2d2f708002efceccf3650fe9bb8418d36a238",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn prepare_state",
+        "originalSha256": "c2111f1e5ab06e1e63757888360362ccfaeb93d7d45ea0bf78014e8dd963d6b4",
+        "sha256": "814bb4cfbcf0d29c49209048d2997c7491e22bea83e91f0f42aa791236bf30c5",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn handle_whatsapp_callback",
+        "originalSha256": "02658ced7fe1dd328948c2f1636b964e4312e01f5d7983a18e6488dbc14436c7",
+        "sha256": "9c08a6b06c88aa92e73bd14e6a5215859e41cc910afe3205c2b5b4c14030495c",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn handle_event_publication",
+        "originalSha256": "644d7b3dd85a25355664ef197d66ecbec5c31eaf43e5a24d9cd93ddcc37437c0",
+        "sha256": "e9b28d0439bbbbc6b81694dbecd50b9753d78380e80af9cd0691670d3f69cc61",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn dispatch_run",
+        "originalSha256": "f5dbeed26e68ababe9322f428670d7cf8c42be3fb205048f2700f0d17394a0b2",
+        "sha256": "bb807900c6310ab54bd57659b4b244b2b68a037942d68c6958376fcfbdf376e0",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn execute_trigger_run_with_builtin_notifications",
+        "originalSha256": "f11f4614648a553e4df24c5fa4dd0431fef72cc8b68ee8e746dae5e5909d1b3f",
+        "sha256": "50e7111d9cc432c876e10bf14b3a5060886400aa2e507dbe0e65090898ac690b",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn initialize_schedules",
+        "originalSha256": "da47f58259e8820d248ba2cec1c1f3e197ddb469971f2333913aba38d4a8829c",
+        "sha256": "60d5b47feda8e1260059576d313228b9eb3230893801bdc7520d4d0517f0a228",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn run_schedule_loop",
+        "originalSha256": "7c41e9f4df9ea9e991d5762f921ffdf534adb697b18d892afe140255de48a12b",
+        "sha256": "f42ee7198ff34bb9629900d21ed2c85423628775514d62bf7c631cf42f8f6044",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn initialize_intervals",
+        "originalSha256": "3cd39e696162b4b2da99b0da0ea10174f4762e5cda7d05b85e931954583193c3",
+        "sha256": "95779385e5b127e39c98584b426d079489c8c1b6128843bd83d27b0b6b92845d",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn run_interval_loop",
+        "originalSha256": "b04402f7046e185550d7c297e4fc084c91ea396ae43785b0c9ef5ecf2552472c",
+        "sha256": "ec05b6dfb7e64725f1830e3609b4aa862ef69d7d30ec06062ff481c84cb4d077",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "impl WebhookRuntimeState::open_store",
+        "originalSha256": null,
+        "sha256": "38d82e14a8861d2187cbfe096c1b6b85be8a3866d6201623159c6cbd64c44747",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "impl WebhookRuntimeState::report_run_started",
+        "originalSha256": "a575361c7dbfa3dff4c2db9fec1298e0639e9534634548afbabf5227d14d5546",
+        "sha256": "3b6545ff302ab5d70ff4c90ebc05f9a6dcfc20e089c28360158625de5db71ce6",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn handle_workflow_call_wakeup",
+        "originalSha256": "33116cdc02750ac95f5328417e11b5a6dce2ef4d46471f375c74ecdad87799da",
+        "sha256": "8cb5876c1890524c381157408b7d8202177d4e8076224954ee81ef7c1f0d474c",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn run_workflow_routing_maintenance",
+        "originalSha256": "c0c3fe26b46d55ceccbfa293b956bceaf796f5850db29f946d73c82c07736c99",
+        "sha256": "d3826e2ca495f1a4b05eeecf44294381b817153382b2352a60df2920c90e74b0",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn handle_external_signal",
+        "originalSha256": "589b619cfe1eccf3e227f58dc41d443ab25c407e7b70cdbfa6f0d9e21b95d1f1",
+        "sha256": "56f55f12f8a34ce7bd7483d1045f65b63b9879581e9bc6a1071890fb20aeb2b2",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      },
+      {
+        "name": "fn run_durable_wait_scheduler",
+        "originalSha256": "df06dadc6fdb74ad93f7e589cdf359700030eb6327b9d87c2b18d5a4462fae41",
+        "sha256": "4999663ee27c9bbfe68a8ebb085b89aae6a0dc0a200c2c5744b874629c78ce8c",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      }
+    ],
+    "artifacts": [
+      {
+        "name": "fn prepare_inspection_schema",
+        "originalSha256": null,
+        "sha256": "5a6634c85ce65dcff03fd49fba2a2dafbb4e8b44bd9984c81e2680fe2554b882",
+        "reason": "Startup separation: atomically prepare existing operator metadata before publishing the owned schema cookie, without activating artifact backends or weakening invalidation.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      }
+    ],
+    "bridge": [
+      {
+        "name": "fn start_woml_webhook_runtime",
+        "originalSha256": "ff99428b06f537fd0b820093d845a64769102bd88abee404bfde871cf5d42eba",
+        "sha256": "d71a3309dfa721580b20a0fd5ab8dc7af91af775eb0d282a1a8affb8e3bfd600",
+        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
+      }
+    ]
+  }
+}

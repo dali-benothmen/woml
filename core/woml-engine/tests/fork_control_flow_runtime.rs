@@ -7,10 +7,10 @@ use woml_engine::model::ValueExpression;
 use woml_engine::model::{BackoffPolicy, RetryPolicy};
 use woml_engine::{
   execute_admitted_trigger_run_durable, execute_workflow_durable, project_run_presentation_v1,
-  run_presentation_from_store_v1, BusinessOutcome, CompiledWorkflowDefinition, DurableEventStore,
-  ForkBranchOutcome, PresentationStepKind, PresentationStepStatus, RunEventPayload, RunStatus,
-  RuntimeExecutionError, RuntimeExecutionOptions, ScriptHostProcessOptions,
-  TriggerAdmissionRequest,
+  run_presentation_from_store_v1, AttemptFailureKind, BusinessOutcome, CompiledWorkflowDefinition,
+  DurableEventStore, ForkBranchOutcome, OperationStatus, PresentationStepKind,
+  PresentationStepStatus, RunEventPayload, RunStatus, RuntimeExecutionError,
+  RuntimeExecutionOptions, ScriptHostProcessOptions, TriggerAdmissionRequest,
 };
 
 const CONTROL_CHOICE: &str =
@@ -130,12 +130,12 @@ async fn cancellation_closes_active_and_queued_fork_work_before_the_run() {
   set_script(
     &mut workflow,
     "publishInstagram",
-    "await new Promise(resolve => setTimeout(resolve, 5000)); return { platform: 'instagram' };",
+    "await services.cache.set('fork-cancel-ready-instagram', true, { name: 'ready' }); await new Promise(() => {}); return { platform: 'instagram' };",
   );
   set_script(
     &mut workflow,
     "publishFacebook",
-    "await new Promise(resolve => setTimeout(resolve, 5000)); return { platform: 'facebook' };",
+    "await services.cache.set('fork-cancel-ready-facebook', true, { name: 'ready' }); await new Promise(() => {}); return { platform: 'facebook' };",
   );
   workflow.validate_for_durable_execution().unwrap();
   let hash = "sha256:8888888888888888888888888888888888888888888888888888888888888888";
@@ -157,7 +157,7 @@ async fn cancellation_closes_active_and_queued_fork_work_before_the_run() {
   };
   let runtime_database = database.path().to_path_buf();
   let runtime_run_id = run_id.clone();
-  let runtime = tokio::spawn(async move {
+  let mut runtime = tokio::spawn(async move {
     execute_admitted_trigger_run_durable(
       runtime_database,
       &runtime_run_id,
@@ -166,27 +166,56 @@ async fn cancellation_closes_active_and_queued_fork_work_before_the_run() {
     .await
   });
   let mut control = DurableEventStore::open(database.path()).unwrap();
-  tokio::time::timeout(std::time::Duration::from_secs(3), async {
+  // A durable attempt start precedes dispatch and cold Worker initialization.
+  // Require a receipt from each exact invocation before measuring cancellation
+  // of active work; script timers must not provide an alternative completion.
+  let ready = tokio::time::timeout(std::time::Duration::from_secs(10), async {
     loop {
       let projection = control.projection(&run_id).unwrap();
-      if projection.forks.contains_key("distribution")
-        && projection.active_attempt_node_ids().len() >= 2
-      {
+      let active_workers = ["publishInstagram", "publishFacebook"]
+        .into_iter()
+        .filter(|node_id| {
+          projection.latest_attempt(node_id).is_some_and(|attempt| {
+            matches!(
+              attempt.status,
+              woml_engine::projection::AttemptStatus::Started
+            ) && projection.operations.values().any(|operation| {
+              operation.node_id == *node_id
+                && operation.identity.invocation_id == attempt.identity.invocation_id
+                && operation.attempt_number == attempt.identity.attempt
+                && operation.capability == "cache"
+                && operation.operation == "set"
+                && matches!(operation.status, OperationStatus::Succeeded { .. })
+            })
+          })
+        })
+        .count();
+      if projection.forks.contains_key("distribution") && active_workers == 2 {
         break;
       }
       tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
   })
-  .await
-  .expect("fork branches start");
+  .await;
+  if ready.is_err() {
+    let projection = control.projection(&run_id).unwrap();
+    runtime.abort();
+    let _ = runtime.await;
+    panic!("both fork Workers must acknowledge readiness: {projection:#?}");
+  }
   control
     .request_run_cancellation(&run_id, "cancel-fork", Utc::now())
     .unwrap();
-  let error = tokio::time::timeout(std::time::Duration::from_secs(3), runtime)
-    .await
-    .expect("fork cancellation settles")
-    .unwrap()
-    .unwrap_err();
+  // Preserve the original responsiveness deadline; only setup has a separate
+  // watchdog. Keep the handle so a failure cannot detach the live runtime.
+  let settled = tokio::time::timeout(std::time::Duration::from_secs(3), &mut runtime).await;
+  if settled.is_err() {
+    let projection = control.projection(&run_id).unwrap();
+    runtime.abort();
+    let _ = runtime.await;
+    panic!("fork cancellation did not settle within three seconds: {projection:#?}");
+  }
+  let error = settled.unwrap().unwrap().unwrap_err();
   assert!(matches!(error, RuntimeExecutionError::RunCancelled(_)));
 
   let projection = control.projection(&run_id).unwrap();
@@ -195,12 +224,38 @@ async fn cancellation_closes_active_and_queued_fork_work_before_the_run() {
     projection.business_outcome,
     Some(BusinessOutcome::Cancelled)
   );
+  for node_id in ["publishInstagram", "publishFacebook"] {
+    assert!(matches!(
+      &projection.latest_attempt(node_id).unwrap().status,
+      woml_engine::projection::AttemptStatus::Failed { failure }
+        if failure.kind == AttemptFailureKind::InvocationCancelled
+    ));
+  }
+  assert!(projection.latest_attempt("finish").is_none());
+  assert!(!projection.context.steps.contains_key("finish"));
   let fork = &projection.forks["distribution"];
   assert_eq!(fork.branches.len(), 2);
   assert!(fork
     .branches
     .values()
     .all(|branch| branch.outcome == Some(ForkBranchOutcome::Cancelled)));
+  let events = control.events(&run_id).unwrap();
+  let run_outcome_sequence = events
+    .iter()
+    .find(|event| matches!(event.payload, RunEventPayload::RunOutcomeDecided(_)))
+    .expect("the cancelled run must have a durable outcome")
+    .sequence;
+  let branch_settlements = events
+    .iter()
+    .filter(|event| {
+      matches!(&event.payload, RunEventPayload::ForkBranchSettled(data)
+        if data.fork_id == "distribution" && data.outcome == ForkBranchOutcome::Cancelled)
+    })
+    .collect::<Vec<_>>();
+  assert_eq!(branch_settlements.len(), 2);
+  assert!(branch_settlements
+    .iter()
+    .all(|event| event.sequence < run_outcome_sequence));
   let presentation = run_presentation_from_store_v1(&control, &run_id).unwrap();
   assert_eq!(
     presentation

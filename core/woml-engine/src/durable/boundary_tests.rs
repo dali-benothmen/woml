@@ -1,5 +1,8 @@
 //! Characterization tests for opening, transaction rollback, and cache authority.
 
+mod validated_state_baseline;
+mod validated_state_reuse;
+
 use super::{DurableEventStore, DurableStoreError, ProjectionFoldState};
 use crate::event::{StepAttemptStartedData, StepAttemptSucceededData};
 use crate::{CompiledWorkflowDefinition, RunEventPayload};

@@ -82,7 +82,7 @@ impl DurableEventStore {
     }
     span.succeed();
     Ok(Self {
-      connection,
+      connection: connection.into(),
       projection_cache: RefCell::new(HashMap::new()),
     })
   }
@@ -93,11 +93,18 @@ impl DurableEventStore {
   }
 
   fn initialize(mut connection: Connection) -> Result<Self, DurableStoreError> {
+    let work = std::sync::Arc::new(super::prepared::StartupWork::default());
+    work
+      .full_attempts
+      .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     connection.busy_timeout(Duration::from_secs(5))?;
     connection.execute_batch("PRAGMA foreign_keys = ON;")?;
     if super::bootstrap::initialize_empty_store(&mut connection)? {
+      work
+        .full_successes
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
       return Ok(Self {
-        connection,
+        connection: super::prepared::StoreConnection::initialized(connection, work),
         projection_cache: RefCell::new(HashMap::new()),
       });
     }
@@ -299,6 +306,9 @@ impl DurableEventStore {
     {
       let recovery = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
       rebuild_correction_indexes(&recovery)?;
+      work
+        .correction_rebuilds
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
       recovery.commit()?;
     }
     if runtime_policy_indexes_need_rebuild(&connection)? {
@@ -311,8 +321,11 @@ impl DurableEventStore {
       "DELETE FROM woml_scheduler_claims WHERE expires_at <= ?1",
       [Utc::now().to_rfc3339()],
     )?;
+    work
+      .full_successes
+      .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(Self {
-      connection,
+      connection: super::prepared::StoreConnection::initialized(connection, work),
       projection_cache: RefCell::new(HashMap::new()),
     })
   }

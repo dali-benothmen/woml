@@ -13,6 +13,10 @@ mod indexes;
 mod inspection;
 mod migrations;
 mod opening;
+mod prepared;
+pub(crate) use prepared::{PreparedOwner, PreparedRuntime, PreparedScope};
+#[cfg(test)]
+mod prepared_contract;
 mod records;
 mod schema;
 mod validation;
@@ -147,13 +151,12 @@ pub use dag_adapter::{
 };
 
 use crate::projection::ProjectionFoldState;
-use rusqlite::Connection;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct DurableEventStore {
-  pub(crate) connection: Connection,
+  pub(crate) connection: prepared::StoreConnection,
   projection_cache: RefCell<HashMap<String, ProjectionFoldState>>,
 }
 

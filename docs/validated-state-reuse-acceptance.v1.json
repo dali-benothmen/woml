@@ -1,0 +1,18 @@
+{
+  "profile": "woml.validated-state-reuse-acceptance/v1",
+  "baselineCommit": "d9338480f1888808ddcc9d349d97ff0f29e77b40",
+  "eventLengths": [128, 512, 2048],
+  "processesPerArtifact": 7,
+  "warmupConnections": 2,
+  "measuredConnections": 5,
+  "hitsPerConnection": 5,
+  "fixtureOrder": "ascending-event-length",
+  "comparisonOrder": "alternating-baseline-candidate-pairs",
+  "statistic": "median-of-process-medians",
+  "primary": {"operation": "cache-miss", "events": 2048, "metric": "threadCpuMs", "minimumImprovementPercent": 10},
+  "investigation": {"controlMedianRegressionPercent": 5, "allocatedBytesIncreasePercent": 5, "ownRssOrPeakLiveIncreaseBytes": 16777216},
+  "minimumAvailableMemoryBytes": 2147483648,
+  "minimumAvailableDiskBytes": 2147483648,
+  "unavailableMeasurements": "null-not-zero",
+  "requiredBeforeVsr2": ["optimized-engine-baseline", "allocation-and-peak-live-capture", "scoped-replay-attribution", "post-startup-native-one-shot-and-activated-controls"]
+}

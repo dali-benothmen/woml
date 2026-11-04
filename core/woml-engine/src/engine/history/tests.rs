@@ -1,8 +1,10 @@
-use super::{
-  validate_event_history_against_definition, validate_history_with_prefixes, HistoryPrefix,
-};
+use super::{validate_event_history_against_definition, HistoryPrefix};
 use crate::{fold_events, CompiledWorkflowDefinition, RunEvent, RunEventPayload};
 use serde::Deserialize;
+
+mod frontier;
+mod latest_attempts;
+mod validated_state;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -128,11 +130,12 @@ fn histories() -> Vec<History> {
 fn compare(history: &History, events: &[RunEvent]) -> Result<(), String> {
   let actual =
     validate_event_history_against_definition(&history.model, &history.definition_hash, events);
-  let original = validate_history_with_prefixes(
+  let original = super::validate_history_with_graph(
     &history.model,
     &history.definition_hash,
     events,
     HistoryPrefix::replay,
+    super::ReadinessGraph::reference,
   );
   assert_eq!(
     actual, original,
@@ -140,6 +143,131 @@ fn compare(history: &History, events: &[RunEvent]) -> Result<(), String> {
     history.label
   );
   actual
+}
+
+#[test]
+fn indexed_readiness_matches_scan_at_every_recorded_prefix_and_clock() {
+  for history in histories() {
+    let graph = super::ReadinessGraph::new(&history.model);
+    let reference = super::ReadinessGraph::reference(&history.model);
+    let owner = crate::engine::ReadinessDefinition::new(history.model.clone());
+    for end in 0..=history.events.len() {
+      let projection = fold_events(&history.events[..end]).unwrap();
+      let historical = history.events[end.saturating_sub(1)].occurred_at;
+      for now in [historical, historical + chrono::Duration::days(365)] {
+        for hash in [history.definition_hash.as_str(), "wrong-definition"] {
+          assert_eq!(
+            graph.ready_at(hash, &projection, now),
+            reference.ready_at(hash, &projection, now),
+            "{} prefix {end} at {now}",
+            history.label
+          );
+          let expected = reference.ready_at(hash, &projection, now);
+          assert_eq!(owner.ready_at(hash, &projection, now), expected);
+          for node in history
+            .model
+            .graph
+            .nodes
+            .iter()
+            .map(|node| node.id.as_str())
+            .chain(["missing-node"])
+          {
+            assert_eq!(
+              graph.is_ready_at(hash, &projection, now, node),
+              expected.clone().map(|ids| ids.iter().any(|id| id == node)),
+              "{} membership {node} prefix {end} at {now}",
+              history.label
+            );
+          }
+        }
+      }
+    }
+  }
+}
+
+#[test]
+fn historical_membership_observes_retry_deadline_and_clock_reversal_without_events() {
+  let history = histories()
+    .into_iter()
+    .find(|history| history.label == "retry-complete")
+    .unwrap();
+  let graph = super::ReadinessGraph::new(&history.model);
+  let reference = super::ReadinessGraph::reference(&history.model);
+  let mut boundaries = 0;
+  for end in 1..=history.events.len() {
+    let projection = fold_events(&history.events[..end]).unwrap();
+    for (node, retry) in &projection.pending_retries {
+      let before = retry.scheduled_at - chrono::Duration::nanoseconds(1);
+      for now in [
+        before,
+        retry.scheduled_at,
+        retry.scheduled_at + chrono::Duration::days(1),
+        before,
+      ] {
+        let expected = reference
+          .ready_at(&history.definition_hash, &projection, now)
+          .unwrap();
+        assert_eq!(
+          graph.is_ready_at(&history.definition_hash, &projection, now, node),
+          Ok(expected.contains(node))
+        );
+      }
+      assert!(!graph
+        .is_ready_at(&history.definition_hash, &projection, before, node)
+        .unwrap());
+      assert!(graph
+        .is_ready_at(
+          &history.definition_hash,
+          &projection,
+          retry.scheduled_at,
+          node
+        )
+        .unwrap());
+      boundaries += 1;
+    }
+  }
+  assert!(boundaries > 0);
+}
+
+#[test]
+fn definition_index_is_prepared_once_only_if_history_needs_readiness() {
+  let history = histories()
+    .into_iter()
+    .find(|history| history.label == "hello")
+    .unwrap();
+  for events in [&history.events[..0], &history.events[..1]] {
+    super::validate_history_with_graph(
+      &history.model,
+      &history.definition_hash,
+      events,
+      HistoryPrefix::new,
+      |_| panic!("No readiness query needs a graph"),
+    )
+    .unwrap();
+  }
+  let preparations = std::cell::Cell::new(0);
+  super::validate_history_with_graph(
+    &history.model,
+    &history.definition_hash,
+    &history.events,
+    HistoryPrefix::new,
+    |model| {
+      preparations.set(preparations.get() + 1);
+      super::ReadinessGraph::new(model)
+    },
+  )
+  .unwrap();
+  assert_eq!(preparations.get(), 1);
+  let mut corrupt = history.events.clone();
+  corrupt[0].sequence = 42;
+  assert!(super::validate_history_with_graph(
+    &history.model,
+    &history.definition_hash,
+    &corrupt,
+    HistoryPrefix::new,
+    |_| panic!("Structural rejection must precede preparation")
+  )
+  .is_err());
 }
 
 #[test]

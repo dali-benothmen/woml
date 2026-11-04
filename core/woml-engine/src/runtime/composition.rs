@@ -7,7 +7,6 @@
 use super::{RuntimeExecutionError, RuntimeExecutionOptions, REVIEWER_AUTHORITIES};
 use crate::CapabilityRegistry;
 use crate::DurableCapabilityAuthority;
-use crate::DurableEventStore;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -16,6 +15,8 @@ use std::sync::RwLock;
 
 impl RuntimeExecutionOptions {
   pub fn with_capability_registry(mut self, registry: Arc<CapabilityRegistry>) -> Self {
+    self.prepared_runtime = None;
+    self.prepared_run = None;
     self.capability_registry = registry;
     self.managed_database_pool = None;
     self.managed_storage_store = None;
@@ -34,9 +35,11 @@ impl RuntimeExecutionOptions {
   /// so they share the exact same policy, idempotency, and cancellation path as
   /// local script execution without gaining workflow scheduling authority.
   pub fn prepare_remote_worker_capabilities(
-    self,
+    mut self,
     database_path: &Path,
   ) -> Result<Self, RuntimeExecutionError> {
+    self.prepared_runtime = None;
+    self.prepared_run = None;
     attach_durable_capability_authority(self, database_path)
   }
   pub fn remote_worker_capability_authority(&self) -> Option<Arc<DurableCapabilityAuthority>> {
@@ -167,7 +170,8 @@ pub(super) fn attach_durable_capability_authority(
       .protect_path(database_path)
       .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
   }
-  let store = DurableEventStore::open(database_path.to_path_buf())?;
+  let store =
+    options.open_runtime_store(database_path, crate::durable::PreparedScope::Authority)?;
   if let Some(pool) = &options.managed_database_pool {
     // Protect the post-open canonical identity as well as the pre-open lexical
     // path so a state path created during this call cannot gain an alias.
