@@ -3,6 +3,20 @@ import { startupAcceptance, startupScenarios, startupSummary } from '../scripts/
 import { sessionFixture, sessionParameters, type SessionResult } from '../scripts/runtime-session-profile-child';
 import { resolve } from 'node:path';
 
+// Git can check source out as CRLF on Windows. Permit that line ending only;
+// the test-only attribute and private module declaration must remain adjacent.
+const testOnlyPreparedContract = /#\[cfg\(test\)\]\r?\nmod prepared_contract;/u;
+
+test('prototype declaration check accepts LF and CRLF but rejects changed visibility or gating', () => {
+  for (const newline of ['\n', '\r\n']) {
+    const declaration = `#[cfg(test)]${newline}mod prepared_contract;`;
+    expect(declaration).toMatch(testOnlyPreparedContract);
+    expect(declaration.replace('mod prepared_contract;', 'pub mod prepared_contract;')).not.toMatch(testOnlyPreparedContract);
+    expect(declaration.replace('#[cfg(test)]', '#[cfg(any())]')).not.toMatch(testOnlyPreparedContract);
+    expect(declaration.replace(newline, `${newline}mod unrelated;${newline}`)).not.toMatch(testOnlyPreparedContract);
+  }
+});
+
 test('startup baseline freezes independent process cohorts and diagnostic dimensions', () => {
   const scenarios = startupScenarios();
   expect(scenarios).toHaveLength(13);
@@ -37,7 +51,7 @@ test('readiness prototype stays test-only and has serial cross-platform CI cover
   const facade = await Bun.file(resolve(root, 'core/woml-engine/src/durable.rs')).text();
   const prototype = await Bun.file(resolve(root, 'core/woml-engine/src/durable/prepared_contract.rs')).text();
   const ci = await Bun.file(resolve(root, '.github/workflows/ci.yml')).text();
-  expect(facade).toContain('#[cfg(test)]\nmod prepared_contract;');
+  expect(facade).toMatch(testOnlyPreparedContract);
   expect(prototype).not.toContain('pub struct ReadinessPrototype');
   expect([...prototype.matchAll(/#\[test\]/g)].length).toBeGreaterThanOrEqual(11);
   expect(prototype).toContain('SQLITE_FCNTL_HAS_MOVED');

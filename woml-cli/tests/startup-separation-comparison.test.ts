@@ -3,6 +3,20 @@ import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { compareObservations, comparisonSchedule, validateObservation, verifyProductionDiff, type Observation } from '../scripts/startup-separation-comparison';
 
+// Match the complete command, including its line boundary, on either checkout
+// style. Do not confuse the package-only command with the native safety gate.
+const startupReleaseCommand = /bun run test:startup-request-separation\r?\n/u;
+
+test('release command check accepts LF and CRLF without accepting a different gate', () => {
+  for (const newline of ['\n', '\r\n']) {
+    const command = `          bun run test:startup-request-separation${newline}`;
+    expect(command).toMatch(startupReleaseCommand);
+    expect(command.replace('separation', 'separation-package')).not.toMatch(startupReleaseCommand);
+    expect(command.replace('separation', 'separation-disabled')).not.toMatch(startupReleaseCommand);
+    expect(command.replace(newline, ` --skip-native${newline}`)).not.toMatch(startupReleaseCommand);
+  }
+});
+
 function cohort(scale = 0.8): Observation[] {
   return comparisonSchedule().map(row => ({ ...row, result: {
     profile: 'woml.runtime-session-sample/v1', case: row.scenario.case, mode: row.scenario.mode,
@@ -96,6 +110,6 @@ test('installed request coverage follows fresh platform builds without replacing
   expect(scripts['test:startup-request-separation-package']).toBe('bun test tests/startup-separation-packaged-release.test.ts --max-concurrency=1');
   expect(scripts['compare:startup-request-separation']).not.toContain('build');
   const release = await Bun.file(resolve(root, '.github/workflows/release.yml')).text();
-  expect(release).toContain('bun run test:startup-request-separation\n');
+  expect(release).toMatch(startupReleaseCommand);
   expect(release).toContain('bun run test:startup-request-separation-package');
 });
