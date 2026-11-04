@@ -1,5 +1,9 @@
 # Invocation setup: private function-boundary prototype
 
+Follow-up: [ISR4 isolation verification and ISR5 review](invocation-setup-verification-and-review.md)
+add targeted adversarial and actual Rust-host coverage, plus cold/lifetime and
+byte accounting. This original timing capture and rejection remain unchanged.
+
 Recorded on 2026-11-04 on `perf/runtime-performance`, production checkpoint
 `0c683fd13c1ba82a3241122cf1e7969127dfb459`.
 

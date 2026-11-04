@@ -33,6 +33,8 @@
     "scripts/invocation-bootstrap-worker.ts",
     "scripts/invocation-facade-transform.ts",
     "scripts/invocation-facade-prototype.ts",
+    "scripts/invocation-setup-review.ts",
+    "scripts/verify-invocation-setup.ts",
     "scripts/invocation-setup-fixtures.ts",
     "scripts/invocation-setup-child.ts",
     "scripts/invocation-setup-probe.ts",

@@ -26,6 +26,18 @@ fn host_options() -> Option<ScriptHostProcessOptions> {
     .success()
     .then_some(PathBuf::from("bun"))?;
   let host = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../woml-cli/src/script-host.ts");
+  // Test-only artifact selection: never silently fall back from an explicit path.
+  let host = match std::env::var_os("WOML_SCRIPT_HOST_TEST_ENTRY") {
+    Some(path) => {
+      let path = PathBuf::from(path);
+      assert!(
+        path.is_absolute() && path.is_file(),
+        "invalid test host artifact"
+      );
+      path
+    }
+    None => host,
+  };
   host
     .exists()
     .then(|| ScriptHostProcessOptions::new(bun, host))

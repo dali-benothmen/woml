@@ -279,6 +279,148 @@ function byInvocation(
   );
 }
 
+describe('invocation setup isolation regressions', () => {
+  function request(id: string, source: string, token = `private-${id}`): ExecuteMessageV12 {
+    return { ...executeStepV7(id, source), protocolVersion: 12,
+      bindings: { bindingVersion: 1, servicesVersion: 1, secrets: { token } } };
+  }
+  function artifact(bundle: string) {
+    const sourceMap = JSON.stringify({ version: 3, sources: ['isolation.ts'], names: [], mappings: '', sourcesContent: [bundle] });
+    return { protocol: 'woml.script-host', protocolVersion: 12, messageType: 'register_module',
+      bundle, bundleDigest: moduleDigest(bundle), sourceMap, sourceMapDigest: moduleDigest(sourceMap) } as const;
+  }
+  function harness(onMessage?: (message: ScriptHostMessage, host: ScriptHost) => void) {
+    const outbound: ScriptHostMessage[] = [];
+    const host = new ScriptHost({ workerUrl: new URL('../src/script-host-worker.ts', import.meta.url), protocolVersion: 12,
+      send: async message => { outbound.push(message); onMessage?.(message, host); } });
+    return { host, outbound,
+      async invoke(message: ExecuteMessageV12) {
+        host.accept(message); await host.drain();
+        const matches = completions(outbound).filter(row => row.invocationId === message.invocationId);
+        expect(matches).toHaveLength(1); return matches[0]!;
+      },
+      async close() { host.abort(); await host.drain(); },
+    };
+  }
+  function reply(message: CapabilityCallMessage): CapabilityResultMessage {
+    return { protocol: 'woml.script-host', protocolVersion: 12, messageType: 'capability_result',
+      invocationId: message.invocationId, callId: message.callId,
+      result: { contract: 'woml.capability-call', contractVersion: 1, messageType: 'result',
+        invocationId: message.invocationId, callId: message.callId, outcome: 'succeeded',
+        resultContractVersion: 1, resultBytes: 4, durationMs: 0, result: null } };
+  }
+
+  test('fresh globals, prototypes, secret bindings and same-alias module exports across sequential/concurrent runs', async () => {
+    const h = harness();
+    const a = artifact('let n = 0; export function touch() { return { n: ++n, tag: "a" }; } export function hidden() { return 9; }');
+    const b = artifact('let n = 0; export function touch() { return { n: ++n, tag: "b" }; }');
+    try {
+      h.host.accept(a); h.host.accept(b);
+      const dirty = request('inv_isr_dirty', `globalThis.__isr4 = true; Object.prototype.__isr4 = true; Array.prototype.__isr4 = true; return services.utility.touch();`);
+      const modules = (bundleDigest: string) => [{ name: 'utility', bundleDigest, exports: ['touch'] }];
+      expect((await h.invoke({ ...dirty, modules: modules(a.bundleDigest) })).outcome).toEqual({ kind: 'success', value: { n: 1, tag: 'a' } });
+      for (const concurrent of [false, true]) {
+        const messages = [a, b].map((item, index) => ({ ...request(`inv_isr_fresh_${concurrent}_${index}`, `
+          if (globalThis.__isr4 !== undefined || Object.prototype.__isr4 !== undefined || Array.prototype.__isr4 !== undefined) throw new Error('worker leak');
+          if (secrets.token !== ${JSON.stringify(`token-${index}`)}) throw new Error('secret mismatch');
+          return { module: await services.utility.touch(), hidden: typeof services.utility.hidden, frozen: Object.isFrozen(context) && Object.isFrozen(attempt) };
+        `, `token-${index}`), modules: modules(item.bundleDigest) }));
+        if (concurrent) { for (const message of messages) h.host.accept(message); await h.host.drain(); }
+        else for (const message of messages) await h.invoke(message);
+        for (const [index, message] of messages.entries()) expect(byInvocation(h.outbound).get(message.invocationId)?.outcome)
+          .toEqual({ kind: 'success', value: { module: { n: 1, tag: index === 0 ? 'a' : 'b' }, hidden: 'undefined', frozen: true } });
+      }
+    } finally { await h.close(); }
+  });
+
+  for (const failure of ['cancel', 'timeout', 'crash'] as const) test(`worker state and pending-call routing are fresh after ${failure}`, async () => {
+    let pending: CapabilityCallMessage | undefined;
+    const h = harness((message, host) => {
+      if (message.messageType !== 'capability_call') return;
+      pending = message;
+      if (failure === 'cancel') host.accept({ ...cancel(message.invocationId), protocolVersion: 12 });
+      if (failure === 'crash') host.accept(reply(message));
+    });
+    try {
+      const module = artifact('let n = 0; export function touch() { return ++n; }'); h.host.accept(module);
+      const modules = [{ name: 'utility', bundleDigest: module.bundleDigest, exports: ['touch'] }];
+      const source = `await services.utility.touch(); globalThis.__isr4 = true; Array.prototype.__isr4 = true; await services.test.control(null); ${failure === 'crash' ? 'process.exit(17);' : 'await new Promise(() => {});'}`;
+      const result = await h.invoke({ ...request(`inv_isr_${failure}`, source), modules, timeoutMs: 2_000 });
+      expect(pending).toBeDefined();
+      expect(result.outcome).toMatchObject({ kind: 'failure', error: { code: failure === 'cancel' ? 'WOML_SCRIPT_CANCELLED' : failure === 'timeout' ? 'WOML_SCRIPT_TIMEOUT' : 'WOML_SCRIPT_WORKER_CRASHED' } });
+      if (failure !== 'crash') {
+        // The one known late reply is consumed without reopening the attempt.
+        expect(() => h.host.accept(reply(pending!))).not.toThrow();
+        expect(() => h.host.accept(reply(pending!))).toThrow('unknown call ID');
+      } else expect(() => h.host.accept(reply(pending!))).toThrow('unknown call ID');
+      expect((await h.invoke({ ...request(`inv_isr_after_${failure}`, 'return { fresh: globalThis.__isr4 === undefined && Array.prototype.__isr4 === undefined, counter: await services.utility.touch() };'), modules })).outcome)
+        .toEqual({ kind: 'success', value: { fresh: true, counter: 1 } });
+      expect(completions(h.outbound)).toHaveLength(2);
+    } finally { await h.close(); }
+  });
+
+  test('progress acknowledgements cannot cross invocations and logs remain redacted', async () => {
+    let progress!: (message: ScriptHostMessage) => void;
+    const observed = new Promise<ScriptHostMessage>(resolve => { progress = resolve; });
+    const h = harness(message => { if (message.messageType === 'progress_report') progress(message); });
+    try {
+      h.host.accept(request('inv_isr_ack', 'console.info(secrets.token); await services.progress.report({ id: "work", message: secrets.token }); return 1;'));
+      const draining = h.host.drain();
+      const message = await Promise.race([observed, draining.then(() => { throw new Error('completed before progress acknowledgement'); })]);
+      if (message.messageType !== 'progress_report') throw new Error('missing progress');
+      expect(completions(h.outbound)).toHaveLength(0);
+      const ack = { protocol: 'woml.script-host', protocolVersion: 12, messageType: 'progress_ack', requestId: message.requestId, frameSequence: message.frameSequence, accepted: true } as const;
+      expect(() => h.host.accept({ ...ack, requestId: 'inv_isr_other' })).toThrow('unknown frame');
+      h.host.accept(ack); await draining;
+      expect(() => h.host.accept(ack)).toThrow('unknown frame');
+      expect(completions(h.outbound)[0]?.outcome).toEqual({ kind: 'success', value: 1 });
+      expect(JSON.stringify(h.outbound)).not.toContain('private-inv_isr_ack');
+      expect(JSON.stringify(h.outbound)).toContain('[REDACTED]');
+    } finally { await h.close(); }
+  });
+
+  test('a missing progress acknowledgement times out without contaminating the next run', async () => {
+    const h = harness();
+    try {
+      const result = await h.invoke({ ...request('inv_isr_lost_ack', 'await services.progress.report({ id: "waiting", message: "awaiting acknowledgement" }); return "must-not-succeed";'), timeoutMs: 2_000 });
+      expect(result.outcome).toMatchObject({ kind: 'failure', error: { code: 'WOML_SCRIPT_TIMEOUT' } });
+      expect(h.outbound.some(message => message.messageType === 'progress_report')).toBe(true);
+      expect((await h.invoke(request('inv_isr_after_ack', 'return 1;'))).outcome).toEqual({ kind: 'success', value: 1 });
+    } finally { await h.close(); }
+  });
+
+  test('background timers are destroyed with a completed worker', async () => {
+    const h = harness();
+    try {
+      expect((await h.invoke(request('inv_isr_timer', 'setTimeout(() => console.warn("worker timer leaked"), 250); return 1;'))).outcome).toEqual({ kind: 'success', value: 1 });
+      expect((await h.invoke(request('inv_isr_after_timer', 'await new Promise(resolve => setTimeout(resolve, 400)); return 1;'))).outcome).toEqual({ kind: 'success', value: 1 });
+      expect(h.outbound.filter(message => message.messageType === 'script_log')).toHaveLength(0);
+    } finally { await h.close(); }
+  });
+
+  test('module-cache pressure and rejected substitutions do not replace admitted artifacts', async () => {
+    const h = harness();
+    try {
+      const artifacts = Array.from({ length: 65 }, (_, index) => artifact(`export function value() { return ${index}; }`));
+      for (const item of artifacts) h.host.accept(item);
+      const registrations = h.outbound.filter(message => message.messageType === 'module_registered');
+      expect(registrations).toHaveLength(65);
+      expect(registrations.filter(message => message.accepted)).toHaveLength(64);
+      expect(registrations[64]).toMatchObject({ accepted: false, code: 'WOML_MODULE_CACHE_LIMIT_EXCEEDED' });
+      h.host.accept({ ...artifacts[0]!, bundle: 'export function value() { return 999; }' });
+      expect(h.outbound.at(-1)).toMatchObject({ accepted: false, code: 'WOML_MODULE_DIGEST_MISMATCH' });
+      const check = { ...request('inv_isr_cache', 'return services.utility.value();'), modules: [{ name: 'utility', bundleDigest: artifacts[0]!.bundleDigest, exports: ['value'] }] };
+      expect((await h.invoke(check)).outcome).toEqual({ kind: 'success', value: 0 });
+      const replacement = harness();
+      try {
+        expect((await replacement.invoke({ ...check, invocationId: 'inv_isr_new_host' })).outcome).toMatchObject({ kind: 'failure', error: { code: 'WOML_SCRIPT_WORKER_CRASHED' } });
+        replacement.host.accept(artifacts[0]);
+        expect((await replacement.invoke({ ...check, invocationId: 'inv_isr_reregistered' })).outcome).toEqual({ kind: 'success', value: 0 });
+      } finally { await replacement.close(); }
+    } finally { await h.close(); }
+  });
+});
+
 describe('production Content-Length framing', () => {
   test('decodes multibyte and CRLF content one byte at a time', async () => {
     const fixture = await Bun.file(
