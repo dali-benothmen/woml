@@ -583,12 +583,21 @@ fn unsupported_vfs_is_not_a_successful_identity_check() {
   assert!(verify_native_file(&memory, &FileIdentity(0, 0)).is_err());
 }
 
-#[tokio::test]
-async fn prepared_engine_preserves_policy_locks_lifecycle_correction_and_cleanup() {
+#[test]
+fn prepared_engine_preserves_policy_locks_lifecycle_correction_and_cleanup() {
   // The pre-existing trigger-registration gate stops at Model v17. Exercise
   // modern locks/sagas at the actual engine boundary, without widening that
   // gate or pretending these are native trigger-activation coverage.
   for fail in [false, true] {
+    // The fixture must outlive the runtime, not merely the execution future:
+    // deadline/lease tasks can retain options and SQLite handles after a run
+    // finishes. Windows correctly forbids deleting those still-open files.
+    let mut f = Fixture::new();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .unwrap();
+    let (reference_registry, prepared_registry, preparation) = runtime.block_on(async {
     let emitted = std::process::Command::new("bun").args(["-e", r#"
       import {compileWoml,parseWoml} from '@woml/compiler';
       import {runtimeProfileFixtures,runtimeProfilePolicy} from './scripts/runtime-profile-fixtures';
@@ -612,7 +621,6 @@ async fn prepared_engine_preserves_policy_locks_lifecycle_correction_and_cleanup
       &crate::InfrastructurePolicyTrustV1::default(),
     )
     .unwrap();
-    let mut f = Fixture::new();
     let hash = format!("sha256:{}", "c".repeat(64));
     f.store.register_definition(&workflow, &hash).unwrap();
     let make_options = || {
@@ -728,6 +736,27 @@ async fn prepared_engine_preserves_policy_locks_lifecycle_correction_and_cleanup
     }
     f.store.audit_integrity().unwrap();
     context.release(&f.path).unwrap();
+    (
+      Arc::downgrade(&reference_options.capability_registry),
+      Arc::downgrade(&options.capability_registry),
+      Arc::downgrade(&context.0),
+    )
+    });
+    drop(runtime);
+    // Check on Linux too, where removing an open database would otherwise
+    // succeed and conceal an escaped background task/resource owner.
+    assert!(
+      reference_registry.upgrade().is_none(),
+      "reference runtime resources retained"
+    );
+    assert!(
+      prepared_registry.upgrade().is_none(),
+      "prepared runtime resources retained"
+    );
+    assert!(
+      preparation.upgrade().is_none(),
+      "prepared lifetime retained after runtime shutdown"
+    );
   }
 }
 
