@@ -33,8 +33,8 @@
       {
         "name": "impl WomlWebhookServer::prepare_owned_with_external_ingress",
         "originalSha256": null,
-        "sha256": "f3fc4c54bcb5613f057f052440172c023138e22c8030bcef23d66a366d79dd31",
-        "reason": "Startup separation: bind native-owned activation, ingress, continuation and shutdown to the exact prepared store lifetime without repeating initialization; preserve unowned paths and effect authority.",
+        "sha256": "8ff0e5f80f3caa7c91f7d55de9713f174428bd0e9c1c92574d8eb771b2fd8f5c",
+        "reason": "Startup separation: bind native-owned activation to the exact prepared lifetime and retain the preparation profiling span on the owned entrypoint; preserve unowned paths and effect authority.",
         "regression": "woml-cli/scripts/verify-startup-separation-native.ts"
       },
       {

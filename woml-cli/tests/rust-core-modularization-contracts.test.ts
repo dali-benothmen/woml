@@ -236,6 +236,9 @@ test('relocated process, artifact, and ingress tests retain assertions, fixtures
 });
 
 function orderedDeclarationHash(source: string, name: string): string {
+  // Git may check Rust sources out with CRLF on Windows. Normalize before
+  // owner selection and tokenization (including multiline string tokens).
+  source = source.replaceAll('\r\n', '\n');
   const matches = [...source.matchAll(new RegExp(`^(?:  )?(?:pub(?:\\([^)]*\\))? )?fn ${name}\\b`, 'gm'))];
   const match = matches.find(candidate => {
     if (!candidate[0].startsWith('  ')) return true;
@@ -260,6 +263,30 @@ function orderedDeclarationHash(source: string, name: string): string {
   }
   throw new Error(`Incomplete frozen declaration ${name}.`);
 }
+
+test('ordered declaration guards accept CRLF without accepting semantic changes', () => {
+  const source = `impl DurableEventStore {
+  fn reviewed(&self) {
+    let statement = r#"SELECT sequence
+FROM woml_run_events"#;
+    check_event_history_against_definition(statement);
+  }
+}
+`;
+  const expected = orderedDeclarationHash(source, 'reviewed');
+  expect(orderedDeclarationHash(source.replaceAll('\n', '\r\n'), 'reviewed')).toBe(expected);
+  for (const altered of [
+    source.replace('SELECT sequence', 'SELECT event_json'),
+    source.replace('check_event_history_against_definition', 'unreviewed_history_checker'),
+    source.replace('impl DurableEventStore', 'impl AnotherStore'),
+  ]) {
+    if (altered.includes('impl AnotherStore')) {
+      expect(() => orderedDeclarationHash(altered, 'reviewed')).toThrow('Missing frozen declaration');
+    } else {
+      expect(orderedDeclarationHash(altered.replaceAll('\n', '\r\n'), 'reviewed')).not.toBe(expected);
+    }
+  }
+});
 
 function publicReexportNames(source: string): string[] {
   return [...source.matchAll(/^pub\s+use\s+([^;]+);/gm)].flatMap(match => {
@@ -332,6 +359,7 @@ test('validated-state reuse pins only the three reviewed conversions without rew
     expect(repair.reason).toStartWith('Validated state reuse:');
     const source = await readFile(resolve(root, repair.path), 'utf8');
     expect(orderedDeclarationHash(source, repair.name)).toBe(repair.sha256);
+    expect(orderedDeclarationHash(source.replace(/\r?\n/g, '\r\n'), repair.name)).toBe(repair.sha256);
     const changed = source.replaceAll('check_event_history_against_definition', 'unreviewed_history_checker');
     expect(orderedDeclarationHash(changed, repair.name)).not.toBe(repair.sha256);
     expect(repair.regression).toBe('core/woml-engine/src/durable/boundary_tests/validated_state_reuse.rs');

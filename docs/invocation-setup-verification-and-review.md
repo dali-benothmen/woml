@@ -1,5 +1,9 @@
 # Invocation setup: isolation verification and performance review
 
+Follow-up: the [ISR6 readiness handoff](invocation-setup-release-readiness.md)
+reconfirms the unchanged startup-locking blocker. It does not replace these
+verification results with a release-acceptance claim.
+
 ISR4/ISR5 follow-up on `perf/runtime-performance`, 2026-11-04. The
 [ISR2 prototype](invocation-facade-prototype-investigation.md) remains rejected;
 ISR3 was not integrated. This checkpoint adds tests and evidence tools, not a

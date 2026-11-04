@@ -1,9 +1,30 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { installLocalReleaseCandidate } from './helpers/release-candidate';
+
+async function createScratchDirectory(parent = tmpdir()): Promise<string> {
+  // macOS tmpdir() can contain the /var -> /private/var symlink. Use the
+  // physical scratch directory; backup/restore must still reject symlink paths.
+  return realpath(await mkdtemp(join(parent, 'woml-startup-package-')));
+}
+
+test('startup package scratch paths are canonical even under a symlinked temporary directory', async () => {
+  const scratch = await realpath(await mkdtemp(join(tmpdir(), 'woml-startup-path-test-')));
+  try {
+    const physical = join(scratch, 'physical');
+    const alias = join(scratch, 'alias');
+    await mkdir(physical);
+    await symlink(physical, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const root = await createScratchDirectory(alias);
+    expect(root).toBe(await realpath(root));
+    expect(root.startsWith(join(physical, 'woml-startup-package-'))).toBe(true);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
 
 async function port(): Promise<number> {
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response() });
@@ -34,11 +55,12 @@ function durableResult(state: string, runId: string): unknown {
 }
 
 test('clean installed CLI serves repeated requests, restarts, and restores managed state', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'woml-startup-package-'));
+  const root = await createScratchDirectory();
   const consumer = join(root, 'consumer'); await mkdir(consumer);
   await Bun.write(join(consumer, 'package.json'), JSON.stringify({ name: 'startup-clean-consumer', private: true }));
   let child: ReturnType<typeof Bun.spawn> | undefined;
   let passed = false;
+  let phase = 'install candidate';
   let output = '';
   const drains: Promise<void>[] = [];
   const collect = async (stream: ReadableStream<Uint8Array>) => {
@@ -86,6 +108,7 @@ test('clean installed CLI serves repeated requests, restarts, and restores manag
       admin: { host: '127.0.0.1', port: adminPort }, logging: { format: 'text', directory: join(root, 'logs') },
       observability: { health: true, metrics: true }, retention: { enabled: false } }));
     const start = async (statePath: string) => {
+      phase = `start runtime: ${statePath}`;
       await configure(statePath);
       const launched = Bun.spawn([process.execPath, cli, 'run', workflow, '--config', config], {
         cwd: consumer, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', detached: process.platform !== 'win32', env: { ...process.env, NO_COLOR: '1' },
@@ -101,25 +124,30 @@ test('clean installed CLI serves repeated requests, restarts, and restores manag
       }, 'installed runtime readiness');
     };
     const stop = async (statePath: string) => {
+      phase = `stop runtime: ${statePath}`;
       await invoke('stop', '--state', statePath);
       await until(() => child!.exitCode !== null, 'installed runtime shutdown');
       expect(await child!.exited, output).toBe(0); child = undefined;
     };
     const request = async (statePath: string, key: string, expected: number) => {
+      phase = `${key}: admit request`;
       const response = await fetch(`http://127.0.0.1:${publicPort}/repeat`, { method: 'POST',
         headers: { 'content-type': 'application/json', 'idempotency-key': key }, body: '{}' });
       expect(response.status, await response.clone().text()).toBe(202);
       const { runId } = await response.json() as { runId: string }; expect(runId).toMatch(/^run_/u);
       let inspected: { status: string; lifecycleStatus: string; warnings: unknown[] } | undefined;
+      phase = `${key}: await settlement`;
       await until(async () => {
         inspected = JSON.parse(await invoke('get', runId, '--state', statePath, '--json'));
         if (['failed', 'cancelled'].includes(inspected!.status)) throw new Error(JSON.stringify(inspected));
         return inspected!.status === 'succeeded' && inspected!.lifecycleStatus === 'completed';
       }, () => `installed run settlement (${runId}); inspection=${JSON.stringify(inspected)}; runtime output: ${output}`);
       expect(inspected!.warnings).toEqual([]);
+      phase = `${key}: inspect durable result`;
       expect(durableResult(statePath, runId)).toEqual({ value: expected });
       const expectedOutput = ['package-start-hook', 'package-complete-hook', `package-request-${expected}`];
       let logs = '';
+      phase = `${key}: inspect persisted output`;
       await until(async () => {
         logs = await invoke('logs', runId, '--state', statePath, '--no-follow', '--json');
         return expectedOutput.every(text => logs.includes(text));
@@ -131,21 +159,29 @@ test('clean installed CLI serves repeated requests, restarts, and restores manag
     const first = await request(state, 'first', 1);
     await request(state, 'second', 2);
     // Same delivery is idempotent even after the run has finalized.
+    phase = 'duplicate delivery';
     const duplicate = await fetch(`http://127.0.0.1:${publicPort}/repeat`, { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': 'first' }, body: '{}' });
     expect((await duplicate.json() as { runId: string }).runId).toBe(first);
     await stop(state); await start(state); await request(state, 'after-restart', 3); await stop(state);
     const backup = join(root, 'backup');
+    phase = 'backup stopped runtime';
     expect(JSON.parse(await invoke('backup', backup, '--state', state, '--json')).verified).toBe(true);
     const restored = join(consumer, 'restored/state.sqlite');
+    phase = 'restore backup';
     await invoke('restore', backup, '--state', restored, '--json');
+    phase = 'inspect restored history';
     expect(JSON.parse(await invoke('get', first, '--state', restored, '--json')).status).toBe('succeeded');
     expect(durableResult(restored, first)).toEqual({ value: 1 });
     await start(restored); await request(restored, 'after-restore', 4); await stop(restored);
+    phase = 'verify listener release';
     const probe = Bun.serve({ hostname: '127.0.0.1', port: publicPort, fetch: () => new Response() });
     await probe.stop(true); // The installed owner actually released its listener.
     passed = true;
   } catch (error) {
-    console.error(`Installed startup diagnostics retained: ${root}\n${output}`);
+    // Write the assertion as well as runtime output directly: CI reporters can
+    // otherwise put the useful error only in an annotation, leaving a bare
+    // "1 fail" in the downloadable step log. Keep the original failure fatal.
+    process.stderr.write(`Installed startup failed during ${phase}:\n${error instanceof Error ? error.stack ?? error.message : String(error)}\nInstalled startup diagnostics retained: ${root}\n${output}\n`);
     throw error;
   } finally {
     clearTimeout(watchdog); killTree();

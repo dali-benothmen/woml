@@ -210,7 +210,12 @@ impl WomlWebhookServer {
     runtime_instance_id: String,
     acquired_store: &DurableEventStore,
   ) -> Result<Self, WebhookRuntimeError> {
-    Self::prepare_with_external_ingress_unprofiled(
+    // Owned startup bypasses the unowned public wrapper, but must expose the
+    // same preparation boundary to the opt-in profiler.
+    let mut span =
+      crate::performance::PerformanceSpan::new("runtime", "runtime.prepare_trigger_host");
+    span.count("workflows", config.registrations.len());
+    let result = Self::prepare_with_external_ingress_unprofiled(
       config,
       external_ingress,
       Some((
@@ -222,7 +227,11 @@ impl WomlWebhookServer {
         acquired_store,
       )),
     )
-    .await
+    .await;
+    if result.is_ok() {
+      span.succeed();
+    }
+    result
   }
 
   /// Not an authorization token: the private context is checked on each owned
